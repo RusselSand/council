@@ -33,3 +33,6 @@ a.card:hover { border-color: var(--accent) }
 .tab { padding: 8px 12px; color: var(--fg-muted); border-bottom: 2px solid transparent; margin-bottom: -1px }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent) }
 .placeholder { padding: 48px; text-align: center; color: var(--fg-muted); border-style: dashed }
+.header-actions { display: flex; align-items: center; gap: 12px }
+.error-text { color: #c9553f; font-size: 13px }
+.btn-primary:disabled { opacity: .6; cursor: default }

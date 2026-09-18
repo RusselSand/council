@@ -22,4 +22,5 @@ cd ../backend && uv run uvicorn spec_council.app:app --port 8420
 ## Тесты
 ```bash
 cd backend && uv run pytest && uv run ruff check .
+cd frontend && npm test
 ```

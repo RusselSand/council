@@ -50,7 +50,8 @@ def get_settings():
 # чтобы работали прямые ссылки на страницы SPA.
 STATIC = Path(__file__).parent / "static"
 if (STATIC / "index.html").exists():
-    app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
+    if (STATIC / "assets").is_dir():  # нет после прерванной сборки — не падаем на старте
+        app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
