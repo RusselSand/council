@@ -8,14 +8,14 @@
 
 ## Разработка
 ```bash
-cd backend && uv sync && uv run uvicorn spec_council.app:app --reload --port 8000
-cd frontend && npm i && npm run dev    # http://localhost:5173, /api проксируется на :8000
+cd backend && uv sync && uv run uvicorn spec_council.app:app --reload --port 8420
+cd frontend && npm i && npm run dev    # http://localhost:5420, /api проксируется на :8420
 ```
 
 ## Один процесс
 ```bash
 cd frontend && npm run build           # собирает в backend/spec_council/static
-cd ../backend && uv run uvicorn spec_council.app:app --port 8000
+cd ../backend && uv run uvicorn spec_council.app:app --port 8420
 ```
 
 ## Тесты
