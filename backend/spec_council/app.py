@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -30,7 +30,10 @@ def list_runs():
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
-    return next((r for r in RUNS if r["id"] == run_id), RUNS[0])
+    run = next((r for r in RUNS if r["id"] == run_id), None)
+    if run is None:
+        raise HTTPException(404, "Проект не найден")
+    return run
 
 
 @app.post("/api/runs")
@@ -51,4 +54,6 @@ if (STATIC / "index.html").exists():
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not Found")
         return FileResponse(STATIC / "index.html")

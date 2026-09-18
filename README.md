@@ -3,7 +3,8 @@
 Локальный инструмент подготовки ТЗ: от брифа до согласованной спецификации.
 Сейчас это каркас — интерфейс и API на заглушках.
 
-- Backend: FastAPI (Python 3.12, uv) — `backend/spec_council/app.py`
+- Backend: FastAPI (Python 3.14+, uv) — `backend/spec_council/app.py`.
+  Если Python 3.14 не установлен, `uv sync` скачает его сам (версия задана в `backend/.python-version`).
 - Frontend: Vite + React + TypeScript — `frontend/src`
 
 ## Разработка
