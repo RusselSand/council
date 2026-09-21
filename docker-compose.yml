@@ -1,0 +1,43 @@
+# По умолчанию поднимается режим разработки: бек и фронт отдельно, оба с hot reload.
+# Сборка в один контейнер — профиль prod (сервис app).
+name: council
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8420:8420"
+    volumes:
+      - ./backend:/app
+    environment:
+      # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
+      WATCHFILES_FORCE_POLLING: "true"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/settings')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5420:5420"
+    volumes:
+      - ./frontend:/app
+      # node_modules берём из образа: с хоста приедут бинарники под Windows.
+      - /app/node_modules
+    environment:
+      VITE_API_PROXY: http://backend:8420
+      VITE_USE_POLLING: "1"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  app:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8420"
