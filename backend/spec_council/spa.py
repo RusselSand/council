@@ -10,13 +10,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# В образе статику кладёт рядом с пакетом докер, в репозитории она остаётся
-# там, куда её собрал vite. Первый существующий вариант и выигрывает.
+# В репозитории сборку кладёт vite, в образ — докер, рядом с пакетом. Свежая сборка
+# из dist идёт первой: в чекаутах, где собирали по-старому, рядом с пакетом мог остаться
+# static/ — он не отслеживается гитом, сам не исчезнет и иначе перекрыл бы новый фронт.
 _CANDIDATES = (
-    Path(__file__).parent / "static",
     Path(__file__).resolve().parents[2] / "frontend" / "dist",
+    Path(__file__).parent / "static",
 )
-STATIC = next((p for p in _CANDIDATES if (p / "index.html").exists()), _CANDIDATES[0])
+STATIC = next((p for p in _CANDIDATES if (p / "index.html").exists()), _CANDIDATES[-1])
 
 
 def mount_spa(app: FastAPI, *, api_prefix: str) -> None:
