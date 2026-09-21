@@ -1,7 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from spec_council.app import STATIC, app
+from spec_council.app import app
+from spec_council.spa import STATIC
 
 client = TestClient(app)
 
@@ -20,6 +21,11 @@ def test_run_by_id():
 
 def test_unknown_run_is_404():
     assert client.get("/api/runs/missing").status_code == 404
+
+
+def test_created_run_is_readable():
+    run_id = client.post("/api/runs").json()["id"]
+    assert client.get(f"/api/runs/{run_id}").json()["status"] == "brief"
 
 
 def test_unknown_api_path_is_json_404():
