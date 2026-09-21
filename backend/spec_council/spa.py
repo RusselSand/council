@@ -1,7 +1,7 @@
-"""Раздача собранного фронта (`npm run build` -> spec_council/static).
+"""Раздача собранного фронта (`npm run build`).
 
 Нужна только в сборке «один контейнер»: в разработке фронт отдаёт vite,
-static/ там нет — и приложение поднимается без неё.
+сборки нет — и приложение поднимается без неё.
 """
 
 from pathlib import Path
@@ -10,7 +10,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-STATIC = Path(__file__).parent / "static"
+# В образе статику кладёт рядом с пакетом докер, в репозитории она остаётся
+# там, куда её собрал vite. Первый существующий вариант и выигрывает.
+_CANDIDATES = (
+    Path(__file__).parent / "static",
+    Path(__file__).resolve().parents[2] / "frontend" / "dist",
+)
+STATIC = next((p for p in _CANDIDATES if (p / "index.html").exists()), _CANDIDATES[0])
 
 
 def mount_spa(app: FastAPI, *, api_prefix: str) -> None:

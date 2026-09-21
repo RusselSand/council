@@ -3,4 +3,3 @@ dist/
 .venv/
 __pycache__/
 *.tsbuildinfo
-backend/spec_council/static/

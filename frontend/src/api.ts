@@ -1,5 +1,5 @@
-export type RunStatus = 'brief' | 'approaches' | 'decisions' | 'review' | 'ready'
-export interface Run { id: string; name: string; status: RunStatus; author: string; reviewer: string; updated_at: string }
+export type CouncilStatus = 'brief' | 'approaches' | 'decisions' | 'review' | 'ready'
+export interface Council { id: string; name: string; status: CouncilStatus; author: string; reviewer: string; updated_at: string }
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
 export class ApiError extends Error {
@@ -24,14 +24,10 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 }
 
 export const api = {
-  runs: () => request<Run[]>('/api/runs'),
-  run: (id: string) => request<Run>(`/api/runs/${encodeURIComponent(id)}`),
-  createRun: () => request<{ id: string }>('/api/runs', { method: 'POST' }),
+  councils: () => request<Council[]>('/api/councils'),
+  council: (id: string) => request<Council>(`/api/councils/${encodeURIComponent(id)}`),
+  createCouncil: () => request<{ id: string }>('/api/councils', { method: 'POST' }),
 }
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
-export const runPath = (id: string, stage = 'brief') => `/runs/${encodeURIComponent(id)}/${stage}`
-
-export const STATUS_LABEL: Record<RunStatus, string> = {
-  brief: 'Бриф', approaches: 'Подходы', decisions: 'Решения', review: 'Ревью', ready: 'ТЗ согласовано',
-}
+export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

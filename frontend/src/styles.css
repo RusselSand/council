@@ -36,3 +36,5 @@ a.card:hover { border-color: var(--accent) }
 .header-actions { display: flex; align-items: center; gap: 12px }
 .error-text { color: #c9553f; font-size: 13px }
 .btn-primary:disabled { opacity: .6; cursor: default }
+.btn-lang { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: none; color: var(--fg-muted); font-size: 12px; font-weight: 600 }
+.btn-lang:hover { color: var(--fg); border-color: var(--accent) }

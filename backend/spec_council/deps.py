@@ -9,9 +9,9 @@ from typing import Annotated
 from fastapi import Depends
 
 from .config import DEFAULT_CONFIG, AppConfig
-from .store import DEMO_RUNS, InMemoryStore, Store
+from .store import DEMO_COUNCILS, InMemoryStore, Store
 
-_store: Store = InMemoryStore(DEMO_RUNS)
+_store: Store = InMemoryStore(DEMO_COUNCILS)
 
 
 def get_store() -> Store:

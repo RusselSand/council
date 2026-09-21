@@ -1,10 +1,11 @@
 .git/
 .gitignore
-node_modules/
-dist/
-.venv/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-*.tsbuildinfo
-backend/spec_council/static/
+# ** обязательна: без неё правило ловит только корень контекста, а не подпапки —
+# и в образ уезжает frontend/node_modules с бинарниками под хост.
+**/node_modules/
+**/dist/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.tsbuildinfo

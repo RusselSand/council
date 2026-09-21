@@ -1,17 +1,21 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate } from 'react-router'
-import { api, runPath } from './api'
+import { api, councilPath } from './api'
+import { setLanguage } from './i18n'
 
 export function App() {
+  const { t, i18n } = useTranslation()
   const nav = useNavigate()
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState(false)
+  const otherLanguage = i18n.language.startsWith('ru') ? 'en' : 'ru'
 
-  const newRun = async () => {
+  const newCouncil = async () => {
     setCreating(true); setError(false)
     try {
-      const { id } = await api.createRun()
-      nav(runPath(id))
+      const { id } = await api.createCouncil()
+      nav(councilPath(id))
     } catch {
       setError(true)
     } finally {
@@ -24,9 +28,13 @@ export function App() {
       <header className="header">
         <Link to="/" className="brand"><span className="brand-mark" />Spec Council</Link>
         <div className="header-actions">
-          {error && <span className="error-text" role="alert">Не удалось создать бриф</span>}
-          <button className="btn-primary" onClick={newRun} disabled={creating}>
-            {creating ? 'Создаём…' : '+ Новый бриф'}
+          {error && <span className="error-text" role="alert">{t('header.createFailed')}</span>}
+          <button className="btn-lang" onClick={() => setLanguage(otherLanguage)}
+                  aria-label={t('header.switchLanguage')} title={t('header.switchLanguage')}>
+            {otherLanguage.toUpperCase()}
+          </button>
+          <button className="btn-primary" onClick={newCouncil} disabled={creating}>
+            {creating ? t('header.creating') : t('header.newCouncil')}
           </button>
         </div>
       </header>

@@ -8,7 +8,6 @@ const usePolling = process.env.VITE_USE_POLLING === '1'
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: '../backend/spec_council/static', emptyOutDir: true },
   server: {
     port: 5420,
     strictPort: true,
