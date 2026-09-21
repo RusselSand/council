@@ -9,48 +9,48 @@ from datetime import date
 from typing import Protocol
 from uuid import uuid4
 
-from .models import Run, RunStatus
+from .models import Council, CouncilStatus
 
 
 class Store(Protocol):
-    def list_runs(self) -> list[Run]: ...
+    def list_councils(self) -> list[Council]: ...
 
-    def get_run(self, run_id: str) -> Run | None: ...
+    def get_council(self, council_id: str) -> Council | None: ...
 
-    def create_run(self, *, author: str, reviewer: str) -> Run: ...
+    def create_council(self, *, author: str, reviewer: str) -> Council: ...
 
 
 class InMemoryStore:
     """Данные живут до перезапуска процесса."""
 
-    def __init__(self, runs: Iterable[Run] = ()) -> None:
-        self._runs: dict[str, Run] = {run.id: run for run in runs}
+    def __init__(self, councils: Iterable[Council] = ()) -> None:
+        self._councils: dict[str, Council] = {council.id: council for council in councils}
 
-    def list_runs(self) -> list[Run]:
-        return sorted(self._runs.values(), key=lambda run: run.updated_at, reverse=True)
+    def list_councils(self) -> list[Council]:
+        return sorted(self._councils.values(), key=lambda council: council.updated_at, reverse=True)
 
-    def get_run(self, run_id: str) -> Run | None:
-        return self._runs.get(run_id)
+    def get_council(self, council_id: str) -> Council | None:
+        return self._councils.get(council_id)
 
-    def create_run(self, *, author: str, reviewer: str) -> Run:
-        run = Run(
+    def create_council(self, *, author: str, reviewer: str) -> Council:
+        council = Council(
             id=uuid4().hex[:8],
-            name="Новый бриф",
-            status=RunStatus.brief,
+            name="",  # человек ещё не назвал; подпись для пустого — на стороне фронта
+            status=CouncilStatus.brief,
             author=author,
             reviewer=reviewer,
             updated_at=date.today(),
         )
-        self._runs[run.id] = run
-        return run
+        self._councils[council.id] = council
+        return council
 
 
 # Временные данные, чтобы интерфейс было на чём смотреть. Уедут вместе с InMemoryStore.
-DEMO_RUNS = [
-    Run(id="demo-1", name="Сервис уведомлений", status=RunStatus.review,
-        author="sol", reviewer="fable", updated_at=date(2026, 9, 17)),
-    Run(id="demo-2", name="Личный кабинет партнёра", status=RunStatus.brief,
-        author="sol", reviewer="fable", updated_at=date(2026, 9, 15)),
-    Run(id="demo-3", name="Импорт каталога", status=RunStatus.ready,
-        author="fable", reviewer="sol", updated_at=date(2026, 9, 2)),
+DEMO_COUNCILS = [
+    Council(id="demo-1", name="Сервис уведомлений", status=CouncilStatus.review,
+            author="sol", reviewer="fable", updated_at=date(2026, 9, 17)),
+    Council(id="demo-2", name="Личный кабинет партнёра", status=CouncilStatus.brief,
+            author="sol", reviewer="fable", updated_at=date(2026, 9, 15)),
+    Council(id="demo-3", name="Импорт каталога", status=CouncilStatus.ready,
+            author="fable", reviewer="sol", updated_at=date(2026, 9, 2)),
 ]

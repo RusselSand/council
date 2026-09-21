@@ -6,7 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel
 
 
-class RunStatus(StrEnum):
+class CouncilStatus(StrEnum):
     brief = "brief"
     approaches = "approaches"
     decisions = "decisions"
@@ -14,16 +14,16 @@ class RunStatus(StrEnum):
     ready = "ready"
 
 
-class Run(BaseModel):
+class Council(BaseModel):
     id: str
     name: str
-    status: RunStatus
+    status: CouncilStatus
     author: str
     reviewer: str
     updated_at: date
 
 
-class RunCreated(BaseModel):
+class CouncilCreated(BaseModel):
     """Ответ на создание: фронт сразу уходит на страницу проекта."""
 
     id: str

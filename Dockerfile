@@ -1,11 +1,11 @@
-# Один процесс: собранный фронт отдаёт FastAPI (см. `npm run build` -> spec_council/static).
+# Один процесс: собранный фронт отдаёт FastAPI. Фронт собирается у себя, сюда его кладёт COPY.
 
 FROM node:24-alpine AS ui
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build          # -> /src/backend/spec_council/static
+RUN npm run build          # -> /src/frontend/dist
 
 FROM python:3.14-slim
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -23,7 +23,7 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY backend/ ./
-COPY --from=ui /src/backend/spec_council/static ./spec_council/static
+COPY --from=ui /src/frontend/dist ./spec_council/static
 
 RUN useradd --create-home app && chown -R app:app /app
 USER app

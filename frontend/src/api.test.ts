@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, runPath } from './api'
+import { api, ApiError, councilPath } from './api'
 
 afterEach(() => { vi.unstubAllGlobals() })
 
 const stubResponse = (body: BodyInit | null, init: ResponseInit) =>
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(body, init))))
 
-const failure = () => api.run('x').then(() => { throw new Error('ожидалась ошибка') }, (e: ApiError) => e)
+const failure = () => api.council('x').then(() => { throw new Error('ожидалась ошибка') }, (e: ApiError) => e)
 
 describe('ApiError', () => {
   it('берёт текст из detail ответа FastAPI', async () => {
@@ -22,9 +22,9 @@ describe('ApiError', () => {
   })
 })
 
-describe('runPath', () => {
+describe('councilPath', () => {
   it('кодирует id', () => {
-    expect(runPath('a/b c')).toBe('/runs/a%2Fb%20c/brief')
-    expect(runPath('demo-1', 'spec')).toBe('/runs/demo-1/spec')
+    expect(councilPath('a/b c')).toBe('/councils/a%2Fb%20c/brief')
+    expect(councilPath('demo-1', 'spec')).toBe('/councils/demo-1/spec')
   })
 })
