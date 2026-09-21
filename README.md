@@ -5,6 +5,11 @@
 
 - Backend: FastAPI (Python 3.14+, uv) — `backend/spec_council`: ручки в `api/`,
   контракт в `models.py`, данные за `deps.py` (пока `InMemoryStore`).
+- Воркер: `backend/agent_workers` — один воркер на одно подключение к CLI с подпиской
+  (Claude Code, Codex): вход и выход, замер расхода подписки до и после хода, оценка
+  токенов и стоимости по API. Настройка в `.env`, команды — `python -m agent_workers
+  status | login | logout | run`. Подробности в README пакета; лежит здесь временно,
+  выносится переносом папки.
 - Frontend: Vite + React + TypeScript — `frontend/src`.
 - Надписи: `frontend/src/i18n` — словари `ru.ts` и `en.ts` (i18next). Язык берётся из
   настроек браузера, переключается в шапке и запоминается в localStorage.
