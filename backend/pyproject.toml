@@ -20,10 +20,10 @@ requires = ["hatchling>=1.32"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["spec_council"]
+packages = ["spec_council", "agent_workers"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "agent_workers/tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
