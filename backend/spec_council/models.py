@@ -39,17 +39,33 @@ class SlicingStep(BaseModel):
     runs: list[ModelRun]
 
 
+class Vote(BaseModel):
+    """Что предложил участник. Вариантов несколько, если он видит неоднозначность."""
+
+    model: str
+    labels: list[Label]
+
+
 class LabeledFragment(BaseModel):
     id: int
     text: str
+    # Итоговый тип. Человек может поменять его, council_label остаётся как было у совета.
     label: Label
     reason: str
+    council_label: Label
+    # agreed — участники сошлись, judge — разошлись и решил судья.
+    decided_by: Literal["agreed", "judge"] = "agreed"
+    votes: list[Vote] = []
+    # Решение судьи нарезки о границе перед этим фрагментом или внутри него.
+    slice_note: str | None = None
 
 
 class Slicing(BaseModel):
     """Нарезка и разметка текста советом: ход по шагам и итог."""
 
     state: Literal["running", "done", "failed"]
+    # Текст, который нарезали: исходник мог поменяться после запуска.
+    text: str = ""
     steps: list[SlicingStep]
     fragments: list[LabeledFragment] = []
     error: str | None = None
@@ -83,6 +99,8 @@ class CouncilPatch(BaseModel):
     brief: str | None = None
     participants: list[str] | None = None
     judge: str | None = None
+    # Типы фрагментов готовой нарезки, все сразу: {id: тип}. Так повторная отправка безопасна.
+    labels: dict[int, Label] | None = None
 
 
 class Model(BaseModel):

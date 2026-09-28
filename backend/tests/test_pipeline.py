@@ -160,3 +160,22 @@ def test_judge_may_be_outside_the_council(judge):
                ("slice_judge", judge): {"status": "ok", "fragments": PARTS}}
     result, runner, _ = run(replies, judge=judge)
     assert result.state == "done" and ("slice_judge", judge) in runner.asked
+
+
+def test_result_keeps_the_votes_who_decided_and_the_slicing_judges_note():
+    joined = [PARTS[0], " ".join(PARTS[1:])]
+    replies = {**AGREED, ("slice", "fable"): sliced(joined),
+               ("slice_judge", "fable"): {"status": "ok", "fragments": PARTS, "decisions": [
+                   {"boundary": "без базы. | Главное", "decision": "split",
+                    "reason": "две мысли"}]},
+               ("label", "fable"): labeled("idea", "constraint", "risk"),
+               ("label_judge", "fable"): {"labels": [
+                   {"id": 2, "label": "constraint", "reason": "уже задано"}]}}
+    result, _, _ = run(replies)
+    first, second, third = result.fragments
+    assert result.text == TEXT
+    assert (first.decided_by, second.decided_by) == ("agreed", "judge")
+    votes = [(v.model, v.labels) for v in second.votes]
+    assert votes == [("sol", ["proposal"]), ("fable", ["constraint"])]
+    assert second.council_label == second.label == "constraint"
+    assert (first.slice_note, third.slice_note) == (None, "две мысли")

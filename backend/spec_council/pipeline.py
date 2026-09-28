@@ -24,17 +24,20 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Protocol
 
-from .models import LabeledFragment, ModelRun, Slicing, SlicingStep, SlicingStepName
+from .models import LabeledFragment, ModelRun, Slicing, SlicingStep, SlicingStepName, Vote
 from .prompts import PromptError, render
 from .slicing import (
     BadAnswer,
+    BoundaryNote,
     LabelOption,
     SliceOption,
     agreed_label,
+    boundary_notes,
     cut,
     judged_bounds,
     judged_labels,
     label_options,
+    note_places,
     parse_json,
     slice_options,
 )
@@ -60,8 +63,8 @@ class Runner(Protocol):
         """Убрать оплаченные ответы из лотка: они больше не нужны."""
 
 
-def start(participants: list[str], judge: str) -> Slicing:
-    return Slicing(state="running", steps=[
+def start(participants: list[str], judge: str, text: str = "") -> Slicing:
+    return Slicing(state="running", text=text, steps=[
         SlicingStep(name=Step.slice, runs=[ModelRun(model=m) for m in participants]),
         SlicingStep(name=Step.slice_judge, runs=[ModelRun(model=judge)]),
         SlicingStep(name=Step.label, runs=[ModelRun(model=m) for m in participants]),
@@ -93,14 +96,15 @@ class Pipeline:
         self.judge = judge
         self.runner = runner
         self.report = report
-        self.state = start(participants, judge)
+        self.state = start(participants, judge, brief)
         self._lock = Lock()
         self._keys: list[str] = []
 
     def run(self) -> Slicing:
         try:
-            fragments = cut(self.brief, self._slice())
-            labeled = self._label(fragments)
+            bounds, notes = self._slice()
+            fragments = cut(self.brief, bounds)
+            labeled = self._label(fragments, note_places(fragments, notes))
         except (SlicingFailed, PromptError) as exc:
             self._finish(error=str(exc))
             return self.state
@@ -114,7 +118,7 @@ class Pipeline:
 
     # --- шаги
 
-    def _slice(self) -> tuple[int, ...]:
+    def _slice(self) -> tuple[tuple[int, ...], list[BoundaryNote]]:
         prompt = render("slice", input=self.brief)
         answers = self._ask_all(Step.slice, prompt, lambda data: slice_options(self.brief, data))
         distinct: dict[tuple[int, ...], list[str]] = {}
@@ -125,7 +129,7 @@ class Pipeline:
                     reasons.append(option.reason)
         if len(distinct) == 1:
             self._skip(Step.slice_judge)
-            return next(iter(distinct))
+            return next(iter(distinct)), []
 
         candidates = [SliceOption(bounds, "; ".join(reasons) or None)
                       for bounds, reasons in distinct.items()]
@@ -133,10 +137,11 @@ class Pipeline:
                              for option in candidates])
         prompt = render("slice_judge", input=self.brief,
                         options=as_json([{"variant": n, **v} for n, v in enumerate(variants, 1)]))
-        return self._ask_judge(Step.slice_judge, prompt,
-                               lambda data: judged_bounds(self.brief, data, candidates))
+        return self._ask_judge(Step.slice_judge, prompt, lambda data: (
+            judged_bounds(self.brief, data, candidates), boundary_notes(data)))
 
-    def _label(self, fragments: list[str]) -> list[LabeledFragment]:
+    def _label(self, fragments: list[str], notes: dict[int, str]) -> list[LabeledFragment]:
+        """notes — пояснения судьи нарезки по индексу фрагмента."""
         ids = list(range(1, len(fragments) + 1))
         texts = dict(zip(ids, fragments, strict=True))
         prompt = render("label", input=self.brief,
@@ -168,8 +173,17 @@ class Pipeline:
             final |= self._ask_judge(Step.label_judge, prompt,
                                      lambda data: judged_labels(data, list(disputed)))
 
-        return [LabeledFragment(id=i, text=texts[i], label=final[i].label, reason=final[i].reason)
-                for i in ids]
+        return [
+            LabeledFragment(
+                id=i, text=texts[i], label=final[i].label, reason=final[i].reason,
+                council_label=final[i].label,
+                decided_by="judge" if i in disputed else "agreed",
+                votes=[Vote(model=model, labels=[o.label for o in options[i]])
+                       for model, options in answers.items()],
+                slice_note=notes.get(i - 1),
+            )
+            for i in ids
+        ]
 
     # --- вызовы моделей
 

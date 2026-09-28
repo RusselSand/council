@@ -119,8 +119,13 @@ def test_slicing_runs_in_the_background_and_ends_with_labeled_fragments(agents):
     # TestClient выполняет фоновую задачу до возврата из post.
     slicing = client.get(f"/api/councils/{council_id}").json()["slicing"]
     assert slicing["state"] == "done"
-    assert slicing["fragments"] == [
-        {"id": 1, "text": agents.text, "label": "idea", "reason": "цель"}]
+    assert slicing["text"] == agents.text
+    assert slicing["fragments"] == [{
+        "id": 1, "text": agents.text, "label": "idea", "reason": "цель",
+        "council_label": "idea",
+        "decided_by": "agreed", "slice_note": None,
+        "votes": [{"model": "sol", "labels": ["idea"]}, {"model": "fable", "labels": ["idea"]}],
+    }]
     assert [s["state"] for s in slicing["steps"]] == ["done", "skipped", "done", "skipped"]
 
 
@@ -153,3 +158,38 @@ def test_settings_tell_which_models_can_run(agents):
     models = client.get("/api/settings").json()["models"]
     available = {m["alias"]: m["available"] for m in models}
     assert available == {"sol": True, "fable": True, "astra": False}
+
+
+def sliced_council(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+    client.post(f"/api/councils/{council_id}/slicing")
+    return council_id
+
+
+def test_person_can_change_a_type_and_the_council_one_stays(agents):
+    council_id = sliced_council(agents)
+    res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
+    assert res.status_code == 200
+    fragment = client.get(f"/api/councils/{council_id}").json()["slicing"]["fragments"][0]
+    assert (fragment["label"], fragment["council_label"]) == ("risk", "idea")
+
+    client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "idea"}})
+    fragment = client.get(f"/api/councils/{council_id}").json()["slicing"]["fragments"][0]
+    assert fragment["label"] == fragment["council_label"] == "idea"
+
+
+@pytest.mark.parametrize(("labels", "status"), [
+    ({"7": "risk"}, 422),
+    ({"1": "goal"}, 422),
+])
+def test_bad_labels_are_refused(agents, labels, status):
+    council_id = sliced_council(agents)
+    res = client.patch(f"/api/councils/{council_id}", json={"labels": labels})
+    assert res.status_code == status
+
+
+def test_labels_need_a_finished_slicing(agents):
+    council_id = new_council()
+    res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
+    assert res.status_code == 409

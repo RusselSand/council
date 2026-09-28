@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { api, ApiError, councilPath, type Council, type CouncilPatch, type Settings } from '../api'
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
+import { SaveStatus } from '../components/SaveStatus'
 import { SelectField } from '../components/SelectField'
 import type { Autosave } from '../useAutosave'
 
@@ -65,19 +66,8 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
                   placeholder={t('brief.placeholder')}
                   onChange={e => onChange({ brief: e.target.value }, TYPING_DELAY)} />
         <div className="brief-foot">
-          <span className="muted">
-            {t('brief.words', { count: countWords(council.brief) })}
-            {saver.state === 'saving' && ` · ${t('brief.saving')}`}
-          </span>
-          {saver.state === 'error' && (
-            <span className="error-text" role="alert">
-              {t('brief.saveFailed')}{' '}
-              <button className="btn-link" onClick={() => void saver.retry()}>{t('common.retry')}</button>
-              {saver.leaving && <>{' · '}
-                <button className="btn-link" onClick={saver.leaveAnyway}>{t('brief.leaveAnyway')}</button>
-              </>}
-            </span>
-          )}
+          <span className="muted">{t('brief.words', { count: countWords(council.brief) })}</span>
+          <SaveStatus saver={saver} />
           {startError && <span className="error-text" role="alert">{startError}</span>}
           <button className="btn-primary large" onClick={slice}
                   disabled={slicing || !council.brief.trim()}>{t('brief.slice')}</button>

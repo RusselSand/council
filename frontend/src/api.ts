@@ -7,10 +7,22 @@ export type SlicingStepName = 'slice' | 'slice_judge' | 'label' | 'label_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface SlicingStep { name: SlicingStepName; state: RunState | 'skipped'; runs: ModelRun[] }
-export interface LabeledFragment { id: number; text: string; label: Label; reason: string }
+/** Что предложил участник; вариантов несколько, если он видит неоднозначность. */
+export interface Vote { model: string; labels: Label[] }
+export interface LabeledFragment {
+  id: number; text: string
+  /** Итоговый тип; council_label — что сказал совет, если человек выбрал другой. */
+  label: Label; reason: string; council_label: Label
+  /** agreed — участники сошлись, judge — разошлись и решил судья. */
+  decided_by: 'agreed' | 'judge'; votes: Vote[]
+  /** Пояснение судьи нарезки о границе этого фрагмента. */
+  slice_note: string | null
+}
 /** Нарезка и разметка текста советом: идёт в фоне минутами, фронт опрашивает совет. */
 export interface Slicing {
   state: 'running' | 'done' | 'failed'; steps: SlicingStep[]; fragments: LabeledFragment[]; error: string | null
+  /** Текст, который нарезали: исходник мог поменяться после запуска. */
+  text: string
 }
 export interface Council {
   id: string; name: string; status: CouncilStatus; brief: string
@@ -20,7 +32,10 @@ export interface Council {
   slicing: Slicing | null
 }
 /** Правка с экрана: меняются только присланные поля. */
-export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>>
+export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
+  /** Типы всех фрагментов готовой нарезки разом: повторная отправка ничего не портит. */
+  labels?: Record<number, Label>
+}
 
 /** available — есть подключение к CLI: без него модель видна, но не запускается. */
 export interface Model { alias: string; short_name: string; display_name: string; cli: string; available: boolean }

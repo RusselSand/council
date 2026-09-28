@@ -4,13 +4,14 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from ..config import MIN_PARTICIPANTS, AppConfig
 from ..deps import AgentsDep, ConfigDep, StoreDep
-from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Slicing
+from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Label, Slicing
 from ..pipeline import Pipeline
 
 router = APIRouter(prefix="/councils", tags=["councils"])
 
 NOT_FOUND = {404: {"description": "Совет не найден"}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
+NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой нарезки"}}
 CANNOT_SLICE = {
     409: {"description": "Нарезка уже идёт"},
     422: {"description": "Текст пуст или к моделям совета нет подключения"},
@@ -41,15 +42,35 @@ def get_council(council_id: str, store: StoreDep) -> Council:
     return council
 
 
-@router.patch("/{council_id}", responses={**NOT_FOUND, **INVALID_MODELS})
+@router.patch("/{council_id}", responses={**NOT_FOUND, **INVALID_MODELS, **NOT_RELABELABLE})
 def update_council(
     council_id: str, patch: CouncilPatch, store: StoreDep, config: ConfigDep
 ) -> Council:
     check_models(patch, config)
-    council = store.update_council(council_id, patch.model_dump(exclude_none=True))
+    changes = patch.model_dump(exclude_none=True, exclude={"labels"})
+    with _starting:  # типы и запуск нарезки не должны разойтись
+        if patch.labels is not None:
+            current = store.get_council(council_id)
+            if current is None:
+                raise HTTPException(404, "Совет не найден")
+            changes["slicing"] = relabeled(current.slicing, patch.labels)
+        council = store.update_council(council_id, changes)
     if council is None:
         raise HTTPException(404, "Совет не найден")
     return council
+
+
+def relabeled(slicing: Slicing | None, labels: dict[int, Label]) -> Slicing:
+    """Типы, выбранные человеком. Тип совета остаётся в council_label: выбор всегда можно
+    вернуть, и видно, где человек не согласился."""
+    if slicing is None or slicing.state != "done":
+        raise HTTPException(409, "Типы меняются только у готовой нарезки")
+    unknown = sorted(set(labels) - {fragment.id for fragment in slicing.fragments})
+    if unknown:
+        raise HTTPException(422, f"Нет фрагментов: {', '.join(map(str, unknown))}")
+    fragments = [fragment.model_copy(update={"label": labels.get(fragment.id, fragment.label)})
+                 for fragment in slicing.fragments]
+    return slicing.model_copy(update={"fragments": fragments})
 
 
 @router.post("/{council_id}/slicing", status_code=202, responses={**NOT_FOUND, **CANNOT_SLICE})

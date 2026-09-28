@@ -1,7 +1,9 @@
 import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
-import { api, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus } from '../api'
+import {
+  api, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus, type Label,
+} from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
 import { useInterval } from '../useInterval'
@@ -56,6 +58,15 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
   const sliced = useCallback((fresh: Council) =>
     update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
+  // Тип фрагмента, выбранный человеком. Отправляются все типы разом: повтор ничего не портит.
+  const relabel = useCallback((fragmentId: number, label: Label) => {
+    const done = council?.slicing
+    if (!done) return
+    const fragments = done.fragments.map(f => (f.id === fragmentId ? { ...f, label } : f))
+    update(([c, settings]) => [{ ...c, slicing: { ...done, fragments } }, settings])
+    schedule({ labels: Object.fromEntries(fragments.map(f => [f.id, f.label])) }, 0)
+  }, [council?.slicing, update, schedule])
+
   useInterval(() => { api.council(id).then(sliced, () => { /* следующий опрос */ }) },
               council?.slicing?.state === 'running' ? POLL_MS : null)
 
@@ -102,7 +113,8 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
                       onStart={sliced} saver={saver} />
         )}
         {state.kind === 'ok' && stage === 'slices' && (
-          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={sliced} />
+          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={sliced}
+                       onRelabel={relabel} saver={saver} />
         )}
         {state.kind === 'ok' && stage !== 'brief' && stage !== 'slices' && (
           <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>

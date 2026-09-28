@@ -37,6 +37,15 @@ class LabelOption:
     reason: str
 
 
+@dataclass(frozen=True)
+class BoundaryNote:
+    """Решение судьи нарезки о спорной границе: «<слева> | <справа>» и почему."""
+
+    left: str
+    right: str
+    reason: str
+
+
 def short(text: str, width: int = 40) -> str:
     text = " ".join(text.split())
     return text if len(text) <= width else text[: width - 1] + "…"
@@ -134,6 +143,32 @@ def judged_bounds(text: str, data: dict, candidates: list[SliceOption]) -> Bound
         raise BadAnswer(f"судья провёл границу, которой не было ни в одном варианте: "
                         f"перед «{short(text[invented[0]:])}»")
     return bounds
+
+
+def boundary_notes(data: dict) -> list[BoundaryNote]:
+    """Пояснения судьи нарезки. Не обязательны: кривая запись пропускается, а не роняет итог."""
+    notes = []
+    for item in data.get("decisions") or []:
+        if not isinstance(item, dict):
+            continue
+        boundary, reason = item.get("boundary"), item.get("reason")
+        if isinstance(boundary, str) and "|" in boundary and isinstance(reason, str) and reason:
+            left, _, right = boundary.partition("|")
+            notes.append(BoundaryNote(left.strip(), right.strip(), reason.strip()))
+    return notes
+
+
+def note_places(fragments: list[str], notes: list[BoundaryNote]) -> dict[int, str]:
+    """К какому фрагменту (индекс) отнести пояснение: где начинается правая часть границы,
+    иначе где стоит левая. Не нашлось — пояснение пропускается."""
+    placed: dict[int, list[str]] = {}
+    for note in notes:
+        for quote in (note.right, note.left):
+            index = next((i for i, f in enumerate(fragments) if quote and quote in f), None)
+            if index is not None:
+                placed.setdefault(index, []).append(note.reason)
+                break
+    return {index: " ".join(reasons) for index, reasons in placed.items()}
 
 
 def label_options(data: dict, ids: list[int]) -> dict[int, list[LabelOption]]:

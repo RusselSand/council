@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Council, CouncilPatch, Settings, Slicing } from '../api'
@@ -28,8 +28,9 @@ const networkError = () => Promise.reject(new TypeError('Failed to fetch'))
 
 const run = (model: string, state: 'waiting' | 'running' | 'done' | 'failed', error: string | null = null) =>
   ({ model, state, error })
+const SLICED_TEXT = 'Хочу воркер. Состояние держать в файлах, без базы.'
 const RUNNING: Slicing = {
-  state: 'running', fragments: [], error: null, steps: [
+  state: 'running', text: SLICED_TEXT, fragments: [], error: null, steps: [
     { name: 'slice', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'slice_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
     { name: 'label', state: 'waiting', runs: [run('sol', 'waiting'), run('fable', 'waiting')] },
@@ -37,16 +38,20 @@ const RUNNING: Slicing = {
   ],
 }
 const DONE: Slicing = {
-  state: 'done', error: null,
+  state: 'done', text: SLICED_TEXT, error: null,
   steps: [
-    { name: 'slice', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+    { name: 'slice', state: 'done', runs: [run('sol', 'failed', 'нет входа в подписку'), run('fable', 'done')] },
     { name: 'slice_judge', state: 'skipped', runs: [] },
-    { name: 'label', state: 'done', runs: [run('sol', 'failed', 'нет входа в подписку'), run('fable', 'done')] },
+    { name: 'label', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
     { name: 'label_judge', state: 'done', runs: [run('fable', 'done')] },
   ],
   fragments: [
-    { id: 1, text: 'Хочу воркер', label: 'idea', reason: 'Желаемый результат.' },
-    { id: 2, text: 'Состояние держать в файлах, без базы.', label: 'proposal', reason: 'Способ хранения.' },
+    { id: 1, text: 'Хочу воркер.', label: 'idea', reason: 'Желаемый результат.', council_label: 'idea',
+      decided_by: 'agreed', slice_note: null,
+      votes: [{ model: 'sol', labels: ['idea'] }, { model: 'fable', labels: ['idea'] }] },
+    { id: 2, text: 'Состояние держать в файлах, без базы.', label: 'proposal', reason: 'Способ хранения.',
+      council_label: 'proposal', decided_by: 'judge', slice_note: 'две мысли',
+      votes: [{ model: 'sol', labels: ['constraint'] }, { model: 'fable', labels: ['proposal'] }] },
   ],
 }
 
@@ -253,7 +258,7 @@ describe('Ввод', () => {
     let fail = true
     await open(() => (fail ? json({ detail: 'boom' }, 500) : json(COUNCIL)))
     fireEvent.change(judge(), { target: { value: 'sol' } })
-    expect((await screen.findByRole('alert')).textContent).toContain(ru['brief.saveFailed'])
+    expect((await screen.findByRole('alert')).textContent).toContain(ru['save.failed'])
 
     fail = false
     fireEvent.click(screen.getByRole('button', { name: ru['common.retry'] }))
@@ -285,7 +290,7 @@ describe('Ввод', () => {
     const text = await open(() => (fail ? json({ detail: 'boom' }, 500) : json(COUNCIL)))
     fireEvent.change(text, { target: { value: 'Новый текст' } })
     leave()
-    expect((await screen.findByRole('alert')).textContent).toContain(ru['brief.leaveAnyway'])
+    expect((await screen.findByRole('alert')).textContent).toContain(ru['save.leaveAnyway'])
     expect((screen.getByRole('textbox', { name: ru['brief.title'] }) as HTMLTextAreaElement).value).toBe('Новый текст')
 
     fail = false
@@ -298,7 +303,7 @@ describe('Ввод', () => {
     const text = await open(() => json({ detail: 'boom' }, 500))
     fireEvent.change(text, { target: { value: 'Новый текст' } })
     leave()
-    fireEvent.click(await screen.findByRole('button', { name: ru['brief.leaveAnyway'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['save.leaveAnyway'] }))
     expect(await home()).toBeTruthy()
     expect(patches).toEqual([{ brief: 'Новый текст' }])
   })
@@ -315,16 +320,34 @@ describe('Нарезка', () => {
     expect(await screen.findByRole('link', { name: ru['slices.toBrief'] })).toBeTruthy()
   })
 
-  it('итог — фрагменты с типами и причинами; ход работы виден с ошибками', async () => {
+  it('итог — текст целиком с подсветкой, типы, пометки о спорах; ход работы с ошибками', async () => {
     openSlices(() => ({ ...COUNCIL, slicing: DONE }))
-    const table = await screen.findByRole('table')
-    const rows = [...table.querySelectorAll('tbody tr')].map(row => row.textContent)
-    expect(rows).toEqual([
-      `1Хочу воркерЖелаемый результат.${ru['label.idea']}`,
-      `2Состояние держать в файлах, без базы.Способ хранения.${ru['label.proposal']}`,
-    ])
+    expect(await screen.findByRole('heading', { name: ru['slices.resultTitle'] })).toBeTruthy()
+    expect(document.querySelector('.sliced-text')?.textContent).toBe(SLICED_TEXT)
+    expect([...document.querySelectorAll('mark')].map(m => m.textContent)).toEqual(DONE.fragments.map(f => f.text))
+    expect(screen.getByText(`${ru['label.proposal']} · 1`)).toBeTruthy()
+    expect(screen.getByText(`${ru['label.risk']} · 0`)).toBeTruthy()
+    expect(screen.getByText('готово ×2')).toBeTruthy()
+
+    const chosen = (name: string) =>
+      within(screen.getByRole('radiogroup', { name })).getByRole('radio', { checked: true }).textContent
+    expect([chosen('F1'), chosen('F2')]).toEqual([ru['label.idea'], ru['label.proposal']])
+    expect(screen.getByText('модели разошлись (Sol — ограничение, Fable — предложение), '
+      + 'решил судья: Способ хранения.')).toBeTruthy()
+    expect(screen.getByText('граница — решение судьи нарезки: две мысли')).toBeTruthy()
+
     expect(screen.getByText(ru['slices.stepState.skipped'])).toBeTruthy()
     expect(screen.getByText('нет входа в подписку')).toBeTruthy()
+  })
+
+  it('тип можно поменять: сохраняется сразу, тип совета остаётся виден', async () => {
+    openSlices(() => ({ ...COUNCIL, slicing: DONE }))
+    const first = await screen.findByRole('radiogroup', { name: 'F1' })
+    fireEvent.click(within(first).getByRole('radio', { name: ru['label.risk'] }))
+    expect(within(first).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
+    expect(screen.getByText('вы выбрали другой тип, у совета — «идея»')).toBeTruthy()
+    expect(screen.getByText(`${ru['label.risk']} · 1`)).toBeTruthy()
+    await waitFor(() => expect(patches).toEqual([{ labels: { 1: 'risk', 2: 'proposal' } }]))
   })
 
   it('пока идёт — спрашивает сервер и сам показывает итог', async () => {
@@ -332,7 +355,8 @@ describe('Нарезка', () => {
     openSlices(() => current)
     expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
     current = { ...COUNCIL, slicing: DONE }
-    expect(await screen.findByRole('table', {}, { timeout: POLL_MS + 2000 })).toBeTruthy()
+    const result = { name: ru['slices.resultTitle'] }
+    expect(await screen.findByRole('heading', result, { timeout: POLL_MS + 2000 })).toBeTruthy()
   }, POLL_MS + 5000)
 
   it('упавшая — причина и повтор', async () => {

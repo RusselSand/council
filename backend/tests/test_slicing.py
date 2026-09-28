@@ -7,11 +7,13 @@ from spec_council.slicing import (
     LabelOption,
     SliceOption,
     agreed_label,
+    boundary_notes,
     bounds_of,
     cut,
     judged_bounds,
     judged_labels,
     label_options,
+    note_places,
     parse_json,
     slice_options,
 )
@@ -110,3 +112,15 @@ def test_agreement_needs_one_option_everywhere_and_the_same_type():
     assert agreed_label([[idea], [idea2]]) == idea
     assert agreed_label([[idea], [risk]]) is None
     assert agreed_label([[idea, risk], [idea]]) is None
+
+
+def test_judge_notes_land_on_the_fragment_where_the_boundary_is():
+    data = {"decisions": [
+        {"boundary": "локально, | принимает", "decision": "split", "reason": "два решения"},
+        {"boundary": "кривая запись без черты", "reason": "пропустить"},
+        {"boundary": "нет такого | и такого", "reason": "не найдено"},
+        "не объект",
+    ]}
+    notes = boundary_notes(data)
+    assert len(notes) == 2
+    assert note_places(FRAGMENTS, notes) == {1: "два решения"}

@@ -1,8 +1,8 @@
 """Запуск моделей совета через agent-workers: одна модель — одно подключение к CLI.
 
-Каталог учётной записи каждой модели — COUNCIL_<ALIAS>_HOME в .env (ищется от текущего
-каталога вверх) или в окружении; в докере его задаёт compose. Вход в подписку делается
-заранее на хосте: python -m agent_workers login с тем же AGENT_HOME.
+Каталог учётной записи модели — .accounts/<alias> рядом с .env (он в .gitignore), или
+COUNCIL_<ALIAS>_HOME в .env или окружении; в докере его задаёт compose. Вход в подписку
+делается заранее на хосте, см. README: python -m agent_workers login --home <каталог>.
 """
 
 import threading
@@ -51,14 +51,21 @@ class AgentRunner:
         self._entries: dict[str, tuple[str, object]] = {}
 
     def home(self, alias: str) -> Path | None:
-        return self._settings.path_of(home_key(alias)) if alias in self._agents else None
+        if alias not in self._agents:
+            return None
+        # Без настройки — .accounts/<alias> рядом с .env, то есть в корне репозитория.
+        root = self._settings.path.parent if self._settings.path else Path.cwd()
+        return self._settings.path_of(home_key(alias)) or (root / ".accounts" / alias).resolve()
 
     def available(self, alias: str) -> bool:
-        return self.home(alias) is not None
+        """Провайдер известен и в каталоге учётной записи что-то есть: токены кладёт вход.
+        Пустой каталог не считается: docker compose создаёт его сам при запуске."""
+        home = self.home(alias)
+        return home is not None and home.is_dir() and any(home.iterdir())
 
     def ask(self, model: str, prompt: str, key: str) -> str:
         if not self.available(model):
-            raise ModelFailed(f"нет подключения: задайте {home_key(model)} в .env")
+            raise ModelFailed(f"нет входа: каталог {self.home(model)} пуст, войдите по README")
         with self._locks[model]:
             try:
                 result = self._worker(model).run({"user": prompt}, key=key,

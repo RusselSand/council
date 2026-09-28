@@ -27,17 +27,35 @@ cp .env.example .env
   fine-grained token с правом Contents: Read только на этот репо. Он нужен сборке
   образов: compose берёт его из `.env` и передаёт build secret'ом, в образ токен не
   попадает. Локальному `uv` токен не нужен: доступ он берёт из git, как и `git clone`.
-- `COUNCIL_SOL_HOME`, `COUNCIL_FABLE_HOME` — каталоги учётных записей моделей совета
-  (Sol через Codex, Fable через Claude Code). В них токены входа, поэтому они вне
-  репозитория. Без каталога модель в совете видна, но не запускается. Вход — один раз
-  на хосте, нужен браузер:
-  ```bash
-  cd backend
-  uv run python -m agent_workers login --provider codex --home <COUNCIL_SOL_HOME>
-  uv run python -m agent_workers login --provider claude --home <COUNCIL_FABLE_HOME>
-  ```
-  Docker монтирует эти каталоги в контейнер, CLI уже есть в образах. У Gemini
-  подключения пока нет: в agent-workers нет её провайдера.
+- `COUNCIL_SOL_HOME`, `COUNCIL_FABLE_HOME` — необязательно: другие каталоги учётных
+  записей моделей вместо `.accounts/…`, см. «Вход в модели».
+
+## Вход в модели
+Совет работает через CLI с подпиской: Sol — через Codex (подписка ChatGPT), Fable — через
+Claude Code (подписка Claude). Каждой модели нужен свой каталог учётной записи: туда CLI
+кладёт токены входа. По умолчанию это `.accounts/sol` и `.accounts/fable` в корне
+репозитория. `.accounts/` уже в `.gitignore` и `.dockerignore`: в гит и в образы токены не
+попадут. Создавать каталоги руками не нужно, их создаёт вход.
+
+Вход — один раз на каждую модель, на хосте, из корня репозитория. Нужны установленные
+`codex` и `claude` (`npm i -g @openai/codex`, Claude Code — по инструкции Anthropic) и
+браузер:
+```bash
+uv run --project backend python -m agent_workers login --provider codex --home .accounts/sol
+uv run --project backend python -m agent_workers login --provider claude --home .accounts/fable
+```
+Каждая команда открывает браузер: войдите в аккаунт с подпиской (для Codex — «Sign in with
+ChatGPT»). Лимиты подписки общие для всего аккаунта: если войти своим основным, совет будет
+тратить то же окно, что и вы. Проверить вход и увидеть расход подписки:
+```bash
+uv run --project backend python -m agent_workers status --provider codex --home .accounts/sol
+uv run --project backend python -m agent_workers status --provider claude --home .accounts/fable
+```
+После входа модель в совете перестаёт быть «не подключена». Docker монтирует те же
+каталоги в контейнер, второй раз входить не нужно. Каталоги в другом месте — пути в `.env`:
+`COUNCIL_SOL_HOME`, `COUNCIL_FABLE_HOME` (относительный путь считается от каталога `.env`).
+Выйти — та же команда с `logout`. У Gemini подключения пока нет: в agent-workers нет её
+провайдера.
 
 ## Нарезка
 «Нарезать» запускает работу совета в фоне, этап «Нарезка» показывает ход и итог:
