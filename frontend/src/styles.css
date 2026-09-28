@@ -105,7 +105,8 @@ a.card:hover { border-color: var(--accent) }
 /* Этап «Нарезка»: ход работы по шагам и моделям. */
 .step-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none }
 .step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px }
-.step-name { font-weight: 600; font-size: 13.5px }
+.step-note { margin: 0; color: var(--fg-muted); font-size: 12.5px }
+.step-name { min-width: 0; font-weight: 600; font-size: 13.5px }
 .step-state, .run-state { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap }
 .step-state.running, .run-state.running { color: var(--accent) }
 .step-state.done, .run-state.done { color: var(--ok) }
@@ -135,7 +136,9 @@ a.card:hover { border-color: var(--accent) }
 
 /* Итог нарезки: слева ход работы, справа текст и фрагменты. */
 .slices-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; align-items: start }
-.slices-side { grid-column: 1; grid-row: 1 }
+/* min-width: 0 — длинный текст в узкой колонке переносится, а не раздвигает её. */
+.slices-side { grid-column: 1; grid-row: 1; min-width: 0 }
+.slices-side .step-list > li, .slices-side .run { min-width: 0 }
 .slices-main { grid-column: 2; display: grid; gap: 16px }
 .slices-side .run { padding: 6px 8px }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px }

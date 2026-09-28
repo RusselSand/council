@@ -113,6 +113,7 @@ function Progress({ slicing, models }: Readonly<{ slicing: Slicing; models: Mode
               <span className="step-name">{t(`slices.step.${step.name}`)}</span>
               <span className={`step-state ${step.state}`}>{t(`slices.stepState.${step.state}`)}</span>
             </div>
+            {step.state === 'skipped' && <p className="step-note">{t('slices.skippedNote')}</p>}
             {step.runs.map(run => (
               <div key={run.model} className="run">
                 <ModelBadge model={modelOf(models, run.model)} compact />
