@@ -1,5 +1,17 @@
-export type CouncilStatus = 'brief' | 'approaches' | 'decisions' | 'review' | 'ready'
-export interface Council { id: string; name: string; status: CouncilStatus; author: string; reviewer: string; updated_at: string }
+export type CouncilStatus = 'brief' | 'slices' | 'structure' | 'review' | 'ready'
+export interface Council {
+  id: string; name: string; status: CouncilStatus; brief: string
+  /** Каждый участник предлагает свой вариант, не видя чужих; судья выбирает лучший. */
+  participants: string[]; judge: string
+  updated_at: string
+}
+/** Правка с экрана: меняются только присланные поля. */
+export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>>
+
+export interface Model { alias: string; short_name: string; display_name: string; cli: string }
+export interface Settings {
+  models: Model[]; min_participants: number; default_participants: string[]; default_judge: string
+}
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
 export class ApiError extends Error {
@@ -23,10 +35,16 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
   return res.json()
 }
 
+const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
+
 export const api = {
   councils: () => request<Council[]>('/api/councils'),
-  council: (id: string) => request<Council>(`/api/councils/${encodeURIComponent(id)}`),
+  council: (id: string) => request<Council>(councilUrl(id)),
   createCouncil: () => request<{ id: string }>('/api/councils', { method: 'POST' }),
+  updateCouncil: (id: string, patch: CouncilPatch) => request<Council>(councilUrl(id), {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
+  }),
+  settings: () => request<Settings>('/api/settings'),
 }
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */

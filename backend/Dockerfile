@@ -24,8 +24,12 @@ COPY pyproject.toml uv.lock ./
 # agent-workers — приватный репо. Токен только на чтение приходит build secret'ом
 # agent_workers_token (см. docker-compose.yml), а не ARG: ARG остаётся в истории образа.
 # Подмена адреса живёт только в окружении этой команды, в образ токен не попадает.
+# Без токена compose молча передаёт пустой секрет, и git ответил бы невнятной ошибкой входа.
 RUN --mount=type=secret,id=agent_workers_token \
-    GIT_CONFIG_COUNT=1 \
+    test -s /run/secrets/agent_workers_token \
+    || { echo "Нет токена agent-workers: впишите AGENT_WORKERS_TOKEN в .env" \
+              "рядом с docker-compose.yml (образец — .env.example)" >&2; exit 1; } \
+    && GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/agent_workers_token)@github.com/RusselSand/agent-workers.insteadOf" \
     GIT_CONFIG_VALUE_0="https://github.com/RusselSand/agent-workers" \
     uv sync --frozen --no-install-project

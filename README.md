@@ -17,17 +17,19 @@
 
 Команды ниже даны по одной на строку: так они одинаково работают в bash и в PowerShell.
 
-agent-workers лежит в приватном репо. Локальный `uv` берёт доступ из git, как и
-`git clone`. Сборке образов нужен токен только на чтение этого репо в переменной
-`AGENT_WORKERS_TOKEN`: compose передаёт его build secret'ом, в образ он не попадает.
-Подойдёт fine-grained token с правом Contents: Read на agent-workers или токен `gh`:
+Секреты и настройки для локальной работы лежат в `.env` в корне репозитория. Он не
+коммитится, образец — `.env.example`:
 ```bash
-export AGENT_WORKERS_TOKEN=$(gh auth token)       # bash
-$env:AGENT_WORKERS_TOKEN = gh auth token          # PowerShell
+cp .env.example .env
 ```
+- `AGENT_WORKERS_TOKEN` — токен только на чтение приватного репо agent-workers:
+  fine-grained token с правом Contents: Read только на этот репо. Он нужен сборке
+  образов: compose берёт его из `.env` и передаёт build secret'ом, в образ токен не
+  попадает. Локальному `uv` токен не нужен: доступ он берёт из git, как и `git clone`.
+- `AGENT_*` — подключение воркера к CLI с подпиской, см. README пакета.
 
 ## Разработка в докере
-Кроме самого докера и токена выше, ничего ставить не нужно. Оба сервиса с hot reload.
+Кроме самого докера и `.env` выше, ничего ставить не нужно. Оба сервиса с hot reload.
 ```bash
 docker compose up --build
 ```

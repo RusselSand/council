@@ -46,7 +46,7 @@ services:
       - "8080:8420"
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.
-# Берётся из переменной окружения AGENT_WORKERS_TOKEN, см. README.
+# Compose берёт AGENT_WORKERS_TOKEN из .env рядом с этим файлом (образец — .env.example).
 secrets:
   agent_workers_token:
     environment: AGENT_WORKERS_TOKEN

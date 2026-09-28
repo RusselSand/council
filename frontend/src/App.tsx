@@ -4,11 +4,15 @@ import { Link, Outlet, useNavigate } from 'react-router'
 import { api, councilPath } from './api'
 import { setLanguage } from './i18n'
 
+/** Что страница может поменять в общей шапке: имя открытого совета после «/». */
+export type Layout = { setCrumb: (crumb: string | null) => void }
+
 export function App() {
   const { t, i18n } = useTranslation()
   const nav = useNavigate()
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState(false)
+  const [crumb, setCrumb] = useState<string | null>(null)
   const otherLanguage = i18n.language.startsWith('ru') ? 'en' : 'ru'
 
   const newCouncil = async () => {
@@ -26,7 +30,10 @@ export function App() {
   return (
     <div className="app">
       <header className="header">
-        <Link to="/" className="brand"><span className="brand-mark" />Spec Council</Link>
+        <div className="header-title">
+          <Link to="/" className="brand"><span className="brand-mark" />Spec Council</Link>
+          {crumb && <><span className="crumb-sep" aria-hidden="true">/</span><span className="crumb">{crumb}</span></>}
+        </div>
         <div className="header-actions">
           {error && <span className="error-text" role="alert">{t('header.createFailed')}</span>}
           <button className="btn-lang" onClick={() => setLanguage(otherLanguage)}
@@ -38,7 +45,8 @@ export function App() {
           </button>
         </div>
       </header>
-      <main className="main"><Outlet /></main>
+      {/* Ширину содержимого задают страницы: у совета полоса этапов тянется во всю ширину. */}
+      <Outlet context={{ setCrumb } satisfies Layout} />
     </div>
   )
 }
