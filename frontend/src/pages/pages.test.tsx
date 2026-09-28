@@ -1,23 +1,23 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Council, CouncilPatch, Settings } from '../api'
+import type { Council, CouncilPatch, Settings, Slicing } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
 import { en } from '../i18n/en'
 import { ru } from '../i18n/ru'
 import { HomePage } from './HomePage'
-import { CouncilPage, STAGES } from './CouncilPage'
+import { CouncilPage, POLL_MS, STAGES } from './CouncilPage'
 
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
-  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z',
+  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', slicing: null,
 }
 const SETTINGS: Settings = {
   models: [
-    { alias: 'sol', short_name: 'Sol', display_name: 'GPT-5.6 Sol', cli: 'codex' },
-    { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude' },
-    { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini' },
+    { alias: 'sol', short_name: 'Sol', display_name: 'GPT-5.6 Sol', cli: 'codex', available: true },
+    { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude', available: true },
+    { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini', available: false },
   ],
   min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable',
 }
@@ -26,23 +26,56 @@ const json = (body: unknown, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
 const networkError = () => Promise.reject(new TypeError('Failed to fetch'))
 
+const run = (model: string, state: 'waiting' | 'running' | 'done' | 'failed', error: string | null = null) =>
+  ({ model, state, error })
+const RUNNING: Slicing = {
+  state: 'running', fragments: [], error: null, steps: [
+    { name: 'slice', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
+    { name: 'slice_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
+    { name: 'label', state: 'waiting', runs: [run('sol', 'waiting'), run('fable', 'waiting')] },
+    { name: 'label_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
+  ],
+}
+const DONE: Slicing = {
+  state: 'done', error: null,
+  steps: [
+    { name: 'slice', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+    { name: 'slice_judge', state: 'skipped', runs: [] },
+    { name: 'label', state: 'done', runs: [run('sol', 'failed', 'нет входа в подписку'), run('fable', 'done')] },
+    { name: 'label_judge', state: 'done', runs: [run('fable', 'done')] },
+  ],
+  fragments: [
+    { id: 1, text: 'Хочу воркер', label: 'idea', reason: 'Желаемый результат.' },
+    { id: 2, text: 'Состояние держать в файлах, без базы.', label: 'proposal', reason: 'Способ хранения.' },
+  ],
+}
+
 let fetchMock: ReturnType<typeof vi.fn>
 let patches: CouncilPatch[]
+let starts: number
 beforeEach(async () => {
   await setLanguage('ru')
   fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
-  patches = []
+  patches = []; starts = 0
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
-/** Сервер: список, совет, настройки и PATCH. Каждый ответ — новый Response: тело читается один раз. */
-const server = (patch: () => Promise<Response> = () => json(COUNCIL)) =>
+/**
+ * Сервер: список, совет, настройки, PATCH и запуск нарезки. Каждый ответ — новый Response:
+ * тело читается один раз. council — функция, если совет меняется между запросами.
+ */
+const server = ({
+  council = () => COUNCIL,
+  patch = () => json(COUNCIL),
+  start = () => json({ ...COUNCIL, status: 'slices', slicing: RUNNING }, 202),
+}: { council?: () => Council; patch?: () => Promise<Response>; start?: () => Promise<Response> } = {}) =>
   (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     if (url === '/api/settings') return json(SETTINGS)
-    if (url === '/api/councils') return method === 'POST' ? json({ id: COUNCIL.id }) : json([COUNCIL])
+    if (url === '/api/councils') return method === 'POST' ? json({ id: COUNCIL.id }) : json([council()])
+    if (url.endsWith('/slicing')) { starts++; return start() }
     if (method === 'PATCH') { patches.push(JSON.parse(String(init?.body))); return patch() }
-    return json(COUNCIL)
+    return json(council())
   }
 
 const renderAt = (path: string) => render(<RouterProvider router={createMemoryRouter([{
@@ -135,8 +168,8 @@ describe('CouncilPage', () => {
 })
 
 describe('Ввод', () => {
-  const open = async (patch?: () => Promise<Response>) => {
-    fetchMock.mockImplementation(server(patch))
+  const open = async (patch?: () => Promise<Response>, start?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ patch, start }))
     renderAt('/councils/demo-1/brief')
     return await screen.findByRole('textbox', { name: ru['brief.title'] }) as HTMLTextAreaElement
   }
@@ -187,12 +220,27 @@ describe('Ввод', () => {
     await waitFor(() => expect(patches).toEqual([{ brief: 'Хочу воркер для Codex CLI', name: 'Воркер' }]))
   })
 
-  it('«Нарезать» сохраняет не дожидаясь паузы и ведёт на нарезку', async () => {
+  it('«Нарезать» сохраняет текст, запускает нарезку и показывает её ход', async () => {
     const text = await open()
     fireEvent.change(text, { target: { value: 'Новый текст' } })
     fireEvent.click(slice())
-    expect(await screen.findByText(ru['council.stub'].replace('{{stage}}', ru['stage.slices']))).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
     expect(patches).toEqual([{ brief: 'Новый текст' }])
+    const calls = fetchMock.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${url}`)
+    expect(calls.indexOf('PATCH /api/councils/demo-1')).toBeLessThan(calls.indexOf('POST /api/councils/demo-1/slicing'))
+  })
+
+  it('отказ сервера в запуске объясняет, почему, и оставляет на вводе', async () => {
+    await open(undefined, () => json({ detail: 'Нет подключения к моделям: Gemini Astra 3' }, 422))
+    fireEvent.click(slice())
+    expect((await screen.findByRole('alert')).textContent).toBe('Нет подключения к моделям: Gemini Astra 3')
+    expect(screen.getByRole('textbox', { name: ru['brief.title'] })).toBeTruthy()
+  })
+
+  it('модель без подключения помечена', async () => {
+    await open()
+    expect(checkbox(/Gemini Astra/).closest('label')?.textContent).toContain(ru['model.offline'])
+    expect(checkbox(/GPT-5.6 Sol/).closest('label')?.textContent).not.toContain(ru['model.offline'])
   })
 
   it('«Нарезать» выключена, пока текста нет', async () => {
@@ -253,6 +301,47 @@ describe('Ввод', () => {
     fireEvent.click(await screen.findByRole('button', { name: ru['brief.leaveAnyway'] }))
     expect(await home()).toBeTruthy()
     expect(patches).toEqual([{ brief: 'Новый текст' }])
+  })
+})
+
+describe('Нарезка', () => {
+  const openSlices = (council: () => Council, start?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, start }))
+    renderAt('/councils/demo-1/slices')
+  }
+
+  it('без нарезки — подсказка и дорога на ввод', async () => {
+    openSlices(() => COUNCIL)
+    expect(await screen.findByRole('link', { name: ru['slices.toBrief'] })).toBeTruthy()
+  })
+
+  it('итог — фрагменты с типами и причинами; ход работы виден с ошибками', async () => {
+    openSlices(() => ({ ...COUNCIL, slicing: DONE }))
+    const table = await screen.findByRole('table')
+    const rows = [...table.querySelectorAll('tbody tr')].map(row => row.textContent)
+    expect(rows).toEqual([
+      `1Хочу воркерЖелаемый результат.${ru['label.idea']}`,
+      `2Состояние держать в файлах, без базы.Способ хранения.${ru['label.proposal']}`,
+    ])
+    expect(screen.getByText(ru['slices.stepState.skipped'])).toBeTruthy()
+    expect(screen.getByText('нет входа в подписку')).toBeTruthy()
+  })
+
+  it('пока идёт — спрашивает сервер и сам показывает итог', async () => {
+    let current: Council = { ...COUNCIL, slicing: RUNNING }
+    openSlices(() => current)
+    expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
+    current = { ...COUNCIL, slicing: DONE }
+    expect(await screen.findByRole('table', {}, { timeout: POLL_MS + 2000 })).toBeTruthy()
+  }, POLL_MS + 5000)
+
+  it('упавшая — причина и повтор', async () => {
+    const failed: Slicing = { ...RUNNING, state: 'failed', error: 'ни один участник не справился' }
+    openSlices(() => ({ ...COUNCIL, slicing: failed }))
+    expect((await screen.findByRole('alert')).textContent).toBe('ни один участник не справился')
+    fireEvent.click(screen.getByRole('button', { name: ru['slices.retry'] }))
+    expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
+    expect(starts).toBe(1)
   })
 })
 

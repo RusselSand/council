@@ -2,16 +2,34 @@
 # Сборка в один контейнер — профиль prod (сервис app).
 name: council
 
+# Где модели совета видят свои учётные записи внутри контейнера.
+x-accounts: &accounts
+  COUNCIL_SOL_HOME: /data/accounts/sol
+  COUNCIL_FABLE_HOME: /data/accounts/fable
+
 services:
   backend:
     build:
       context: ./backend
       secrets: [agent_workers_token]
+    # agent-workers после хода снимает всю группу процессов CLI; без init убитые потомки
+    # остались бы зомби до перезапуска контейнера.
+    init: true
     ports:
       - "8420:8420"
     volumes:
       - ./backend:/app
+      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      - type: bind
+        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
+        target: /data/accounts/sol
+        bind: { create_host_path: true }
+      - type: bind
+        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
+        target: /data/accounts/fable
+        bind: { create_host_path: true }
     environment:
+      <<: *accounts
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
       WATCHFILES_FORCE_POLLING: "true"
     healthcheck:
@@ -42,8 +60,20 @@ services:
       context: .
       dockerfile: Dockerfile
       secrets: [agent_workers_token]
+    init: true
     ports:
       - "8080:8420"
+    volumes:
+      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      - type: bind
+        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
+        target: /data/accounts/sol
+        bind: { create_host_path: true }
+      - type: bind
+        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
+        target: /data/accounts/fable
+        bind: { create_host_path: true }
+    environment: *accounts
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.
 # Compose берёт AGENT_WORKERS_TOKEN из .env рядом с этим файлом (образец — .env.example).

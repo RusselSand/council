@@ -1,10 +1,14 @@
-"""Совет: участники, судья и правки с экрана ввода."""
+"""Совет: участники, судья, правки с экрана ввода и запуск нарезки."""
+
+import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from spec_council.app import app
 from spec_council.config import DEFAULT_CONFIG
+from spec_council.deps import get_agents, get_store
+from spec_council.pipeline import start
 
 client = TestClient(app)
 
@@ -74,3 +78,78 @@ def test_edited_council_goes_to_the_top_even_on_the_same_day():
 
     client.patch(f"/api/councils/{first}", json={"brief": "правка"})
     assert [c["id"] for c in client.get("/api/councils").json()][:2] == [first, second]
+
+
+class FakeAgents:
+    """Модели совета без CLI: sol и fable подключены, отвечают одинаково."""
+
+    def __init__(self, text):
+        self.text = text
+        self.asked = []
+
+    def available(self, alias):
+        return alias in ("sol", "fable")
+
+    def ask(self, model, prompt, key):
+        self.asked.append(key)
+        if "-slice-" in key:
+            return json.dumps({"options": [{"fragments": [self.text], "reason": None}]})
+        return json.dumps({"labels": [{"id": 1, "options": [{"label": "idea", "reason": "цель"}]}]})
+
+    def forget(self, keys):
+        pass
+
+
+@pytest.fixture
+def agents():
+    fake = FakeAgents("Хочу воркер для Codex CLI.")
+    app.dependency_overrides[get_agents] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_agents)
+
+
+def test_slicing_runs_in_the_background_and_ends_with_labeled_fragments(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+    res = client.post(f"/api/councils/{council_id}/slicing")
+    assert res.status_code == 202
+    assert res.json()["slicing"]["state"] == "running"
+    assert res.json()["status"] == "slices"
+
+    # TestClient выполняет фоновую задачу до возврата из post.
+    slicing = client.get(f"/api/councils/{council_id}").json()["slicing"]
+    assert slicing["state"] == "done"
+    assert slicing["fragments"] == [
+        {"id": 1, "text": agents.text, "label": "idea", "reason": "цель"}]
+    assert [s["state"] for s in slicing["steps"]] == ["done", "skipped", "done", "skipped"]
+
+
+def test_empty_text_is_not_sliced(agents):
+    res = client.post(f"/api/councils/{new_council()}/slicing")
+    assert res.status_code == 422
+    assert agents.asked == []
+
+
+def test_models_without_a_connection_are_named(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": "текст", "judge": "astra"})
+    res = client.post(f"/api/councils/{council_id}/slicing")
+    assert res.status_code == 422
+    assert res.json()["detail"] == "Нет подключения к моделям: Gemini Astra 3"
+
+
+def test_running_slicing_is_not_started_twice(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": "текст"})
+    get_store().update_council(council_id, {"slicing": start(["sol", "fable"], "fable")})
+    assert client.post(f"/api/councils/{council_id}/slicing").status_code == 409
+
+
+def test_slicing_of_unknown_council_is_404(agents):
+    assert client.post("/api/councils/missing/slicing").status_code == 404
+
+
+def test_settings_tell_which_models_can_run(agents):
+    models = client.get("/api/settings").json()["models"]
+    available = {m["alias"]: m["available"] for m in models}
+    assert available == {"sol": True, "fable": True, "astra": False}

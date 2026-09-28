@@ -1,13 +1,18 @@
 import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
-import { api, councilPath, isNotFound, type CouncilPatch, type CouncilStatus } from '../api'
+import { api, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus } from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
+import { useInterval } from '../useInterval'
 import { useLoad } from '../useLoad'
 import { BriefStage } from './BriefStage'
+import { SlicesStage } from './SlicesStage'
 
 export const STAGES = ['brief', 'slices', 'structure', 'spec', 'history'] as const
+
+/** Как часто спрашивать сервер, пока идёт нарезка: ходы моделей длятся минутами. */
+export const POLL_MS = 2000
 export type Stage = (typeof STAGES)[number]
 
 /** Этап i пройден, если статус совета ушёл дальше него. «История» пройденной не бывает. */
@@ -48,6 +53,12 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule(patch, wait)
   }, [update, schedule])
 
+  // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
+  const sliced = useCallback((fresh: Council) =>
+    update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
+  useInterval(() => { api.council(id).then(sliced, () => { /* следующий опрос */ }) },
+              council?.slicing?.state === 'running' ? POLL_MS : null)
+
   if (state.kind === 'error' && state.error instanceof CouncilMissing) return (
     <main className="main">
       <h1 className="page-title">{t('council.notFound')}</h1>
@@ -86,9 +97,16 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       <main className="main">
         <h1 className="sr-only">{title ?? t('common.loading')}</h1>
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
-        {state.kind === 'ok' && (stage === 'brief'
-          ? <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change} saver={saver} />
-          : <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>)}
+        {state.kind === 'ok' && stage === 'brief' && (
+          <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change}
+                      onStart={sliced} saver={saver} />
+        )}
+        {state.kind === 'ok' && stage === 'slices' && (
+          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={sliced} />
+        )}
+        {state.kind === 'ok' && stage !== 'brief' && stage !== 'slices' && (
+          <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
+        )}
       </main>
     </>
   )

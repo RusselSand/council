@@ -1,14 +1,29 @@
 export type CouncilStatus = 'brief' | 'slices' | 'structure' | 'review' | 'ready'
+
+export const LABELS = ['idea', 'question', 'proposal', 'constraint', 'risk'] as const
+export type Label = (typeof LABELS)[number]
+export type RunState = 'waiting' | 'running' | 'done' | 'failed'
+export type SlicingStepName = 'slice' | 'slice_judge' | 'label' | 'label_judge'
+export interface ModelRun { model: string; state: RunState; error: string | null }
+/** skipped — судья не понадобился: участники сошлись. */
+export interface SlicingStep { name: SlicingStepName; state: RunState | 'skipped'; runs: ModelRun[] }
+export interface LabeledFragment { id: number; text: string; label: Label; reason: string }
+/** Нарезка и разметка текста советом: идёт в фоне минутами, фронт опрашивает совет. */
+export interface Slicing {
+  state: 'running' | 'done' | 'failed'; steps: SlicingStep[]; fragments: LabeledFragment[]; error: string | null
+}
 export interface Council {
   id: string; name: string; status: CouncilStatus; brief: string
   /** Каждый участник предлагает свой вариант, не видя чужих; судья выбирает лучший. */
   participants: string[]; judge: string
   updated_at: string
+  slicing: Slicing | null
 }
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>>
 
-export interface Model { alias: string; short_name: string; display_name: string; cli: string }
+/** available — есть подключение к CLI: без него модель видна, но не запускается. */
+export interface Model { alias: string; short_name: string; display_name: string; cli: string; available: boolean }
 export interface Settings {
   models: Model[]; min_participants: number; default_participants: string[]; default_judge: string
 }
@@ -44,6 +59,7 @@ export const api = {
   updateCouncil: (id: string, patch: CouncilPatch) => request<Council>(councilUrl(id), {
     method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
   }),
+  startSlicing: (id: string) => request<Council>(`${councilUrl(id)}/slicing`, { method: 'POST' }),
   settings: () => request<Settings>('/api/settings'),
 }
 

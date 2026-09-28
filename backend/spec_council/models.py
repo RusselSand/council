@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,6 +15,46 @@ class CouncilStatus(StrEnum):
     ready = "ready"
 
 
+Label =Literal["idea", "question", "proposal", "constraint", "risk"]
+RunState = Literal["waiting", "running", "done", "failed"]
+
+
+class SlicingStepName(StrEnum):
+    slice = "slice"              # участники нарезают текст, каждый сам по себе
+    slice_judge = "slice_judge"  # судья выбирает нарезку, если участники разошлись
+    label = "label"              # участники размечают итоговые фрагменты
+    label_judge = "label_judge"  # судья решает фрагменты, где типы разошлись
+
+
+class ModelRun(BaseModel):
+    model: str
+    state: RunState = "waiting"
+    error: str | None = None
+
+
+class SlicingStep(BaseModel):
+    name: SlicingStepName
+    # skipped — судья не понадобился: участники сошлись.
+    state: Literal["waiting", "running", "done", "failed", "skipped"] = "waiting"
+    runs: list[ModelRun]
+
+
+class LabeledFragment(BaseModel):
+    id: int
+    text: str
+    label: Label
+    reason: str
+
+
+class Slicing(BaseModel):
+    """Нарезка и разметка текста советом: ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    steps: list[SlicingStep]
+    fragments: list[LabeledFragment] = []
+    error: str | None = None
+
+
 class Council(BaseModel):
     id: str
     name: str
@@ -24,6 +65,7 @@ class Council(BaseModel):
     judge: str
     # Момент, а не дата: две правки за один день должны различаться порядком в списке.
     updated_at: datetime
+    slicing: Slicing | None = None
 
 
 class CouncilCreated(BaseModel):
@@ -48,6 +90,8 @@ class Model(BaseModel):
     short_name: str
     display_name: str
     cli: str
+    # Есть подключение к CLI: провайдер известен и каталог учётной записи задан.
+    available: bool = False
 
 
 class Settings(BaseModel):

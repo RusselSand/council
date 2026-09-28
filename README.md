@@ -1,16 +1,17 @@
 # Spec Council
 
 Локальный инструмент подготовки ТЗ: от брифа до согласованной спецификации.
-Сейчас это каркас — интерфейс и API на заглушках.
+Работают ввод и нарезка, дальше этапы пока на заглушках.
 
 - Backend: FastAPI (Python 3.14+, uv) — `backend/spec_council`: ручки в `api/`,
   контракт в `models.py`, данные за `deps.py` (пока `InMemoryStore`).
-- Воркер: пакет [agent-workers](https://github.com/RusselSand/agent-workers),
-  зависимость backend с тегом версии в `backend/pyproject.toml` (он же работает в
-  kromka-agent-worker). Один воркер на одно подключение к CLI с подпиской (Claude Code,
-  Codex): вход и выход, замер расхода подписки до и после хода, оценка токенов и
-  стоимости по API. Настройка в `.env`, команды — `python -m agent_workers
-  status | login | logout | run` из `backend`. Подробности в README пакета.
+- Модели совета: `backend/spec_council/pipeline.py` — шаги нарезки, `prompts/*.md` —
+  промпты, `agents.py` — запуск через пакет
+  [agent-workers](https://github.com/RusselSand/agent-workers) (зависимость с тегом
+  версии в `backend/pyproject.toml`, он же работает в kromka-agent-worker). Одна модель —
+  одно подключение к CLI с подпиской (Claude Code, Codex): вход, замер расхода подписки,
+  лоток с оплаченными ответами. Команды — `python -m agent_workers status | login | logout
+  | pending | collect` из `backend`, подробности в README пакета.
 - Frontend: Vite + React + TypeScript — `frontend/src`.
 - Надписи: `frontend/src/i18n` — словари `ru.ts` и `en.ts` (i18next). Язык берётся из
   настроек браузера, переключается в шапке и запоминается в localStorage.
@@ -26,7 +27,35 @@ cp .env.example .env
   fine-grained token с правом Contents: Read только на этот репо. Он нужен сборке
   образов: compose берёт его из `.env` и передаёт build secret'ом, в образ токен не
   попадает. Локальному `uv` токен не нужен: доступ он берёт из git, как и `git clone`.
-- `AGENT_*` — подключение воркера к CLI с подпиской, см. README пакета.
+- `COUNCIL_SOL_HOME`, `COUNCIL_FABLE_HOME` — каталоги учётных записей моделей совета
+  (Sol через Codex, Fable через Claude Code). В них токены входа, поэтому они вне
+  репозитория. Без каталога модель в совете видна, но не запускается. Вход — один раз
+  на хосте, нужен браузер:
+  ```bash
+  cd backend
+  uv run python -m agent_workers login --provider codex --home <COUNCIL_SOL_HOME>
+  uv run python -m agent_workers login --provider claude --home <COUNCIL_FABLE_HOME>
+  ```
+  Docker монтирует эти каталоги в контейнер, CLI уже есть в образах. У Gemini
+  подключения пока нет: в agent-workers нет её провайдера.
+
+## Нарезка
+«Нарезать» запускает работу совета в фоне, этап «Нарезка» показывает ход и итог:
+1. каждый участник сам по себе режет текст на смысловые фрагменты (`slice.md`);
+2. если нарезки разошлись или кто-то видит несколько вариантов, судья выбирает итоговую
+   (`slice_judge.md`); границу, которой нет ни у одного участника, судья провести не может;
+3. каждый участник размечает фрагменты: idea, question, proposal, constraint, risk
+   (`label.md`);
+4. фрагменты, где типы разошлись, решает судья (`label_judge.md`).
+
+Судья не видит, какая модель что предложила, и получает варианты в перемешанном порядке.
+В промптах доступны `{{input}}` — исходный текст, а также `{{options}}` у судьи нарезки,
+`{{fragments}}` у разметки и `{{fragments}}`, `{{label_options}}` у судьи разметки;
+тест `tests/test_prompts.py` следит, чтобы шаблоны ждали только это. Ответ модели
+проверяется: фрагменты дословны, по порядку и без потерь, типы из пяти. Негодный ответ
+или упавшая модель выбывает из шага, остальные идут дальше. Каждый вызов модели ключуется
+советом, шагом, моделью и текстом промпта, поэтому повтор после сбоя берёт оплаченные
+ответы даром.
 
 ## Разработка в докере
 Кроме самого докера и `.env` выше, ничего ставить не нужно. Оба сервиса с hot reload.

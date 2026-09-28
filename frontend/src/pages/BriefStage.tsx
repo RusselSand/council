@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { councilPath, type Council, type CouncilPatch, type Settings } from '../api'
+import { api, ApiError, councilPath, type Council, type CouncilPatch, type Settings } from '../api'
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { SelectField } from '../components/SelectField'
@@ -16,9 +16,11 @@ const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length
  * Ввод: мысли в свободной форме, название и состав совета. Каждый участник изолированно
  * предлагает свой вариант, судья выбирает лучший; судья может и не участвовать.
  */
-export function BriefStage({ council, settings, onChange, saver }: Readonly<{
+export function BriefStage({ council, settings, onChange, onStart, saver }: Readonly<{
   council: Council; settings: Settings
   onChange: (patch: CouncilPatch, wait: number) => void
+  /** Нарезка запущена: сервер вернул совет с ней. */
+  onStart: (started: Council) => void
   saver: Autosave<CouncilPatch>
 }>) {
   const { t } = useTranslation()
@@ -26,6 +28,7 @@ export function BriefStage({ council, settings, onChange, saver }: Readonly<{
   const briefId = useId()
   const nameId = useId()
   const [slicing, setSlicing] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
   const { models, min_participants: minimum } = settings
 
   const toggle = (alias: string, on: boolean) => {
@@ -35,15 +38,28 @@ export function BriefStage({ council, settings, onChange, saver }: Readonly<{
     onChange({ participants: models.map(m => m.alias).filter(a => chosen.has(a)) }, 0)
   }
 
+  // Нарезают сохранённый текст, поэтому сначала сохранить, потом запускать.
   const slice = async () => {
-    setSlicing(true)
-    const saved = await saver.flush()
-    setSlicing(false)
-    if (saved) nav(councilPath(council.id, 'slices'))
+    setSlicing(true); setStartError(null)
+    try {
+      if (!(await saver.flush())) return
+      onStart(await api.startSlicing(council.id))
+      nav(councilPath(council.id, 'slices'))
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // Уже идёт: показать её ход. Совет перечитываем, иначе на экране не будет нарезки.
+        api.council(council.id).then(onStart, () => { /* покажет опрос */ })
+        nav(councilPath(council.id, 'slices'))
+      } else {
+        setStartError(e instanceof ApiError ? e.message : t('brief.startFailed'))
+      }
+    } finally {
+      setSlicing(false)
+    }
   }
 
   return (
-    <div className="brief-layout">
+    <div className="stage-layout">
       <Panel title={t('brief.title')} hint={t('brief.hint')} htmlFor={briefId} large>
         <textarea id={briefId} className="brief-text" value={council.brief}
                   placeholder={t('brief.placeholder')}
@@ -62,12 +78,13 @@ export function BriefStage({ council, settings, onChange, saver }: Readonly<{
               </>}
             </span>
           )}
+          {startError && <span className="error-text" role="alert">{startError}</span>}
           <button className="btn-primary large" onClick={slice}
                   disabled={slicing || !council.brief.trim()}>{t('brief.slice')}</button>
         </div>
       </Panel>
 
-      <div className="brief-side">
+      <div className="stage-side">
         <Panel title={t('brief.nameTitle')} hint={t('brief.nameHint')} htmlFor={nameId}>
           <input id={nameId} className="text-field" value={council.name}
                  placeholder={t('council.untitled')}

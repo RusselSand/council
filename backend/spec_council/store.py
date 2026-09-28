@@ -6,6 +6,7 @@
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -19,14 +20,17 @@ class Store(Protocol):
 
     def create_council(self, *, participants: list[str], judge: str) -> Council: ...
 
-    def update_council(self, council_id: str, changes: dict[str, Any]) -> Council | None: ...
+    def update_council(self, council_id: str, changes: dict[str, Any], *,
+                       touch: bool = True) -> Council | None: ...
 
 
 class InMemoryStore:
-    """Данные живут до перезапуска процесса."""
+    """Данные живут до перезапуска процесса. Правят их и запросы, и фоновая нарезка,
+    поэтому запись идёт под замком: иначе одна правка затёрла бы другую."""
 
     def __init__(self, councils: Iterable[Council] = ()) -> None:
         self._councils: dict[str, Council] = {council.id: council for council in councils}
+        self._lock = Lock()
 
     def list_councils(self) -> list[Council]:
         # Свежие сверху. При равном времени выше тот, кого тронули позже: он дальше в словаре.
@@ -46,19 +50,25 @@ class InMemoryStore:
             judge=judge,
             updated_at=datetime.now(UTC),
         )
-        self._councils[council.id] = council
+        with self._lock:
+            self._councils[council.id] = council
         return council
 
-    def update_council(self, council_id: str, changes: dict[str, Any]) -> Council | None:
-        """changes уже проверены роутом: model_copy сам их не валидирует."""
-        council = self._councils.get(council_id)
-        if council is None:
-            return None
-        if changes:
+    def update_council(self, council_id: str, changes: dict[str, Any], *,
+                       touch: bool = True) -> Council | None:
+        """changes уже проверены: model_copy сам их не валидирует. touch=False — правка
+        без человека (ход нарезки): совет не поднимается в списке."""
+        with self._lock:
+            council = self._councils.get(council_id)
+            if council is None or not changes:
+                return council
+            if not touch:
+                council = self._councils[council_id] = council.model_copy(update=changes)
+                return council
             council = council.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
             del self._councils[council_id]  # в конец словаря: так он выиграет и равное время
             self._councils[council_id] = council
-        return council
+            return council
 
 
 def _demo_time(day: int, hour: int = 10) -> datetime:

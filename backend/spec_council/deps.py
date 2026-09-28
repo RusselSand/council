@@ -4,10 +4,12 @@
 из теста (app.dependency_overrides[get_store] = ...).
 """
 
+from functools import cache
 from typing import Annotated
 
 from fastapi import Depends
 
+from .agents import AgentRunner
 from .config import DEFAULT_CONFIG, AppConfig
 from .store import DEMO_COUNCILS, InMemoryStore, Store
 
@@ -22,5 +24,12 @@ def get_config() -> AppConfig:
     return DEFAULT_CONFIG
 
 
+@cache
+def get_agents() -> AgentRunner:
+    """Подключения к моделям. Одно на процесс: .env читается один раз, воркеры переиспользуются."""
+    return AgentRunner(DEFAULT_CONFIG.agents)
+
+
 StoreDep = Annotated[Store, Depends(get_store)]
 ConfigDep = Annotated[AppConfig, Depends(get_config)]
+AgentsDep = Annotated[AgentRunner, Depends(get_agents)]

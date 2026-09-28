@@ -1,13 +1,23 @@
-from fastapi import APIRouter, HTTPException
+from threading import Lock
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from ..config import MIN_PARTICIPANTS, AppConfig
-from ..deps import ConfigDep, StoreDep
-from ..models import Council, CouncilCreated, CouncilPatch
+from ..deps import AgentsDep, ConfigDep, StoreDep
+from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Slicing
+from ..pipeline import Pipeline
 
 router = APIRouter(prefix="/councils", tags=["councils"])
 
 NOT_FOUND = {404: {"description": "Совет не найден"}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
+CANNOT_SLICE = {
+    409: {"description": "Нарезка уже идёт"},
+    422: {"description": "Текст пуст или к моделям совета нет подключения"},
+}
+
+# Проверка «уже идёт» и запуск — одним куском, иначе два клика запустили бы две нарезки.
+_starting = Lock()
 
 
 @router.get("")
@@ -39,6 +49,36 @@ def update_council(
     council = store.update_council(council_id, patch.model_dump(exclude_none=True))
     if council is None:
         raise HTTPException(404, "Совет не найден")
+    return council
+
+
+@router.post("/{council_id}/slicing", status_code=202, responses={**NOT_FOUND, **CANNOT_SLICE})
+def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: AgentsDep,
+                  background: BackgroundTasks) -> Council:
+    """Запускает нарезку и разметку текста советом. Идёт в фоне минутами: ход виден в
+    council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
+    with _starting:
+        council = store.get_council(council_id)
+        if council is None:
+            raise HTTPException(404, "Совет не найден")
+        if council.slicing and council.slicing.state == "running":
+            raise HTTPException(409, "Нарезка уже идёт")
+        if not council.brief.strip():
+            raise HTTPException(422, "Нарезать нечего: текст пуст")
+        names = {model.alias: model.display_name for model in config.models}
+        offline = [names.get(m, m) for m in dict.fromkeys([*council.participants, council.judge])
+                   if not agents.available(m)]
+        if offline:
+            raise HTTPException(422, f"Нет подключения к моделям: {', '.join(offline)}")
+
+        def report(slicing: Slicing) -> None:
+            store.update_council(council_id, {"slicing": slicing}, touch=slicing.state != "running")
+
+        pipeline = Pipeline(council.id, council.brief, council.participants, council.judge,
+                            agents, report)
+        council = store.update_council(council_id, {"slicing": pipeline.state.model_copy(deep=True),
+                                                    "status": CouncilStatus.slices})
+    background.add_task(pipeline.run)
     return council
 
 

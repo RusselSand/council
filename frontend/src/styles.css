@@ -88,12 +88,42 @@ a.card:hover { border-color: var(--accent) }
 .select-label { display: block; font-size: 10.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted) }
 .select-field select { width: 100%; padding: 2px 22px 2px 0; border: 0; outline: 0; background: transparent no-repeat right 2px center / 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2318181b' stroke-width='1.6'/%3E%3C/svg%3E"); appearance: none; font-weight: 600; cursor: inherit }
 
-/* Этап «Ввод». Не .brief: это класс статуса у .pill. */
-.brief-layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 20px; align-items: start }
-.brief-side { display: grid; gap: 16px }
+/* Этап: основное слева, панели справа. Не .brief и не .slices: это классы статуса у .pill. */
+.stage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 20px; align-items: start }
+.stage-side { display: grid; gap: 16px }
+
+/* Этап «Ввод». */
 .brief-text { display: block; min-height: 300px; padding: 14px 16px; resize: vertical; line-height: 1.7 }
 .brief-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px }
 .brief-foot > .btn-primary { margin-left: auto }
 @media (max-width: 900px) {
-  .brief-layout { grid-template-columns: 1fr }
+  .stage-layout { grid-template-columns: 1fr }
 }
+
+.model-offline { color: var(--danger) }
+
+/* Этап «Нарезка»: ход работы по шагам и моделям. */
+.step-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none }
+.step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px }
+.step-name { font-weight: 600; font-size: 13.5px }
+.step-state, .run-state { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap }
+.step-state.running, .run-state.running { color: var(--accent) }
+.step-state.done, .run-state.done { color: var(--ok) }
+.step-state.failed, .run-state.failed { color: var(--danger) }
+.run { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px }
+.run + .run { margin-top: 6px }
+.run-error { flex-basis: 100%; margin: 2px 0 0; color: var(--danger); font-size: 12.5px; overflow-wrap: anywhere }
+
+/* Итог нарезки. */
+.fragments { width: 100%; border-collapse: collapse }
+.fragments th { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; font-size: 12px; font-weight: 500; color: var(--fg-muted) }
+.fragments td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top }
+.fragments tr:last-child td { border-bottom: 0 }
+.fragment-id { width: 32px; color: var(--fg-muted); font-variant-numeric: tabular-nums }
+.fragment-reason { margin-top: 4px; color: var(--fg-muted); font-size: 12.5px }
+
+/* Типы фрагментов. Классы с префиксом label-: голые имена заняты статусами .pill. */
+.pill.label-question { background: #fdf3dc; color: #8a5a00 }
+.pill.label-proposal { background: var(--ok-soft); color: var(--ok) }
+.pill.label-constraint { background: #ececef; color: var(--fg-soft) }
+.pill.label-risk { background: #fdecea; color: #b3261e }
