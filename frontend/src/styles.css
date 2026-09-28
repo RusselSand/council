@@ -1,21 +1,38 @@
 :root {
-  --bg: #f5f5f6; --surface: #fff; --border: #e6e6ea;
-  --fg: #18181b; --fg-muted: #71717a;
+  --bg: #f5f5f6; --surface: #fff; --surface-sunken: #f7f7f8; --border: #e6e6ea;
+  --fg: #18181b; --fg-soft: #52525b; --fg-muted: #71717a; --fg-faint: #a1a1aa;
   --accent: #4a5ad6; --accent-soft: #eef0fc;
   --ok: #1f7a4d; --ok-soft: #e9f6ef;
+  --danger: #c9553f;
   --font: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius: 12px;
 }
 * { box-sizing: border-box }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font) }
 a { color: inherit; text-decoration: none }
-button { font: inherit; cursor: pointer }
+button, input, select, textarea { font: inherit; color: inherit }
+button { cursor: pointer }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0 }
 
 .header { height: 54px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; background: var(--surface); border-bottom: 1px solid var(--border) }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600 }
+.header-title { display: flex; align-items: center; min-width: 0 }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; white-space: nowrap }
 .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent) }
+.crumb-sep { margin: 0 16px; color: var(--fg-faint) }
+.crumb { color: var(--fg-soft); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.header-actions { display: flex; align-items: center; gap: 12px }
+.main { max-width: 1320px; margin: 0 auto; padding: 24px }
+
 .btn-primary { border: 0; border-radius: 8px; padding: 7px 12px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 500 }
-.main { max-width: 1100px; margin: 0 auto; padding: 24px }
+.btn-primary.large { padding: 10px 16px; font-size: 14px }
+.btn-primary:disabled { opacity: .6; cursor: default }
+.btn-lang { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: none; color: var(--fg-muted); font-size: 12px; font-weight: 600 }
+.btn-lang:hover { color: var(--fg); border-color: var(--accent) }
+.btn-link { border: 0; padding: 0; background: none; color: var(--accent); text-decoration: underline }
+.btn-dashed { width: 100%; margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--fg-soft); text-align: left; font-size: 13px }
+.btn-dashed:disabled { cursor: default; color: var(--fg-muted) }
+.error-text { color: var(--danger); font-size: 13px }
 
 .page-title { margin: 0 0 4px; font-size: 18px; font-weight: 600 }
 .page-sub, .muted { margin: 0; color: var(--fg-muted); font-size: 13px }
@@ -25,16 +42,58 @@ button { font: inherit; cursor: pointer }
 a.card:hover { border-color: var(--accent) }
 .card-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px }
 .card-name { flex: 1; font-weight: 600 }
+.placeholder { padding: 48px; text-align: center; color: var(--fg-muted); border-style: dashed }
 
 .pill { padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 500; white-space: nowrap; background: var(--accent-soft); color: var(--accent) }
 .pill.ready { background: var(--ok-soft); color: var(--ok) }
 
-.tabs { display: flex; gap: 4px; margin: 14px 0 16px; border-bottom: 1px solid var(--border) }
-.tab { padding: 8px 12px; color: var(--fg-muted); border-bottom: 2px solid transparent; margin-bottom: -1px }
-.tab.active { color: var(--fg); border-bottom-color: var(--accent) }
-.placeholder { padding: 48px; text-align: center; color: var(--fg-muted); border-style: dashed }
-.header-actions { display: flex; align-items: center; gap: 12px }
-.error-text { color: #c9553f; font-size: 13px }
-.btn-primary:disabled { opacity: .6; cursor: default }
-.btn-lang { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: none; color: var(--fg-muted); font-size: 12px; font-weight: 600 }
-.btn-lang:hover { color: var(--fg); border-color: var(--accent) }
+/* Раздел на карточке: Panel. */
+.panel { padding: 20px 22px; border-radius: 16px }
+.panel-title { margin: 0 0 4px; font-size: 14px; font-weight: 600 }
+.panel-title.large { font-size: 17px }
+.panel-hint { margin: 0 0 16px; color: var(--fg-muted); font-size: 13px }
+
+.text-field, .brief-text { width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-sunken) }
+.text-field { padding: 10px 12px; font-weight: 600 }
+.text-field:focus, .brief-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent) }
+
+/* Полоса этапов под шапкой, во всю ширину. */
+.stage-bar { display: flex; gap: 4px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto }
+.tab { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--fg-muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
+.tab-num { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: #ececef; color: var(--fg-soft); font-size: 11px; font-weight: 600 }
+.tab.done .tab-num { background: var(--ok-soft); color: var(--ok) }
+.tab.active { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent) }
+.tab.active .tab-num { background: var(--accent); color: #fff }
+
+/* Модель: ModelBadge и ModelCheckbox. */
+.model-list { display: grid; gap: 8px }
+.model-badge { display: flex; align-items: center; gap: 12px; min-width: 0 }
+.model-tile { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: #ececef; color: var(--fg-soft) }
+.model-tile.codex { background: #e8effd; color: #2f5bd3 }
+.model-tile.claude { background: #fbeee6; color: #9a4a1f }
+.model-tile.gemini { background: #e9f5ef; color: var(--ok) }
+.model-text { display: flex; flex-direction: column; min-width: 0 }
+.model-name { font-weight: 600; font-size: 13.5px }
+.model-cli { font-family: var(--mono); font-size: 12px; color: var(--fg-muted) }
+.model-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer }
+.model-option input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: inherit }
+.model-option:has(input[aria-disabled="true"]) { cursor: default }
+.model-option.off { background: #fafafa }
+.model-option.off .model-name { color: var(--fg-muted) }
+.model-option.off .model-tile { background: var(--surface-sunken); color: var(--fg-muted); box-shadow: inset 0 0 0 1px var(--border) }
+
+/* SelectField. */
+.select-field { display: block; margin-top: 16px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer }
+.select-field:focus-within { border-color: var(--accent) }
+.select-label { display: block; font-size: 10.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted) }
+.select-field select { width: 100%; padding: 2px 22px 2px 0; border: 0; outline: 0; background: transparent no-repeat right 2px center / 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2318181b' stroke-width='1.6'/%3E%3C/svg%3E"); appearance: none; font-weight: 600; cursor: inherit }
+
+/* Этап «Ввод». Не .brief: это класс статуса у .pill. */
+.brief-layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 20px; align-items: start }
+.brief-side { display: grid; gap: 16px }
+.brief-text { display: block; min-height: 300px; padding: 14px 16px; resize: vertical; line-height: 1.7 }
+.brief-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px }
+.brief-foot > .btn-primary { margin-left: auto }
+@media (max-width: 900px) {
+  .brief-layout { grid-template-columns: 1fr }
+}

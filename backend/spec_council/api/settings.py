@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from ..config import MIN_PARTICIPANTS
 from ..deps import ConfigDep
 from ..models import Settings
 
@@ -10,6 +11,7 @@ router = APIRouter(tags=["settings"])
 def get_settings(config: ConfigDep) -> Settings:
     return Settings(
         models=config.models,
-        default_author=config.default_author,
-        default_reviewer=config.default_reviewer,
+        min_participants=MIN_PARTICIPANTS,
+        default_participants=config.default_participants,
+        default_judge=config.default_judge,
     )
