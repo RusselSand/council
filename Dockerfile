@@ -10,6 +10,11 @@ RUN npm run build          # -> /src/frontend/dist
 FROM python:3.14-slim
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# git нужен uv, чтобы забрать зависимость agent-workers из GitHub.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -20,7 +25,12 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 WORKDIR /app
 
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# agent-workers — приватный репо: токен приходит build secret'ом, как в backend/Dockerfile.
+RUN --mount=type=secret,id=agent_workers_token \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/agent_workers_token)@github.com/RusselSand/agent-workers.insteadOf" \
+    GIT_CONFIG_VALUE_0="https://github.com/RusselSand/agent-workers" \
+    uv sync --frozen --no-dev --no-install-project
 
 COPY backend/ ./
 COPY --from=ui /src/frontend/dist ./spec_council/static
