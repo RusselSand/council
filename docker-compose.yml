@@ -4,7 +4,9 @@ name: council
 
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      secrets: [agent_workers_token]
     ports:
       - "8420:8420"
     volumes:
@@ -39,5 +41,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets: [agent_workers_token]
     ports:
       - "8080:8420"
+
+# Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.
+# Берётся из переменной окружения AGENT_WORKERS_TOKEN, см. README.
+secrets:
+  agent_workers_token:
+    environment: AGENT_WORKERS_TOKEN

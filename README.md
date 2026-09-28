@@ -5,19 +5,29 @@
 
 - Backend: FastAPI (Python 3.14+, uv) — `backend/spec_council`: ручки в `api/`,
   контракт в `models.py`, данные за `deps.py` (пока `InMemoryStore`).
-- Воркер: `backend/agent_workers` — один воркер на одно подключение к CLI с подпиской
-  (Claude Code, Codex): вход и выход, замер расхода подписки до и после хода, оценка
-  токенов и стоимости по API. Настройка в `.env`, команды — `python -m agent_workers
-  status | login | logout | run`. Подробности в README пакета; лежит здесь временно,
-  выносится переносом папки.
+- Воркер: пакет [agent-workers](https://github.com/RusselSand/agent-workers),
+  зависимость backend с тегом версии в `backend/pyproject.toml` (он же работает в
+  kromka-agent-worker). Один воркер на одно подключение к CLI с подпиской (Claude Code,
+  Codex): вход и выход, замер расхода подписки до и после хода, оценка токенов и
+  стоимости по API. Настройка в `.env`, команды — `python -m agent_workers
+  status | login | logout | run` из `backend`. Подробности в README пакета.
 - Frontend: Vite + React + TypeScript — `frontend/src`.
 - Надписи: `frontend/src/i18n` — словари `ru.ts` и `en.ts` (i18next). Язык берётся из
   настроек браузера, переключается в шапке и запоминается в localStorage.
 
 Команды ниже даны по одной на строку: так они одинаково работают в bash и в PowerShell.
 
+agent-workers лежит в приватном репо. Локальный `uv` берёт доступ из git, как и
+`git clone`. Сборке образов нужен токен только на чтение этого репо в переменной
+`AGENT_WORKERS_TOKEN`: compose передаёт его build secret'ом, в образ он не попадает.
+Подойдёт fine-grained token с правом Contents: Read на agent-workers или токен `gh`:
+```bash
+export AGENT_WORKERS_TOKEN=$(gh auth token)       # bash
+$env:AGENT_WORKERS_TOKEN = gh auth token          # PowerShell
+```
+
 ## Разработка в докере
-Ничего ставить не нужно, кроме самого докера. Оба сервиса с hot reload.
+Кроме самого докера и токена выше, ничего ставить не нужно. Оба сервиса с hot reload.
 ```bash
 docker compose up --build
 ```
