@@ -27,7 +27,10 @@ WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 # agent-workers — приватный репо: токен приходит build secret'ом, как в backend/Dockerfile.
 RUN --mount=type=secret,id=agent_workers_token \
-    GIT_CONFIG_COUNT=1 \
+    test -s /run/secrets/agent_workers_token \
+    || { echo "Нет токена agent-workers: впишите AGENT_WORKERS_TOKEN в .env" \
+              "рядом с docker-compose.yml (образец — .env.example)" >&2; exit 1; } \
+    && GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/agent_workers_token)@github.com/RusselSand/agent-workers.insteadOf" \
     GIT_CONFIG_VALUE_0="https://github.com/RusselSand/agent-workers" \
     uv sync --frozen --no-dev --no-install-project
