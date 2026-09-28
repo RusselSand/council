@@ -49,11 +49,8 @@ i18next.on('languageChanged', language => {
 
 export const setLanguage = (language: Language) => i18next.changeLanguage(language)
 
-/** Дата с бэкенда (YYYY-MM-DD) в привычном для языка виде. */
+/** Момент с бэкенда (ISO с часовым поясом) — дата в поясе человека, в привычном для языка виде. */
 export const formatDate = (iso: string) =>
-  // timeZone обязателен: строку без времени Date считает полуночью UTC и западнее Гринвича
-  // она превратилась бы в предыдущий день.
-  new Intl.DateTimeFormat(i18next.language, { dateStyle: 'medium', timeZone: 'UTC' })
-    .format(new Date(iso))
+  new Intl.DateTimeFormat(i18next.language, { dateStyle: 'medium' }).format(new Date(iso))
 
 export default i18next

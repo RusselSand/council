@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useBlocker } from 'react-router'
 
 export type SaveState = 'idle' | 'saving' | 'error'
 
@@ -9,6 +10,11 @@ const isEmpty = (patch: object) => Object.keys(patch).length === 0
  * `wait` мс; следующий запрос — только после ответа на предыдущий, поэтому старое значение
  * не перезапишет новое. Непринятая правка остаётся в очереди и уйдёт со следующей или по
  * flush. flush отправляет всё сразу и отвечает, сохранилось ли.
+ *
+ * Очередь живёт вместе со страницей, поэтому уйти с неё, пока есть несохранённое, нельзя:
+ * переход внутри приложения ждёт сохранения, а если оно не прошло, страница остаётся на
+ * месте с ошибкой (leaving) — повторить или уйти без правок решает человек. Закрытие
+ * вкладки браузер переспрашивает сам.
  */
 export function useAutosave<P extends object>(send: (patch: P) => Promise<unknown>) {
   const [state, setState] = useState<SaveState>('idle')
@@ -17,6 +23,8 @@ export function useAutosave<P extends object>(send: (patch: P) => Promise<unknow
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const sendRef = useRef(send)
   useEffect(() => { sendRef.current = send })
+
+  const hasUnsaved = useCallback(() => running.current !== null || !isEmpty(pending.current), [])
 
   const flush = useCallback((): Promise<boolean> => {
     clearTimeout(timer.current)
@@ -46,17 +54,37 @@ export function useAutosave<P extends object>(send: (patch: P) => Promise<unknow
     timer.current = setTimeout(() => { void flush() }, wait)
   }, [flush])
 
-  // Уход со страницы: несохранённое отправляем сразу, а закрытие вкладки переспрашиваем.
+  const blocker = useBlocker(hasUnsaved)
+  const blockerRef = useRef(blocker)
+  useEffect(() => { blockerRef.current = blocker })
+  const leaving = blocker.state === 'blocked'
+
+  /** Сохранить; если в этот момент ждёт переход — после сохранения пропустить его. */
+  const retry = useCallback(() => flush().then(saved => {
+    const current = blockerRef.current
+    if (saved && current.state === 'blocked') current.proceed()
+    return saved
+  }), [flush])
+
+  useEffect(() => { if (leaving) void retry() }, [leaving, retry])
+
+  const leaveAnyway = useCallback(() => {
+    clearTimeout(timer.current)
+    pending.current = {} as P
+    const current = blockerRef.current
+    if (current.state === 'blocked') current.proceed()
+  }, [])
+
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => {
-      if (running.current || !isEmpty(pending.current)) event.preventDefault()
-    }
+    const warn = (event: BeforeUnloadEvent) => { if (hasUnsaved()) event.preventDefault() }
     window.addEventListener('beforeunload', warn)
     return () => {
       window.removeEventListener('beforeunload', warn)
-      void flush()
+      void flush()  // последняя попытка, если страницу сняли мимо роутера
     }
-  }, [flush])
+  }, [flush, hasUnsaved])
 
-  return { state, schedule, flush }
+  return { state, schedule, flush, retry, leaving, leaveAnyway }
 }
+
+export type Autosave<P extends object> = ReturnType<typeof useAutosave<P>>

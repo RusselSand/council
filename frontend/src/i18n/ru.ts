@@ -37,6 +37,7 @@ export const ru = {
   'brief.words_other': '{{count}} слова',
   'brief.saving': 'сохраняем…',
   'brief.saveFailed': 'Не удалось сохранить.',
+  'brief.leaveAnyway': 'Уйти без сохранения',
   'brief.slice': 'Нарезать →',
   'brief.nameTitle': 'Название',
   'brief.nameHint': 'Как совет будет называться в списке проектов.',

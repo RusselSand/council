@@ -14,6 +14,14 @@ export type Stage = (typeof STAGES)[number]
 const STATUS_ORDER: CouncilStatus[] = ['brief', 'slices', 'structure', 'review', 'ready']
 const isDone = (stageIndex: number, status: CouncilStatus) => stageIndex < STATUS_ORDER.indexOf(status)
 
+/** 404 на сам совет. 404 от настроек — обычная ошибка загрузки: совет-то есть, и повтор уместен. */
+class CouncilMissing extends Error {}
+
+const loadCouncil = (id: string) => Promise.all([
+  api.council(id).catch((e: unknown) => Promise.reject(isNotFound(e) ? new CouncilMissing() : e)),
+  api.settings(),
+])
+
 export function CouncilPage({ stage }: Readonly<{ stage: Stage }>) {
   const { id = '' } = useParams()
   // Свой экземпляр на каждый совет: очередь сохранения не перенесёт правки в чужой.
@@ -22,7 +30,7 @@ export function CouncilPage({ stage }: Readonly<{ stage: Stage }>) {
 
 function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
-  const { state, retry, update } = useLoad(() => Promise.all([api.council(id), api.settings()]), [id])
+  const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
   const saver = useAutosave((patch: CouncilPatch) => api.updateCouncil(id, patch))
   const { schedule } = saver
 
@@ -40,7 +48,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule(patch, wait)
   }, [update, schedule])
 
-  if (state.kind === 'error' && isNotFound(state.error)) return (
+  if (state.kind === 'error' && state.error instanceof CouncilMissing) return (
     <main className="main">
       <h1 className="page-title">{t('council.notFound')}</h1>
       <p className="page-sub">
@@ -79,8 +87,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
         <h1 className="sr-only">{title ?? t('common.loading')}</h1>
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
         {state.kind === 'ok' && (stage === 'brief'
-          ? <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change}
-                        save={saver.state} flush={saver.flush} />
+          ? <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change} saver={saver} />
           : <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>)}
       </main>
     </>

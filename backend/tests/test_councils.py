@@ -66,3 +66,11 @@ def test_invalid_patch_is_refused_and_changes_nothing(patch):
 
 def test_patch_of_unknown_council_is_404():
     assert client.patch("/api/councils/missing", json={"brief": "текст"}).status_code == 404
+
+
+def test_edited_council_goes_to_the_top_even_on_the_same_day():
+    first, second = new_council(), new_council()
+    assert [c["id"] for c in client.get("/api/councils").json()][:2] == [second, first]
+
+    client.patch(f"/api/councils/{first}", json={"brief": "правка"})
+    assert [c["id"] for c in client.get("/api/councils").json()][:2] == [first, second]

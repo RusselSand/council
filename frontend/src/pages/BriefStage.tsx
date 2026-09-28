@@ -5,7 +5,7 @@ import { councilPath, type Council, type CouncilPatch, type Settings } from '../
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { SelectField } from '../components/SelectField'
-import type { SaveState } from '../useAutosave'
+import type { Autosave } from '../useAutosave'
 
 /** Текст сохраняется, когда человек перестал печатать; выбор в списках — сразу. */
 export const TYPING_DELAY = 600
@@ -16,10 +16,10 @@ const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length
  * Ввод: мысли в свободной форме, название и состав совета. Каждый участник изолированно
  * предлагает свой вариант, судья выбирает лучший; судья может и не участвовать.
  */
-export function BriefStage({ council, settings, onChange, save, flush }: Readonly<{
+export function BriefStage({ council, settings, onChange, saver }: Readonly<{
   council: Council; settings: Settings
   onChange: (patch: CouncilPatch, wait: number) => void
-  save: SaveState; flush: () => Promise<boolean>
+  saver: Autosave<CouncilPatch>
 }>) {
   const { t } = useTranslation()
   const nav = useNavigate()
@@ -37,7 +37,7 @@ export function BriefStage({ council, settings, onChange, save, flush }: Readonl
 
   const slice = async () => {
     setSlicing(true)
-    const saved = await flush()
+    const saved = await saver.flush()
     setSlicing(false)
     if (saved) nav(councilPath(council.id, 'slices'))
   }
@@ -51,12 +51,15 @@ export function BriefStage({ council, settings, onChange, save, flush }: Readonl
         <div className="brief-foot">
           <span className="muted">
             {t('brief.words', { count: countWords(council.brief) })}
-            {save === 'saving' && ` · ${t('brief.saving')}`}
+            {saver.state === 'saving' && ` · ${t('brief.saving')}`}
           </span>
-          {save === 'error' && (
+          {saver.state === 'error' && (
             <span className="error-text" role="alert">
               {t('brief.saveFailed')}{' '}
-              <button className="btn-link" onClick={() => void flush()}>{t('common.retry')}</button>
+              <button className="btn-link" onClick={() => void saver.retry()}>{t('common.retry')}</button>
+              {saver.leaving && <>{' · '}
+                <button className="btn-link" onClick={saver.leaveAnyway}>{t('brief.leaveAnyway')}</button>
+              </>}
             </span>
           )}
           <button className="btn-primary large" onClick={slice}

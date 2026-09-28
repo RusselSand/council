@@ -5,7 +5,7 @@
 """
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -29,7 +29,9 @@ class InMemoryStore:
         self._councils: dict[str, Council] = {council.id: council for council in councils}
 
     def list_councils(self) -> list[Council]:
-        return sorted(self._councils.values(), key=lambda council: council.updated_at, reverse=True)
+        # Свежие сверху. При равном времени выше тот, кого тронули позже: он дальше в словаре.
+        councils = reversed(self._councils.values())
+        return sorted(councils, key=lambda council: council.updated_at, reverse=True)
 
     def get_council(self, council_id: str) -> Council | None:
         return self._councils.get(council_id)
@@ -42,7 +44,7 @@ class InMemoryStore:
             brief="",
             participants=list(participants),
             judge=judge,
-            updated_at=date.today(),
+            updated_at=datetime.now(UTC),
         )
         self._councils[council.id] = council
         return council
@@ -53,9 +55,14 @@ class InMemoryStore:
         if council is None:
             return None
         if changes:
-            council = council.model_copy(update={**changes, "updated_at": date.today()})
+            council = council.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
+            del self._councils[council_id]  # в конец словаря: так он выиграет и равное время
             self._councils[council_id] = council
         return council
+
+
+def _demo_time(day: int, hour: int = 10) -> datetime:
+    return datetime(2026, 9, day, hour, tzinfo=UTC)
 
 
 # Временные данные, чтобы интерфейс было на чём смотреть. Уедут вместе с InMemoryStore.
@@ -70,11 +77,11 @@ DEMO_COUNCILS = [
                 "хватит. Главное — не потерять результат, если что-то упало: запуск дорогой "
                 "по времени и лимитам."
             ),
-            participants=["sol", "fable"], judge="fable", updated_at=date(2026, 9, 28)),
+            participants=["sol", "fable"], judge="fable", updated_at=_demo_time(28, 14)),
     Council(id="demo-1", name="Сервис уведомлений", status=CouncilStatus.review, brief="",
-            participants=["sol", "fable"], judge="fable", updated_at=date(2026, 9, 17)),
+            participants=["sol", "fable"], judge="fable", updated_at=_demo_time(17)),
     Council(id="demo-2", name="Личный кабинет партнёра", status=CouncilStatus.brief, brief="",
-            participants=["sol", "fable", "astra"], judge="sol", updated_at=date(2026, 9, 15)),
+            participants=["sol", "fable", "astra"], judge="sol", updated_at=_demo_time(15)),
     Council(id="demo-3", name="Импорт каталога", status=CouncilStatus.ready, brief="",
-            participants=["sol", "fable"], judge="sol", updated_at=date(2026, 9, 2)),
+            participants=["sol", "fable"], judge="sol", updated_at=_demo_time(2)),
 ]

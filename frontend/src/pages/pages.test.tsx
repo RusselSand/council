@@ -11,7 +11,7 @@ import { CouncilPage, STAGES } from './CouncilPage'
 
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
-  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17',
+  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z',
 }
 const SETTINGS: Settings = {
   models: [
@@ -104,6 +104,20 @@ describe('CouncilPage', () => {
     renderAt('/councils/missing/brief')
     expect(await screen.findByRole('heading', { name: ru['council.notFound'] })).toBeTruthy()
     expect(screen.queryByRole('button', { name: ru['common.retry'] })).toBeNull()
+  })
+
+  it('404 от настроек — ошибка загрузки с повтором: совет-то есть', async () => {
+    let settingsMissing = true
+    const rest = server()
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url === '/api/settings' && settingsMissing ? json({ detail: 'Not Found' }, 404) : rest(url, init))
+    renderAt('/councils/demo-1/brief')
+    expect(await screen.findByRole('heading', { name: ru['council.loadFailed'] })).toBeTruthy()
+    expect(screen.queryByText(ru['council.notFound'])).toBeNull()
+
+    settingsMissing = false
+    fireEvent.click(screen.getByRole('button', { name: ru['common.retry'] }))
+    expect(await screen.findByRole('heading', { name: COUNCIL.name })).toBeTruthy()
   })
 
   it.each([
@@ -205,6 +219,40 @@ describe('Ввод', () => {
     fireEvent.click(slice())
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(screen.getByRole('textbox', { name: ru['brief.title'] })).toBeTruthy()
+  })
+
+  const leave = () => fireEvent.click(screen.getByRole('link', { name: 'Spec Council' }))
+  const home = () => screen.findByRole('heading', { name: ru['home.title'] })
+
+  it('переход по ссылке сначала сохраняет правку, не дожидаясь паузы', async () => {
+    const text = await open()
+    fireEvent.change(text, { target: { value: 'Новый текст' } })
+    leave()
+    expect(await home()).toBeTruthy()
+    expect(patches).toEqual([{ brief: 'Новый текст' }])
+  })
+
+  it('непринятая правка не пропадает при переходе: страница остаётся, повтор сохраняет и уводит', async () => {
+    let fail = true
+    const text = await open(() => (fail ? json({ detail: 'boom' }, 500) : json(COUNCIL)))
+    fireEvent.change(text, { target: { value: 'Новый текст' } })
+    leave()
+    expect((await screen.findByRole('alert')).textContent).toContain(ru['brief.leaveAnyway'])
+    expect((screen.getByRole('textbox', { name: ru['brief.title'] }) as HTMLTextAreaElement).value).toBe('Новый текст')
+
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: ru['common.retry'] }))
+    expect(await home()).toBeTruthy()
+    expect(patches).toEqual([{ brief: 'Новый текст' }, { brief: 'Новый текст' }])
+  })
+
+  it('уйти без непринятой правки можно, но только явно', async () => {
+    const text = await open(() => json({ detail: 'boom' }, 500))
+    fireEvent.change(text, { target: { value: 'Новый текст' } })
+    leave()
+    fireEvent.click(await screen.findByRole('button', { name: ru['brief.leaveAnyway'] }))
+    expect(await home()).toBeTruthy()
+    expect(patches).toEqual([{ brief: 'Новый текст' }])
   })
 })
 

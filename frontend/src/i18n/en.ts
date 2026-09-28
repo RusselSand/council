@@ -41,6 +41,7 @@ export const en: Dict = {
   'brief.words_other': '{{count}} words',
   'brief.saving': 'saving…',
   'brief.saveFailed': 'Could not save.',
+  'brief.leaveAnyway': 'Leave without saving',
   'brief.slice': 'Slice →',
   'brief.nameTitle': 'Name',
   'brief.nameHint': 'How the council is listed among projects.',

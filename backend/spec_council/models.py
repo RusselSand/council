@@ -1,6 +1,6 @@
 """Контракт API: то, что видит фронт. Меняется только вместе с фронтом."""
 
-from datetime import date
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -22,7 +22,8 @@ class Council(BaseModel):
     # Каждый участник предлагает свой вариант, не видя чужих; судья выбирает лучший.
     participants: list[str]
     judge: str
-    updated_at: date
+    # Момент, а не дата: две правки за один день должны различаться порядком в списке.
+    updated_at: datetime
 
 
 class CouncilCreated(BaseModel):
