@@ -99,7 +99,7 @@ class CouncilPatch(BaseModel):
     brief: str | None = None
     participants: list[str] | None = None
     judge: str | None = None
-    # Типы фрагментов готовой нарезки, все сразу: {id: тип}. Так повторная отправка безопасна.
+    # Типы фрагментов готовой нарезки: {id: тип}. Только изменённые, остальные не трогаются.
     labels: dict[int, Label] | None = None
 
 

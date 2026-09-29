@@ -160,3 +160,13 @@ def test_note_about_a_boundary_not_drawn_lands_inside_the_fragment():
 def test_quotes_compare_without_edge_punctuation():
     fragments = ["без базы.", "Главное — не потерять."]
     assert note_places(fragments, [BoundaryNote("без базы", "«Главное", "ок")]) == {1: "ок"}
+
+
+@pytest.mark.parametrize(("text", "fragments"), [
+    ("worker крутится", ["work", "er крутится"]),
+    ("что-то пошло", ["что-", "то пошло"]),
+    ("don't stop", ["don'", "t stop"]),
+])
+def test_boundary_inside_a_word_is_refused(text, fragments):
+    with pytest.raises(BadAnswer, match="посреди слова"):
+        bounds_of(text, fragments)

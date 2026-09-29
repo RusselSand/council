@@ -359,7 +359,32 @@ describe('Нарезка', () => {
     expect(within(first).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
     expect(screen.getByText('вы выбрали другой тип, у совета — «идея»')).toBeTruthy()
     expect(screen.getByText(`${ru['label.risk']} · 1`)).toBeTruthy()
-    await waitFor(() => expect(patches).toEqual([{ labels: { 1: 'risk', 2: 'proposal' } }]))
+    await waitFor(() => expect(patches).toEqual([{ labels: { 1: 'risk' } }]))
+  })
+
+  it('правки типов, пока идёт сохранение, уходят следом вместе и не затирают друг друга', async () => {
+    let release!: () => void
+    let first = true
+    openSlices(() => ({ ...COUNCIL, slicing: DONE }))
+    fetchMock.mockImplementation(server({
+      council: () => ({ ...COUNCIL, slicing: DONE }),
+      patch: () => {
+        if (!first) return json(COUNCIL)
+        first = false
+        return new Promise<Response>(r => { release = () => r(new Response(JSON.stringify(COUNCIL))) })
+      },
+    }))
+    const pick = (fragment: string, label: string) => fireEvent.click(
+      within(screen.getByRole('radiogroup', { name: fragment })).getByRole('radio', { name: label }))
+    await screen.findByRole('radiogroup', { name: 'F1' })
+
+    pick('F1', ru['label.risk'])
+    await waitFor(() => expect(patches).toHaveLength(1))   // первый запрос ушёл и висит
+    pick('F2', ru['label.idea'])
+    pick('F1', ru['label.question'])
+    release()
+    await waitFor(() => expect(patches).toHaveLength(2))
+    expect(patches).toEqual([{ labels: { 1: 'risk' } }, { labels: { 1: 'question', 2: 'idea' } }])
   })
 
   it('пока идёт — спрашивает сервер и сам показывает итог', async () => {

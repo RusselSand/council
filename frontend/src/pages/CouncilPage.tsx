@@ -58,13 +58,14 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
   const sliced = useCallback((fresh: Council) =>
     update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
-  // Тип фрагмента, выбранный человеком. Отправляются все типы разом: повтор ничего не портит.
+  // Тип фрагмента, выбранный человеком. Уходит только он: правка из другой вкладки по
+  // другому фрагменту не откатится, а очередь сохранения сольёт несколько правок в одну.
   const relabel = useCallback((fragmentId: number, label: Label) => {
     const done = council?.slicing
     if (!done) return
     const fragments = done.fragments.map(f => (f.id === fragmentId ? { ...f, label } : f))
     update(([c, settings]) => [{ ...c, slicing: { ...done, fragments } }, settings])
-    schedule({ labels: Object.fromEntries(fragments.map(f => [f.id, f.label])) }, 0)
+    schedule({ labels: { [fragmentId]: label } }, 0)
   }, [council?.slicing, update, schedule])
 
   // Опрос, пока нарезка идёт. Следующий запрос — только после ответа на предыдущий, и ответ

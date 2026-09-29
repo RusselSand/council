@@ -33,7 +33,7 @@ export interface Council {
 }
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
-  /** Типы всех фрагментов готовой нарезки разом: повторная отправка ничего не портит. */
+  /** Типы фрагментов готовой нарезки, {id: тип}: только изменённые, остальные не трогаются. */
   labels?: Record<number, Label>
 }
 

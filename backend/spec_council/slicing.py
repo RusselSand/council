@@ -14,6 +14,8 @@ from itertools import pairwise
 LABELS = ("idea", "question", "proposal", "constraint", "risk")
 
 WORD = re.compile(r"\w")
+# Знаки внутри слова: граница сразу после них режет слово — «что-|то», «don'|t».
+JOINERS = "-‐‑'’"
 # Открывающие знаки при разрезе уходят к следующему фрагменту: «Главное…», а не «…базы. «».
 OPENERS = "«„“\"'([{—–-"
 
@@ -94,11 +96,24 @@ def bounds_of(text: str, fragments: object) -> Bounds:
             )
         if WORD.search(text, position, found):
             raise BadAnswer(f"потерян текст перед «{short(fragment)}»")
-        starts.append(WORD.search(text, found).start())
+        start = WORD.search(text, found).start()
+        if starts and splits_word(text, start):
+            around = text[max(0, start - 12) : start + 12]
+            raise BadAnswer(f"граница посреди слова: «{short(around)}»")
+        starts.append(start)
         position = found + len(fragment)
     if WORD.search(text, position):
         raise BadAnswer(f"потерян текст в конце: «{short(text[position:])}»")
     return tuple(starts[1:])
+
+
+def splits_word(text: str, at: int) -> bool:
+    """Граница перед позицией at режет слово: слева буква, или знак внутри слова после буквы."""
+    if at == 0:
+        return False
+    if WORD.match(text, at - 1):
+        return True
+    return text[at - 1] in JOINERS and at > 1 and WORD.match(text, at - 2) is not None
 
 
 def cut(text: str, bounds: Bounds) -> list[str]:
