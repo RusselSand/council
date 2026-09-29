@@ -97,12 +97,27 @@ def bounds_of(text: str, fragments: object) -> Bounds:
 
 
 def cut(text: str, bounds: Bounds) -> list[str]:
-    """Фрагменты из исходного текста по границам."""
+    """Фрагменты из исходного текста по границам.
+
+    Граница стоит на первой букве следующего фрагмента, а резать надо в промежутке между
+    фрагментами. Режем по первому пробельному символу промежутка: закрывающее мысль
+    (запятая, точка, скобка) остаётся с предыдущим фрагментом, а маркер списка, кавычка
+    или тире после пробела уходят к следующему: «- Первое» / «- Второе». Промежуток без
+    пробела отдаёт следующему фрагменту только открывающие знаки.
+    """
     edges = [0]
     for bound in bounds:
-        while bound > edges[-1] and text[bound - 1] in OPENERS:
-            bound -= 1
-        edges.append(bound)
+        gap = bound
+        while gap > edges[-1] and not WORD.match(text, gap - 1):
+            gap -= 1
+        space = next((i for i, char in enumerate(text[gap:bound]) if char.isspace()), None)
+        if space is not None:
+            edge = gap + space
+        else:
+            edge = bound
+            while edge > gap and text[edge - 1] in OPENERS:
+                edge -= 1
+        edges.append(edge)
     edges.append(len(text))
     return [text[start:end].strip() for start, end in pairwise(edges)]
 
@@ -146,9 +161,11 @@ def judged_bounds(text: str, data: dict, candidates: list[SliceOption]) -> Bound
 
 
 def boundary_notes(data: dict) -> list[BoundaryNote]:
-    """Пояснения судьи нарезки. Не обязательны: кривая запись пропускается, а не роняет итог."""
+    """Пояснения судьи нарезки. Не обязательны: кривая запись пропускается, а не роняет итог,
+    и decisions не списком — тоже просто нет пояснений."""
+    decisions = data.get("decisions")
     notes = []
-    for item in data.get("decisions") or []:
+    for item in decisions if isinstance(decisions, list) else []:
         if not isinstance(item, dict):
             continue
         boundary, reason = item.get("boundary"), item.get("reason")

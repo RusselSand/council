@@ -179,3 +179,29 @@ def test_result_keeps_the_votes_who_decided_and_the_slicing_judges_note():
     assert votes == [("sol", ["proposal"]), ("fable", ["constraint"])]
     assert second.council_label == second.label == "constraint"
     assert (first.slice_note, third.slice_note) == (None, "две мысли")
+
+
+def test_judge_with_malformed_decisions_still_gives_a_result():
+    replies = {**AGREED, ("slice", "fable"): sliced([TEXT]),
+               ("slice_judge", "fable"): {"status": "ok", "fragments": PARTS, "decisions": 1}}
+    result, _, _ = run(replies)
+    assert result.state == "done"
+    assert all(f.slice_note is None for f in result.fragments)
+
+
+def test_any_parse_crash_is_a_bad_answer_that_leaves_the_outbox(monkeypatch):
+    def broken(text, data):
+        raise TypeError("недосмотр разбора")
+    monkeypatch.setattr("spec_council.pipeline.slice_options", broken)
+    replies = {**AGREED}
+    result, runner, _ = run(replies)
+    assert result.state == "failed"
+    assert result.steps[0].runs[0].error == "негодный ответ: недосмотр разбора"
+    assert sorted(runner.forgotten) == sorted(k for k in runner.keys if "-slice-" in k)
+
+
+def test_shuffle_depends_on_the_variants_not_on_who_sent_them_first():
+    from spec_council.pipeline import shuffled
+    variants = [{"fragments": [str(i)]} for i in range(6)]
+    assert shuffled(variants) == shuffled(list(reversed(variants)))
+    assert sorted(map(str, shuffled(variants))) == sorted(map(str, variants))

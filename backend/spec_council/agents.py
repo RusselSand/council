@@ -6,7 +6,9 @@ COUNCIL_<ALIAS>_HOME в .env или окружении; в докере его �
 """
 
 import threading
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from agent_workers import Settings, build
@@ -18,6 +20,25 @@ from .pipeline import ModelFailed
 
 # Остановка приложения: идущие ходы сворачиваются, оплаченное остаётся в лотке.
 STOP = threading.Event()
+
+# Нарезки идут в своём пуле, а не фоновыми задачами запроса: uvicorn при остановке ждёт
+# фоновые задачи и только потом зовёт lifespan, так что STOP не дошёл бы до идущих ходов.
+PIPELINES = ThreadPoolExecutor(max_workers=4, thread_name_prefix="slicing")
+
+# Вход подтверждает сама CLI. Ответ помним недолго, чтобы страница не ждала её каждый раз;
+# «нет входа» — совсем недолго: после входа модель должна подключиться почти сразу.
+LOGIN_OK_TTL = 60.0
+LOGIN_MISSING_TTL = 5.0
+
+
+def launch(job: Callable[[], object]) -> None:
+    PIPELINES.submit(job)
+
+
+def shutdown() -> None:
+    """Остановка приложения: идущие ходы сворачиваются, пул дожидается их отчёта."""
+    STOP.set()
+    PIPELINES.shutdown(wait=True, cancel_futures=True)
 
 
 def home_key(alias: str) -> str:
@@ -49,6 +70,7 @@ class AgentRunner:
         self._workers: dict[str, Worker] = {}
         self._locks = {alias: threading.Lock() for alias in agents}
         self._entries: dict[str, tuple[str, object]] = {}
+        self._checked: dict[str, tuple[bool, float]] = {}
 
     def home(self, alias: str) -> Path | None:
         if alias not in self._agents:
@@ -57,15 +79,35 @@ class AgentRunner:
         root = self._settings.path.parent if self._settings.path else Path.cwd()
         return self._settings.path_of(home_key(alias)) or (root / ".accounts" / alias).resolve()
 
-    def available(self, alias: str) -> bool:
-        """Провайдер известен и в каталоге учётной записи что-то есть: токены кладёт вход.
-        Пустой каталог не считается: docker compose создаёт его сам при запуске."""
+    def available(self, alias: str, *, fresh: bool = False) -> bool:
+        """Вход в подписку подтверждает сама CLI (claude auth status, codex login status).
+        Файлы в каталоге ничего не значат: лоток ходов лежит там же и после выхода.
+        fresh — спросить заново, а не из памяти: перед платным запуском."""
         home = self.home(alias)
-        return home is not None and home.is_dir() and any(home.iterdir())
+        if home is None or not home.is_dir():
+            return False
+        known = self._checked.get(alias)
+        if known and not fresh:
+            ok, at = known
+            if time.monotonic() - at < (LOGIN_OK_TTL if ok else LOGIN_MISSING_TTL):
+                return ok
+        try:
+            self._worker(alias).check()
+            ok = True
+        except (RuntimeError, OSError, ValueError):
+            ok = False
+        self._checked[alias] = (ok, time.monotonic())
+        return ok
+
+    def availability(self, aliases: Iterable[str], *, fresh: bool = False) -> dict[str, bool]:
+        """Несколько моделей разом: проверки CLI идут параллельно."""
+        unique = list(dict.fromkeys(aliases))
+        with ThreadPoolExecutor(max_workers=max(len(unique), 1)) as pool:
+            answers = pool.map(lambda alias: self.available(alias, fresh=fresh), unique)
+            return dict(zip(unique, answers, strict=True))
 
     def ask(self, model: str, prompt: str, key: str) -> str:
-        if not self.available(model):
-            raise ModelFailed(f"нет входа: каталог {self.home(model)} пуст, войдите по README")
+        # Вход проверяет сам run (ensure_login): нет его — LoginRequired ниже.
         with self._locks[model]:
             try:
                 result = self._worker(model).run({"user": prompt}, key=key,

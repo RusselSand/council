@@ -9,10 +9,9 @@ router = APIRouter(tags=["settings"])
 
 @router.get("/settings")
 def get_settings(config: ConfigDep, agents: AgentsDep) -> Settings:
+    available = agents.availability(m.alias for m in config.models)
     return Settings(
-        models=[
-            m.model_copy(update={"available": agents.available(m.alias)}) for m in config.models
-        ],
+        models=[m.model_copy(update={"available": available[m.alias]}) for m in config.models],
         min_participants=MIN_PARTICIPANTS,
         default_participants=config.default_participants,
         default_judge=config.default_judge,

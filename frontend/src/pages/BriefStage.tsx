@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { api, ApiError, councilPath, type Council, type CouncilPatch, type Settings } from '../api'
+import { ApiError, councilPath, startOrFollowSlicing, type Council, type CouncilPatch, type Settings } from '../api'
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { SaveStatus } from '../components/SaveStatus'
@@ -44,16 +44,10 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
     setSlicing(true); setStartError(null)
     try {
       if (!(await saver.flush())) return
-      onStart(await api.startSlicing(council.id))
+      onStart(await startOrFollowSlicing(council.id))
       nav(councilPath(council.id, 'slices'))
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        // Уже идёт: показать её ход. Совет перечитываем, иначе на экране не будет нарезки.
-        api.council(council.id).then(onStart, () => { /* покажет опрос */ })
-        nav(councilPath(council.id, 'slices'))
-      } else {
-        setStartError(e instanceof ApiError ? e.message : t('brief.startFailed'))
-      }
+      setStartError(e instanceof ApiError ? e.message : t('brief.startFailed'))
     } finally {
       setSlicing(false)
     }

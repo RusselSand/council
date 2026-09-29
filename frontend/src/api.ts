@@ -78,5 +78,18 @@ export const api = {
   settings: () => request<Settings>('/api/settings'),
 }
 
+/**
+ * Запустить нарезку. Если она уже идёт (409: вторая вкладка, повторный клик, потерянный
+ * ответ на прошлый запуск) — вернуть совет с идущей, чтобы экран за ней следил.
+ */
+export const startOrFollowSlicing = async (id: string): Promise<Council> => {
+  try {
+    return await api.startSlicing(id)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) return api.council(id)
+    throw e
+  }
+}
+
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

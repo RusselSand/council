@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from spec_council.app import app
 from spec_council.config import DEFAULT_CONFIG
-from spec_council.deps import get_agents, get_store
+from spec_council.deps import get_agents, get_launcher, get_store
 from spec_council.pipeline import start
 
 client = TestClient(app)
@@ -87,8 +87,8 @@ class FakeAgents:
         self.text = text
         self.asked = []
 
-    def available(self, alias):
-        return alias in ("sol", "fable")
+    def availability(self, aliases, *, fresh=False):
+        return {alias: alias in ("sol", "fable") for alias in aliases}
 
     def ask(self, model, prompt, key):
         self.asked.append(key)
@@ -104,8 +104,11 @@ class FakeAgents:
 def agents():
     fake = FakeAgents("Хочу воркер для Codex CLI.")
     app.dependency_overrides[get_agents] = lambda: fake
+    # Нарезка идёт тут же, а не в пуле: к возврату из post итог уже есть.
+    app.dependency_overrides[get_launcher] = lambda: lambda job: job()
     yield fake
     app.dependency_overrides.pop(get_agents)
+    app.dependency_overrides.pop(get_launcher)
 
 
 def test_slicing_runs_in_the_background_and_ends_with_labeled_fragments(agents):
@@ -116,7 +119,6 @@ def test_slicing_runs_in_the_background_and_ends_with_labeled_fragments(agents):
     assert res.json()["slicing"]["state"] == "running"
     assert res.json()["status"] == "slices"
 
-    # TestClient выполняет фоновую задачу до возврата из post.
     slicing = client.get(f"/api/councils/{council_id}").json()["slicing"]
     assert slicing["state"] == "done"
     assert slicing["text"] == agents.text

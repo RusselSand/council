@@ -235,6 +235,17 @@ describe('Ввод', () => {
     expect(calls.indexOf('PATCH /api/councils/demo-1')).toBeLessThan(calls.indexOf('POST /api/councils/demo-1/slicing'))
   })
 
+  it('нарезка уже идёт (409) — «Нарезать» ведёт к ней, а не к ошибке', async () => {
+    let started = false
+    fetchMock.mockImplementation(server({
+      council: () => (started ? { ...COUNCIL, slicing: RUNNING } : COUNCIL),
+      start: () => { started = true; return json({ detail: 'Нарезка уже идёт' }, 409) },
+    }))
+    renderAt('/councils/demo-1/brief')
+    fireEvent.click(await screen.findByRole('button', { name: ru['brief.slice'] }))
+    expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
+  })
+
   it('отказ сервера в запуске объясняет, почему, и оставляет на вводе', async () => {
     await open(undefined, () => json({ detail: 'Нет подключения к моделям: Gemini Astra 3' }, 422))
     fireEvent.click(slice())
@@ -358,6 +369,18 @@ describe('Нарезка', () => {
     const result = { name: ru['slices.resultTitle'] }
     expect(await screen.findByRole('heading', result, { timeout: POLL_MS + 2000 })).toBeTruthy()
   }, POLL_MS + 5000)
+
+  it('повтор, когда нарезку уже запустили (409), подхватывает идущую', async () => {
+    const failed: Slicing = { ...RUNNING, state: 'failed', error: 'ни один участник не справился' }
+    let current: Council = { ...COUNCIL, slicing: failed }
+    openSlices(() => current, () => {
+      current = { ...COUNCIL, slicing: RUNNING }   // её уже запустили в другой вкладке
+      return json({ detail: 'Нарезка уже идёт' }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['slices.retry'] }))
+    expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
+    expect(screen.queryByText('Нарезка уже идёт')).toBeNull()
+  })
 
   it('упавшая — причина и повтор', async () => {
     const failed: Slicing = { ...RUNNING, state: 'failed', error: 'ни один участник не справился' }

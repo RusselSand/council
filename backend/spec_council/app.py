@@ -6,14 +6,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import api
-from .agents import STOP
+from .agents import shutdown
 from .spa import mount_spa
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
-    STOP.set()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
+    shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 
 
 def create_app() -> FastAPI:

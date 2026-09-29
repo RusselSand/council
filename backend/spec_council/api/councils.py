@@ -1,9 +1,9 @@
 from threading import Lock
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from ..config import MIN_PARTICIPANTS, AppConfig
-from ..deps import AgentsDep, ConfigDep, StoreDep
+from ..deps import AgentsDep, ConfigDep, LauncherDep, StoreDep
 from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Label, Slicing
 from ..pipeline import Pipeline
 
@@ -75,7 +75,7 @@ def relabeled(slicing: Slicing | None, labels: dict[int, Label]) -> Slicing:
 
 @router.post("/{council_id}/slicing", status_code=202, responses={**NOT_FOUND, **CANNOT_SLICE})
 def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: AgentsDep,
-                  background: BackgroundTasks) -> Council:
+                  launch: LauncherDep) -> Council:
     """Запускает нарезку и разметку текста советом. Идёт в фоне минутами: ход виден в
     council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
     with _starting:
@@ -87,8 +87,9 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
         if not council.brief.strip():
             raise HTTPException(422, "Нарезать нечего: текст пуст")
         names = {model.alias: model.display_name for model in config.models}
-        offline = [names.get(m, m) for m in dict.fromkeys([*council.participants, council.judge])
-                   if not agents.available(m)]
+        # Проверяем вход заново, а не из памяти: запуск платный.
+        available = agents.availability([*council.participants, council.judge], fresh=True)
+        offline = [names.get(m, m) for m, ok in available.items() if not ok]
         if offline:
             raise HTTPException(422, f"Нет подключения к моделям: {', '.join(offline)}")
 
@@ -99,7 +100,7 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                             agents, report)
         council = store.update_council(council_id, {"slicing": pipeline.state.model_copy(deep=True),
                                                     "status": CouncilStatus.slices})
-    background.add_task(pipeline.run)
+    launch(pipeline.run)
     return council
 
 

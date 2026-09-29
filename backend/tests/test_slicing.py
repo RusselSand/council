@@ -124,3 +124,20 @@ def test_judge_notes_land_on_the_fragment_where_the_boundary_is():
     notes = boundary_notes(data)
     assert len(notes) == 2
     assert note_places(FRAGMENTS, notes) == {1: "два решения"}
+
+
+@pytest.mark.parametrize(("text", "fragments"), [
+    ("- Первое\n- Второе", ["- Первое", "- Второе"]),
+    ("* один;\n* два.", ["* один;", "* два."]),
+    ("1. Раз.\n2. Два.", ["1. Раз.", "2. Два."]),
+    ("Слева (см. ниже) справа. «Цитата» — дальше.",
+     ["Слева (см. ниже) справа.", "«Цитата» — дальше."]),
+    ("склеено«так»", ["склеено", "«так»"]),
+])
+def test_list_markers_and_quotes_stay_with_their_own_fragment(text, fragments):
+    assert cut(text, bounds_of(text, fragments)) == fragments
+
+
+def test_decisions_that_are_not_a_list_are_just_no_notes():
+    assert boundary_notes({"decisions": 1}) == []
+    assert boundary_notes({"decisions": "граница"}) == []

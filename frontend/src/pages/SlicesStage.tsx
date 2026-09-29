@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import {
-  api, ApiError, councilPath,
+  ApiError, councilPath, startOrFollowSlicing,
   type Council, type CouncilPatch, type Label, type LabeledFragment, type Model, type Settings, type Slicing,
 } from '../api'
 import { LabelChips, LabelLegend, SlicedText } from '../components/Labels'
@@ -139,7 +139,7 @@ function Status({ council, slicing, onStart }: Readonly<{
   const restart = async () => {
     setRestarting(true); setError(null)
     try {
-      onStart(await api.startSlicing(council.id))
+      onStart(await startOrFollowSlicing(council.id))
     } catch (e) {
       setError(e instanceof ApiError ? e.message : t('brief.startFailed'))
     } finally {

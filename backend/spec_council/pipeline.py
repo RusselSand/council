@@ -18,7 +18,6 @@
 import hashlib
 import json
 import logging
-import random
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -77,10 +76,13 @@ def digest(text: str) -> str:
 
 
 def shuffled[T](items: list[T]) -> list[T]:
-    """Порядок, не связанный с моделями, но одинаковый для одних и тех же вариантов."""
-    items = list(items)
-    random.Random(digest(json.dumps(items, ensure_ascii=False, default=str))).shuffle(items)
-    return items
+    """Порядок, не связанный с моделями: сортировка по хешу содержимого. Зависит только от
+    набора вариантов, а не от того, кто и в каком порядке их прислал, поэтому у одного
+    текста всегда один и тот же промпт. Случайность тут не нужна — нужна независимость."""
+    def text(item: T) -> str:
+        return json.dumps(item, ensure_ascii=False, default=str, sort_keys=True)
+    salt = "".join(sorted(text(item) for item in items))
+    return sorted(items, key=lambda item: digest(salt + text(item)))
 
 
 def as_json(value: object) -> str:
@@ -219,7 +221,11 @@ class Pipeline:
             return None
         try:
             answer = parse(parse_json(reply))
-        except BadAnswer as exc:
+        except Exception as exc:
+            # Любая ошибка разбора — негодный ответ, и из лотка его вон: иначе повтор взял бы
+            # тот же ответ даром и упал бы на нём снова. Не BadAnswer — это недосмотр разбора.
+            if not isinstance(exc, BadAnswer):
+                log.exception("разбор ответа %s на шаге %s упал", model, step)
             self.runner.forget([key])
             self._set_run(step, model, "failed", f"негодный ответ: {exc}")
             return None
