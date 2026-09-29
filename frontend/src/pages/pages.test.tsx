@@ -254,6 +254,13 @@ describe('Ввод', () => {
     expect(screen.getByRole('textbox', { name: ru['brief.title'] })).toBeTruthy()
   })
 
+  it('временный отказ (503) — это ошибка на месте, а не переход к пустой нарезке', async () => {
+    await open(undefined, () => json({ detail: 'Состав совета меняется прямо сейчас — попробуйте ещё раз' }, 503))
+    fireEvent.click(slice())
+    expect((await screen.findByRole('alert')).textContent).toBe('Состав совета меняется прямо сейчас — попробуйте ещё раз')
+    expect(screen.getByRole('textbox', { name: ru['brief.title'] })).toBeTruthy()
+  })
+
   it('модель без подключения помечена', async () => {
     await open()
     expect(checkbox(/Gemini Astra/).closest('label')?.textContent).toContain(ru['model.offline'])

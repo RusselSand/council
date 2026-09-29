@@ -291,13 +291,13 @@ def test_lineup_changed_during_the_login_check_is_checked_again_outside_the_lock
     assert agents.fresh_under_lock == [False, False]
 
 
-def test_lineup_that_keeps_changing_gives_up_with_409(agents):
+def test_lineup_that_keeps_changing_gives_up_with_503(agents):
     council_id = new_council()
     client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
     agents.online.add("astra")
     judges = iter(["astra", "fable", "astra", "fable"])
     agents.on_probe = lambda: get_store().update_council(council_id, {"judge": next(judges)})
     res = client.post(f"/api/councils/{council_id}/slicing")
-    assert res.status_code == 409
+    assert res.status_code == 503   # не 409: нарезку никто не запускал
     assert agents.fresh_under_lock == [False] * councils_api.PROBE_ATTEMPTS
     assert agents.asked == []

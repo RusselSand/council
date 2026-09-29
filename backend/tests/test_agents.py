@@ -77,3 +77,19 @@ def test_pool_comes_back_after_a_shutdown():
 def test_identity_names_provider_and_model():
     runner = AgentRunner({"sol": Agent(provider="codex", model="gpt-5.6-sol")})
     assert runner.identity("sol") == "codex/gpt-5.6-sol"
+
+
+def test_jobs_still_queued_at_shutdown_run_against_stop_instead_of_vanishing():
+    from spec_council import agents
+    gate = threading.Event()
+    seen = []
+
+    def job():
+        gate.wait(5)
+        seen.append(agents.STOP.is_set())
+
+    for _ in range(6):                  # больше, чем потоков в пуле: двое ждут в очереди
+        agents.launch(job)
+    threading.Timer(0.2, gate.set).start()
+    agents.shutdown()
+    assert seen == [True] * 6

@@ -15,8 +15,8 @@ NOT_FOUND = {404: {"description": MISSING}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
 NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
 CANNOT_SLICE = {
-    503: {"description": "Сервер останавливается, нарезка не запущена"},
-    409: {"description": "Нарезка уже идёт"},
+    503: {"description": "Не запущена: сервер останавливается или состав совета меняется"},
+    409: {"description": "Нарезка уже идёт или её только что запустил другой запрос"},
     422: {"description": "Текст пуст или к моделям совета нет подключения"},
 }
 
@@ -116,7 +116,8 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
         # Состав поменяли, пока шла проверка: проверяем новый, и снова вне замка.
         before = council
     else:
-        raise HTTPException(409, "Состав совета меняется прямо сейчас — попробуйте ещё раз")
+        # Не 409: 409 значит «нарезка уже есть — следите за ней», а здесь её никто не запускал.
+        raise HTTPException(503, "Состав совета меняется прямо сейчас — попробуйте ещё раз")
     try:
         launch(pipeline.run)
     except RuntimeError as exc:

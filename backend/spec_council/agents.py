@@ -45,13 +45,16 @@ def launch(job: Callable[[], object]) -> None:
 
 
 def shutdown() -> None:
-    """Остановка приложения: идущие ходы сворачиваются, пул дожидается их отчёта."""
+    """Остановка приложения: идущие ходы сворачиваются, пул дожидается их отчёта.
+    Ждущие в очереди не отменяются: их совет уже записан «идёт», и отменённая задача так бы
+    там и осталась. Они запускаются при поднятом STOP, модели не зовут и отчитываются,
+    что остановлены."""
     global _pool
     with _pool_lock:
         pool, _pool = _pool, None
         STOP.set()
     if pool is not None:
-        pool.shutdown(wait=True, cancel_futures=True)
+        pool.shutdown(wait=True)
 
 
 def home_key(alias: str) -> str:
