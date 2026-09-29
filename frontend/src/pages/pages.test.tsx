@@ -775,6 +775,80 @@ describe('Правка групп', () => {
     expect(screen.queryByRole('region', { name: 'Хранение' })).toBeNull()
   })
 
+  /** Ответ на правку, который приходит, только когда тест его отпустит. */
+  const held = () => {
+    let release!: (council: Council) => void
+    const response = new Promise<Response>(r => { release = c => r(new Response(JSON.stringify(c))) })
+    return { edit: () => response, release }
+  }
+
+  it('пока разделение сохраняется, его не отменить и не поменять', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F2' }))
+    const form = within(a).getByRole('form', { name: ru['groups.split'] })
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: 'Факты' } })
+    fireEvent.click(within(form).getByRole('button', { name: ru['groups.split'] }))
+    await waitFor(() => expect(edits).toHaveLength(1))
+    expect((within(form).getByRole('button', { name: ru['groups.cancel'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(a).getByRole('checkbox', { name: 'F2' }) as HTMLInputElement).disabled).toBe(true)
+    expect((within(form).getByRole('textbox') as HTMLInputElement).readOnly).toBe(true)
+    release(grouped({ ...GROUPED, edited: true, groups: [
+      { ...GROUPED.groups[0], fragment_ids: [1], shared_fragment_ids: [] },
+      { ...GROUPED.groups[1], id: 'C', title: 'Факты' }, GROUPED.groups[1]] }))
+    expect(await screen.findByRole('region', { name: 'Факты' })).toBeTruthy()
+    expect(screen.queryByRole('form')).toBeNull()
+  })
+
+  it('пока название сохраняется, поле не правится и Escape его не закрывает', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: 'Воркер' }))
+    const field = screen.getByRole('textbox', { name: 'Название группы A' }) as HTMLInputElement
+    fireEvent.change(field, { target: { value: 'Воркер Codex' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => expect(field.readOnly).toBe(true))
+    fireEvent.keyDown(field, { key: 'Escape' })
+    expect(screen.getByRole('textbox', { name: 'Название группы A' })).toBeTruthy()
+    release(grouped({ ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] }))
+    expect(await screen.findByRole('region', { name: 'Воркер Codex' })).toBeTruthy()
+    expect(edits).toHaveLength(1)
+  })
+
+  it('откат названия сбрасывает открытый черновик', async () => {
+    const renamed = grouped({ ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] })
+    openWith(() => json(grouped()), renamed)
+    fireEvent.click(within(await card('Воркер Codex')).getByRole('button', { name: 'Воркер Codex' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Название группы A' }), { target: { value: 'Что-то' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.restore'] }))
+    expect(await screen.findByRole('button', { name: 'Воркер' })).toBeTruthy()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it.each([
+    ['группы раскладывают заново', GROUPING, ru['groups.runningTitle']],
+    ['новая нарезка стёрла группы', null, null],
+  ])('409, а %s, — ошибка правки видна', async (_, fresh, heading) => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = { ...grouped(), structure: fresh }
+        return json({ detail: 'Группы уже разложили заново — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Группы уже разложили заново — правка была к прежним')
+    if (heading) expect(screen.getByRole('heading', { name: heading })).toBeTruthy()
+    else expect(screen.getByRole('link', { name: ru['groups.toSlices'] })).toBeTruthy()
+  })
+
   it('группы уже разложили заново (409) — видны нынешние', async () => {
     let current = grouped()
     fetchMock.mockImplementation(server({

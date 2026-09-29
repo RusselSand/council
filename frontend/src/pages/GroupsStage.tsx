@@ -23,18 +23,29 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
   const { t } = useTranslation()
   const structure = council.structure
   const restart = () => startOrFollow(() => api.startStructure(council.id), council.id)
+  const again = useAction(onStart)
+  const edits = useGroupEdits(council.id, onStart)
+  // Ответ на правку мог сменить экран: группы раскладывают заново или их стёрла новая нарезка.
+  // Тогда ошибка правки — здесь, над тем, что показано вместо групп.
+  const lost = structure?.state !== 'done' && edits.error
+    ? <p className="error-text" role="alert">{edits.error}</p>
+    : null
 
   if (!structure) return (
-    <div className="card placeholder">
-      {t('groups.none')} <Link to={councilPath(council.id, 'slices')}>{t('groups.toSlices')}</Link>
-    </div>
+    <>
+      {lost}
+      <div className="card placeholder">
+        {t('groups.none')} <Link to={councilPath(council.id, 'slices')}>{t('groups.toSlices')}</Link>
+      </div>
+    </>
   )
 
   return (
     <div className="slices-layout">
       <div className="slices-main">
+        {lost}
         {structure.state === 'done'
-          ? <Result council={council} structure={structure} restart={restart} onChange={onStart} />
+          ? <Result council={council} structure={structure} restart={restart} again={again} edits={edits} />
           : <RunStatus run={structure} kind="groups" restart={restart} onStart={onStart} />}
       </div>
       <aside className="slices-side">
@@ -44,6 +55,28 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
   )
 }
 
+/**
+ * Правки групп: busy, ошибка и где правили — там её и показать. Живут выше экрана итога:
+ * ответ на правку может его сменить, а ошибка должна остаться видна. 409 — группы уже
+ * разложили заново: правка была к прежним, показываем нынешние.
+ */
+function useGroupEdits(councilId: string, onChange: (council: Council) => void) {
+  const action = useAction(onChange, 'groups.editFailed')
+  const [at, setAt] = useState<string | null>(null)
+  const edit = (where: string | null, call: () => Promise<Council>) => {
+    setAt(where)
+    return action.go(async () => {
+      try {
+        return await call()
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) onChange(await api.council(councilId))
+        throw e
+      }
+    })
+  }
+  return { busy: action.busy, error: action.error, at, edit }
+}
+
 /** Правки одной группы; каждая отвечает, сохранилась ли. */
 interface GroupEdits {
   merge: (other: string) => Promise<boolean>
@@ -51,41 +84,27 @@ interface GroupEdits {
   rename: (title: string) => Promise<boolean>
 }
 
-function Result({ council, structure, restart, onChange }: Readonly<{
-  council: Council; structure: Structure
-  restart: () => Promise<Council>; onChange: (council: Council) => void
+function Result({ council, structure, restart, again, edits }: Readonly<{
+  council: Council; structure: Structure; restart: () => Promise<Council>
+  again: ReturnType<typeof useAction>; edits: ReturnType<typeof useGroupEdits>
 }>) {
   const { t } = useTranslation()
-  const again = useAction(onChange)
-  const edits = useAction(onChange, 'groups.editFailed')
   // Правка, пока запускается новая раскладка, пропала бы под ней, поэтому пока идёт одно —
   // другое недоступно.
   const busy = again.busy || edits.busy
-  // Где была последняя правка: там и показать, если сервер её не принял.
-  const [editedAt, setEditedAt] = useState<string | null>(null)
   const answered = structure.steps.find(s => s.name === 'structure')?.runs.filter(r => r.state === 'done').length ?? 0
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const stale = structureIsStale(council)
+  const { id } = council
+  const { run } = structure
 
-  // 409 — группы уже разложили заново: правка была к прежним, показываем нынешние.
-  const edit = (where: string | null, call: (run: string) => Promise<Council>) => {
-    setEditedAt(where)
-    return edits.go(async () => {
-      try {
-        return await call(structure.run)
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
-        throw e
-      }
-    })
-  }
   const editsOf = (group: Group): GroupEdits => ({
-    merge: other => edit(group.id, run => api.mergeGroups(council.id, run, group.id, other)),
-    split: (ids, title) => edit(group.id, run => api.splitGroup(council.id, run, group.id, ids, title)),
-    rename: title => edit(group.id, run => api.renameGroup(council.id, run, group.id, title)),
+    merge: other => edits.edit(group.id, () => api.mergeGroups(id, run, group.id, other)),
+    split: (ids, title) => edits.edit(group.id, () => api.splitGroup(id, run, group.id, ids, title)),
+    rename: title => edits.edit(group.id, () => api.renameGroup(id, run, group.id, title)),
   })
   // Группы, где правили, после ответа может уже не быть (409 — разложили заново): тогда в шапку.
-  const target = editedAt !== null && structure.groups.some(g => g.id === editedAt) ? editedAt : null
+  const target = edits.at !== null && structure.groups.some(g => g.id === edits.at) ? edits.at : null
   const errorAt = (where: string | null) => (target === where ? edits.error : null)
 
   return (
@@ -96,7 +115,7 @@ function Result({ council, structure, restart, onChange }: Readonly<{
           <p className="fragment-note">
             {t('groups.edited')}{' '}
             <button className="btn-link" disabled={busy}
-                    onClick={() => void edit(null, run => api.restoreGroups(council.id, run))}>
+                    onClick={() => void edits.edit(null, () => api.restoreGroups(id, run))}>
               {t('groups.restore')}
             </button>
           </p>
@@ -153,7 +172,8 @@ function GroupCard({ group, groups, fragments, relations, edits, busy, error }: 
     <section className="card panel group-card" aria-labelledby={titleId}>
       <div className="group-head">
         <span className="group-letter" aria-hidden="true">{group.id}</span>
-        <GroupTitle id={titleId} group={group} busy={busy} rename={edits.rename} />
+        {/* Черновик названия — к этому названию: откат поменял его — черновик ни к чему. */}
+        <GroupTitle key={group.title} id={titleId} group={group} busy={busy} rename={edits.rename} />
         {group.missing_idea && <span className="group-tag">{t('groups.missingIdea')}</span>}
         {relations.map(r => <span key={`${r.source}-${r.target}`} className="group-tag">{relationTag(r, group, t)}</span>)}
         <span className="group-actions">
@@ -188,7 +208,8 @@ function GroupCard({ group, groups, fragments, relations, edits, busy, error }: 
             <li key={id} className="group-fragment">
               {splitting
                 ? <label className="group-fragment-pick">
-                    <input type="checkbox" aria-label={`F${id}`} checked={picked.has(id)} onChange={() => toggle(id)} />
+                    <input type="checkbox" aria-label={`F${id}`} checked={picked.has(id)} disabled={busy}
+                           onChange={() => toggle(id)} />
                     {row}
                   </label>
                 : row}
@@ -199,8 +220,10 @@ function GroupCard({ group, groups, fragments, relations, edits, busy, error }: 
       {splitting && (
         <form className="group-split" aria-label={t('groups.split')} onSubmit={e => void submitSplit(e)}>
           <input className="text-field" aria-label={t('groups.newTitle')} placeholder={t('groups.newTitle')}
-                 value={newTitle} maxLength={200} onChange={e => setNewTitle(e.target.value)} />
-          <button type="button" className="btn-secondary" onClick={stopSplitting}>{t('groups.cancel')}</button>
+                 value={newTitle} maxLength={200} readOnly={busy} onChange={e => setNewTitle(e.target.value)} />
+          <button type="button" className="btn-secondary" disabled={busy} onClick={stopSplitting}>
+            {t('groups.cancel')}
+          </button>
           <button type="submit" className="btn-primary" disabled={busy || !canSplit}>{t('groups.split')}</button>
         </form>
       )}
@@ -209,7 +232,10 @@ function GroupCard({ group, groups, fragments, relations, edits, busy, error }: 
   )
 }
 
-/** Название группы: щелчок — правка на месте. Enter или уход из поля сохраняют, Escape — отмена. */
+/**
+ * Название группы: щелчок — правка на месте. Enter или уход из поля сохраняют, Escape — отмена.
+ * Пока правка сохраняется, поле не меняется и не закрывается: ответ применит отправленное.
+ */
 function GroupTitle({ id, group, busy, rename }: Readonly<{
   id: string; group: Group; busy: boolean; rename: (title: string) => Promise<boolean>
 }>) {
@@ -237,11 +263,11 @@ function GroupTitle({ id, group, busy, rename }: Readonly<{
             {group.title}<span className="group-title-pen" aria-hidden="true">✎</span>
           </button>
         : <input className="text-field group-title-input" aria-label={t('groups.titleField', { group: group.id })}
-                 value={draft} maxLength={200} autoFocus onChange={e => setDraft(e.target.value)}
+                 value={draft} maxLength={200} autoFocus readOnly={busy} onChange={e => setDraft(e.target.value)}
                  onBlur={() => void save()}
                  onKeyDown={e => {
                    if (e.key === 'Enter') { e.preventDefault(); void save() }
-                   if (e.key === 'Escape') setDraft(null)
+                   if (e.key === 'Escape' && !busy) setDraft(null)
                  }} />}
     </h2>
   )
