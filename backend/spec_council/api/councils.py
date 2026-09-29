@@ -10,7 +10,8 @@ from ..pipeline import Pipeline
 
 router = APIRouter(prefix="/councils", tags=["councils"])
 
-NOT_FOUND = {404: {"description": "Совет не найден"}}
+MISSING = "Совет не найден"
+NOT_FOUND = {404: {"description": MISSING}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
 NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
 CANNOT_SLICE = {
@@ -42,7 +43,7 @@ def create_council(store: StoreDep, config: ConfigDep) -> CouncilCreated:
 def get_council(council_id: str, store: StoreDep) -> Council:
     council = store.get_council(council_id)
     if council is None:
-        raise HTTPException(404, "Совет не найден")
+        raise HTTPException(404, MISSING)
     return council
 
 
@@ -58,11 +59,11 @@ def update_council(
         with _starting:  # типы и запуск нарезки не должны разойтись
             current = store.get_council(council_id)
             if current is None:
-                raise HTTPException(404, "Совет не найден")
+                raise HTTPException(404, MISSING)
             changes["slicing"] = relabeled(current.slicing, patch.labels, patch.slicing_run)
             council = store.update_council(council_id, changes)
     if council is None:
-        raise HTTPException(404, "Совет не найден")
+        raise HTTPException(404, MISSING)
     return council
 
 
@@ -125,7 +126,7 @@ def run_of(council: Council) -> str | None:
 
 def startable(council: Council | None) -> Council:
     if council is None:
-        raise HTTPException(404, "Совет не найден")
+        raise HTTPException(404, MISSING)
     if council.slicing and council.slicing.state == "running":
         raise HTTPException(409, "Нарезка уже идёт")
     if not council.brief.strip():
