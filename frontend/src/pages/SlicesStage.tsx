@@ -42,22 +42,29 @@ export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Re
                        restart={() => startOrFollow(() => api.startSlicing(council.id), council.id)} />}
       </div>
       <aside className="slices-side">
-        {slicing.state === 'done' && <NextStep council={council} onStart={onStart} />}
+        {slicing.state === 'done' && <NextStep council={council} onStart={onStart} saver={saver} />}
         <Progress steps={slicing.steps} models={settings.models} />
       </aside>
     </div>
   )
 }
 
-/** Что дальше: разложить фрагменты по группам — или открыть уже разложенные. */
-function NextStep({ council, onStart }: Readonly<{ council: Council; onStart: (started: Council) => void }>) {
+/**
+ * Что дальше: разложить фрагменты по группам — или открыть уже разложенные. Раскладка берёт
+ * типы с сервера, поэтому сначала сохраняются правки типов.
+ */
+function NextStep({ council, onStart, saver }: Readonly<{
+  council: Council; onStart: (started: Council) => void; saver: Autosave<CouncilPatch>
+}>) {
   const { t } = useTranslation()
   const nav = useNavigate()
   const { busy, error, go } = useStart(onStart)
   const structure = council.structure
   const stale = structure !== null && structureIsStale(council)
-  const propose = () => void go(() => startOrFollow(() => api.startStructure(council.id), council.id),
-                                () => nav(councilPath(council.id, 'structure')))
+  const propose = () => void go(
+    async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id) : null,
+    () => nav(councilPath(council.id, 'structure')),
+  )
 
   return (
     <section className="card panel next-step" aria-labelledby="next-step-title">

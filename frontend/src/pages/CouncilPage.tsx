@@ -41,10 +41,14 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
 
   // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
+  // Готовая нарезка того же прогона остаётся своя: в её типах бывают правки, которые сервер
+  // ещё не подтвердил, и ответ на запуск раскладки их бы откатил.
   const adopt = useCallback((fresh: Council) =>
-    update(([c, settings]) => [
-      { ...c, status: fresh.status, slicing: fresh.slicing, structure: fresh.structure }, settings,
-    ]), [update])
+    update(([c, settings]) => {
+      const own = c.slicing?.state === 'done' && c.slicing.run === fresh.slicing?.run
+      const slicing = own ? c.slicing : fresh.slicing
+      return [{ ...c, status: fresh.status, slicing, structure: fresh.structure }, settings]
+    }), [update])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {

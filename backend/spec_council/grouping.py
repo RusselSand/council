@@ -2,15 +2,18 @@
 
 Раскладки сравниваются по содержанию, а не по буквам и названиям: у двух участников группа A
 может быть одной и той же задумкой под разными именами. Одинаковые — если совпадают составы
-групп и связи между ними (связь описывается составами групп, а не буквами).
+групп и связи между ними (связь описывается составами групп, а не буквами; у related
+направления нет).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .slicing import BadAnswer, JudgeRejected
 
 RELATION_TYPES = ("independent", "depends_on", "related")
 Members = frozenset[int]
+Link = tuple[Members, Members, str]
 
 
 @dataclass(frozen=True)
@@ -47,31 +50,32 @@ class StructureOption:
             seen |= group.members
         return frozenset(twice)
 
-    def core(self, group: GroupOption) -> Members:
-        """Собственные фрагменты группы — без общих. По ним группы узнаются между вариантами:
-        судья может отдать общее ограничение ещё одной группе, но не пересобрать группу."""
-        return group.members - self.shared()
+    def link(self, relation: RelationOption, floating: Members = frozenset()) -> Link:
+        """Связь, описанная составами групп (без плавающих фрагментов): так она сравнима между
+        вариантами. У related направления нет, поэтому концы идут в одном порядке."""
+        source = self.group(relation.source).members - floating
+        target = self.group(relation.target).members - floating
+        if relation.type == "related" and sorted(target) < sorted(source):
+            source, target = target, source
+        return source, target, relation.type
 
-    def links(self) -> frozenset[tuple[Members, Members, str]]:
-        """Связи, описанные составами групп: так они сравнимы между вариантами."""
-        return frozenset((self.group(r.source).members, self.group(r.target).members, r.type)
-                         for r in self.relations if r.type != "independent")
+    def links(self, floating: Members = frozenset()) -> frozenset[Link]:
+        return frozenset(self.link(r, floating) for r in self.relations if r.type != "independent")
 
-    def key(self) -> tuple[frozenset[Members], frozenset[tuple[Members, Members, str]]]:
+    def key(self) -> tuple[frozenset[Members], frozenset[Link]]:
         return frozenset(group.members for group in self.groups), self.links()
 
 
 @dataclass(frozen=True)
-class Decision:
+class JudgeDecision:
     issue: str
     decision: str
     reason: str
 
 
 def ids_of(value: object, known: set[int], what: str) -> Members:
-    numbers = isinstance(value, list) and all(
-        isinstance(i, int) and not isinstance(i, bool) for i in value)
-    if not numbers:
+    if not isinstance(value, list) or not all(
+            isinstance(i, int) and not isinstance(i, bool) for i in value):
         raise BadAnswer(f"{what}: нужен список номеров фрагментов")
     unknown = sorted(set(value) - known)
     if unknown:
@@ -79,54 +83,64 @@ def ids_of(value: object, known: set[int], what: str) -> Members:
     return frozenset(value)
 
 
-def structure_of(data: dict, ids: list[int]) -> StructureOption:
-    """Одна раскладка: группы и связи. BadAnswer, если фрагмент потерян, номер выдуман или
-    связь ведёт к несуществующей группе."""
-    known = set(ids)
+def numbers(ids: Members) -> str:
+    return ", ".join(f"F{i}" for i in sorted(ids))
+
+
+def structure_of(data: dict, labels: Mapping[int, str]) -> StructureOption:
+    """Одна раскладка: группы и связи. BadAnswer, если фрагмент потерян, номер выдуман, две
+    группы одинаковы или связь ведёт к несуществующей группе."""
     raw_groups = data.get("groups")
     if not isinstance(raw_groups, list) or not raw_groups:
         raise BadAnswer("нет списка groups")
-    groups = []
-    for raw in raw_groups:
-        if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"].strip():
-            raise BadAnswer(f"у группы нет id: {raw!r}"[:200])
-        name = raw["id"].strip()
-        title = raw.get("title")
-        members = (ids_of(raw.get("fragment_ids"), known, f"группа {name}")
-                   | ids_of(raw.get("shared_fragment_ids", []), known, f"группа {name}, общие"))
-        if not members:
-            raise BadAnswer(f"группа {name} пустая")
-        ideas = ids_of(raw.get("idea_fragment_ids", []), known, f"группа {name}, идеи") & members
-        title = title.strip() if isinstance(title, str) else ""
-        groups.append(GroupOption(name, title, members, ideas))
+    groups = [group_of(raw, labels) for raw in raw_groups]
     names = [group.id for group in groups]
     if len(set(names)) != len(names):
         raise BadAnswer("две группы с одним id")
-    lost = sorted(known - set().union(*(group.members for group in groups)))
+    if len({group.members for group in groups}) != len(groups):
+        raise BadAnswer("две группы с одинаковым составом")
+    lost = sorted(set(labels) - set().union(*(group.members for group in groups)))
     if lost:
         raise BadAnswer(f"фрагменты не попали ни в одну группу: {', '.join(map(str, lost))}")
 
     raw_relations = data.get("relations") or []
     if not isinstance(raw_relations, list):
         raise BadAnswer("relations — не список")
-    relations = []
-    for raw in raw_relations:
-        if not isinstance(raw, dict):
-            raise BadAnswer(f"связь — не объект: {raw!r}"[:200])
-        source, target, kind = raw.get("from"), raw.get("to"), raw.get("type")
-        if source not in names or target not in names or source == target:
-            raise BadAnswer(f"связь между несуществующими группами: {source!r} → {target!r}")
-        if kind not in RELATION_TYPES:
-            raise BadAnswer(f"тип связи не из {', '.join(RELATION_TYPES)}: {kind!r}")
-        reason = raw.get("reason")
-        reason = reason if isinstance(reason, str) else ""
-        relations.append(RelationOption(source, target, kind, reason))
+    relations = tuple(relation_of(raw, names) for raw in raw_relations)
     reason = data.get("reason")
-    reason = reason if isinstance(reason, str) and reason else None
-    return StructureOption(tuple(groups), tuple(relations), reason)
+    return StructureOption(tuple(groups), relations,
+                           reason if isinstance(reason, str) and reason else None)
 
 
-def structure_options(data: dict, ids: list[int]) -> list[StructureOption]:
+def group_of(raw: object, labels: Mapping[int, str]) -> GroupOption:
+    """Группа из ответа. Её идеи — фрагменты с типом idea: типы даны и не меняются, поэтому
+    idea_fragment_ids и missing_idea модели не нужны — их не проверить лучше, чем вычислить."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not raw["id"].strip():
+        raise BadAnswer(f"у группы нет id: {raw!r}"[:200])
+    name = raw["id"].strip()
+    known = set(labels)
+    members = (ids_of(raw.get("fragment_ids"), known, f"группа {name}")
+               | ids_of(raw.get("shared_fragment_ids", []), known, f"группа {name}, общие"))
+    if not members:
+        raise BadAnswer(f"группа {name} пустая")
+    title = raw.get("title")
+    return GroupOption(name, title.strip() if isinstance(title, str) else "", members,
+                       frozenset(i for i in members if labels[i] == "idea"))
+
+
+def relation_of(raw: object, names: list[str]) -> RelationOption:
+    if not isinstance(raw, dict):
+        raise BadAnswer(f"связь — не объект: {raw!r}"[:200])
+    source, target, kind = raw.get("from"), raw.get("to"), raw.get("type")
+    if source not in names or target not in names or source == target:
+        raise BadAnswer(f"связь между несуществующими группами: {source!r} → {target!r}")
+    if kind not in RELATION_TYPES:
+        raise BadAnswer(f"тип связи не из {', '.join(RELATION_TYPES)}: {kind!r}")
+    reason = raw.get("reason")
+    return RelationOption(source, target, kind, reason if isinstance(reason, str) else "")
+
+
+def structure_options(data: dict, labels: Mapping[int, str]) -> list[StructureOption]:
     """Раскладки участника. Негодная отбрасывается, но если не годится ни одна — ответ негодный."""
     options = data.get("options")
     if not isinstance(options, list) or not options:
@@ -136,7 +150,7 @@ def structure_options(data: dict, ids: list[int]) -> list[StructureOption]:
         try:
             if not isinstance(option, dict):
                 raise BadAnswer("вариант — не объект")
-            valid.append(structure_of(option, ids))
+            valid.append(structure_of(option, labels))
         except BadAnswer as exc:
             problems.append(str(exc))
     if not valid:
@@ -144,10 +158,13 @@ def structure_options(data: dict, ids: list[int]) -> list[StructureOption]:
     return valid
 
 
-def judged_structure(data: dict, ids: list[int],
-                     candidates: list[StructureOption]) -> tuple[StructureOption, list[Decision]]:
-    """Итог судьи. Он может собрать раскладку из решений разных вариантов, но не создать
-    группу, которой нет ни в одном (по собственным фрагментам), и не придумать связь."""
+def judged_structure(data: dict, labels: Mapping[int, str], candidates: list[StructureOption],
+                     ) -> tuple[StructureOption, list[JudgeDecision]]:
+    """Итог судьи. Он может собрать раскладку из решений разных вариантов, но каждое место
+    фрагмента в группе и каждая связь должны быть хоть в одном варианте.
+
+    Группа узнаётся между вариантами по собственным фрагментам — без плавающих, то есть общих
+    хоть в одном варианте или в итоге: где им стоять, и есть предмет спора."""
     status = data.get("status")
     if status == "no_valid_option":
         problem = data.get("problem")
@@ -155,38 +172,37 @@ def judged_structure(data: dict, ids: list[int],
                             "повтор спросит участников заново")
     if status != "ok":
         raise BadAnswer(f"неизвестный status: {status!r}")
-    option = structure_of(data, ids)
-    cores = {candidate.core(group) for candidate in candidates for group in candidate.groups}
+    option = structure_of(data, labels)
+    floating = option.shared().union(*(candidate.shared() for candidate in candidates))
+
+    placed: dict[Members, set[int]] = {}   # собственные фрагменты группы → всё, что в ней бывало
+    for candidate in candidates:
+        for group in candidate.groups:
+            placed.setdefault(group.members - floating, set()).update(group.members)
     for group in option.groups:
-        if option.core(group) not in cores:
-            numbers = ", ".join(f"F{i}" for i in sorted(group.members))
-            raise BadAnswer(f"судья собрал группу, которой нет ни в одном варианте: {numbers}")
-    known_links = {link for candidate in candidates for link in core_links(candidate)}
+        own = group.members - floating
+        if own not in placed:
+            raise BadAnswer(f"судья собрал группу, которой нет ни в одном варианте: "
+                            f"{numbers(group.members)}")
+        moved = group.members - placed[own]
+        if moved:
+            raise BadAnswer(f"судья поместил {numbers(moved)} в группу {group.id}, "
+                            "куда их не помещал ни один вариант")
+
+    known_links = frozenset().union(*(candidate.links(floating) for candidate in candidates))
     for relation in option.relations:
-        if relation.type == "independent":
-            continue
-        if core_link(option, relation) not in known_links:
+        if relation.type != "independent" and option.link(relation, floating) not in known_links:
             raise BadAnswer(f"судья придумал связь {relation.source} → {relation.target} "
                             f"({relation.type})")
     return option, decisions_of(data)
 
 
-def core_link(option: StructureOption, relation: RelationOption) -> tuple[Members, Members, str]:
-    """Связь, описанная собственными фрагментами групп: так её узнать в другом варианте."""
-    return (option.core(option.group(relation.source)),
-            option.core(option.group(relation.target)), relation.type)
-
-
-def core_links(option: StructureOption) -> set[tuple[Members, Members, str]]:
-    return {core_link(option, r) for r in option.relations if r.type != "independent"}
-
-
-def decisions_of(data: dict) -> list[Decision]:
+def decisions_of(data: dict) -> list[JudgeDecision]:
     """Пояснения судьи. Не обязательны: кривая запись пропускается, а не роняет итог."""
     raw = data.get("decisions")
     decisions = []
     for item in raw if isinstance(raw, list) else []:
         fields = ("issue", "decision", "reason")
         if isinstance(item, dict) and all(isinstance(item.get(k), str) for k in fields):
-            decisions.append(Decision(*(item[k].strip() for k in fields)))
+            decisions.append(JudgeDecision(*(item[k].strip() for k in fields)))
     return decisions

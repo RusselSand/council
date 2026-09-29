@@ -351,12 +351,12 @@ class GroupingRun(CouncilRun[Structure]):
         self.slicing = slicing
 
     def work(self) -> dict[str, Any]:
-        ids = [f.id for f in self.slicing.fragments]
+        labels = {f.id: f.label for f in self.slicing.fragments}
         fragments = as_json([{"id": f.id, "text": f.text, "type": f.label}
                              for f in self.slicing.fragments])
         prompt = render("structure", input=self.slicing.text, fragments=fragments)
         answers = self._ask_all(StepName.structure, prompt,
-                                lambda data: structure_options(data, ids))
+                                lambda data: structure_options(data, labels))
 
         # Одинаковые по содержанию раскладки — одна; первая встреченная даёт названия.
         distinct: dict[object, StructureOption] = {}
@@ -373,7 +373,7 @@ class GroupingRun(CouncilRun[Structure]):
         prompt = render("structure_judge", input=self.slicing.text, fragments=fragments,
                         structure_options=as_json(numbered))
         chosen, decisions = self._ask_judge(StepName.structure_judge, prompt,
-                                            lambda data: judged_structure(data, ids, candidates))
+                                            lambda data: judged_structure(data, labels, candidates))
         return final_structure(chosen, [
             StructureDecision(issue=d.issue, decision=d.decision, reason=d.reason)
             for d in decisions

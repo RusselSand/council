@@ -526,6 +526,29 @@ describe('Группы', () => {
     expect(screen.getByText(ru['step.structure'])).toBeTruthy()
   })
 
+  it('тип поменяли и сразу «Предложить группы» — сперва сохраняется тип, правка не откатывается', async () => {
+    let current: Council = { ...COUNCIL, slicing: DONE }
+    let savedBeforeStart = -1
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      group: () => {
+        savedBeforeStart = patches.length
+        current = { ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPING }
+        return json(current, 202)
+      },
+    }))
+    renderAt('/councils/demo-1/slices')
+    const first = await screen.findByRole('radiogroup', { name: 'F1' })
+    fireEvent.click(within(first).getByRole('radio', { name: ru['label.risk'] }))
+    fireEvent.click(screen.getByRole('button', { name: ru['next.propose'] }))
+    expect(await screen.findByRole('heading', { name: ru['groups.runningTitle'] })).toBeTruthy()
+    expect(savedBeforeStart).toBe(1)
+
+    fireEvent.click(screen.getByRole('link', { name: /Нарезка/ }))
+    const again = await screen.findByRole('radiogroup', { name: 'F1' })
+    expect(within(again).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
+  })
+
   it('разложенные — ссылка «К группам», а не новый запуск', async () => {
     openAt('slices', () => ({ ...COUNCIL, slicing: DONE, structure: GROUPED }))
     expect(await screen.findByRole('link', { name: ru['next.open'] })).toBeTruthy()
