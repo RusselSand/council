@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router'
 import {
@@ -20,7 +21,7 @@ import { useStart } from '../useStart'
  */
 export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Readonly<{
   council: Council; settings: Settings
-  onStart: (started: Council) => void
+  onStart: (started: Council, sent?: Slicing | null) => void
   onRelabel: (fragmentId: number, label: Label) => void
   saver: Autosave<CouncilPatch>
 }>) {
@@ -51,20 +52,26 @@ export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Re
 
 /**
  * Что дальше: разложить фрагменты по группам — или открыть уже разложенные. Раскладка берёт
- * типы с сервера, поэтому сначала сохраняются правки типов.
+ * типы с сервера, поэтому сначала сохраняются правки типов; нарезка на экране в момент
+ * запуска уходит в onStart, чтобы ответ не откатил правки, сделанные, пока он шёл.
  */
 function NextStep({ council, onStart, saver }: Readonly<{
-  council: Council; onStart: (started: Council) => void; saver: Autosave<CouncilPatch>
+  council: Council; onStart: (started: Council, sent?: Slicing | null) => void
+  saver: Autosave<CouncilPatch>
 }>) {
   const { t } = useTranslation()
   const nav = useNavigate()
-  const { busy, error, go } = useStart(onStart)
+  const sent = useRef<Slicing | null>(null)
+  const { busy, error, go } = useStart(started => onStart(started, sent.current))
   const structure = council.structure
   const stale = structure !== null && structureIsStale(council)
-  const propose = () => void go(
-    async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id) : null,
-    () => nav(councilPath(council.id, 'structure')),
-  )
+  const propose = () => {
+    sent.current = council.slicing
+    void go(
+      async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id) : null,
+      () => nav(councilPath(council.id, 'structure')),
+    )
+  }
 
   return (
     <section className="card panel next-step" aria-labelledby="next-step-title">

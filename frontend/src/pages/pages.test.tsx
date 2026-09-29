@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Council, CouncilPatch, Settings, Slicing, Structure } from '../api'
+import type { Council, CouncilPatch, Label, Settings, Slicing, Structure } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
 import { en } from '../i18n/en'
@@ -79,6 +79,14 @@ const GROUPED: Structure = {
   relations: [{ source: 'B', target: 'A', type: 'related', reason: 'Пишет туда же, что и A.' }],
   decisions: [{ issue: 'F2: A или A+B', decision: 'A+B', reason: 'Касается обеих.' }],
 }
+
+/** Совет с другими типами фрагментов — как их сохранил бы сервер. */
+const relabeled = (c: Council, labels: Record<number, Label> = {}): Council => ({
+  ...c,
+  slicing: c.slicing && {
+    ...c.slicing, fragments: c.slicing.fragments.map(f => ({ ...f, label: labels[f.id] ?? f.label })),
+  },
+})
 
 let fetchMock: ReturnType<typeof vi.fn>
 let patches: CouncilPatch[]
@@ -526,27 +534,56 @@ describe('Группы', () => {
     expect(screen.getByText(ru['step.structure'])).toBeTruthy()
   })
 
-  it('тип поменяли и сразу «Предложить группы» — сперва сохраняется тип, правка не откатывается', async () => {
+  it('тип поменяли и сразу «Предложить группы» — сперва сохраняется тип, правка во время запуска не откатывается', async () => {
     let current: Council = { ...COUNCIL, slicing: DONE }
     let savedBeforeStart = -1
+    let answer!: () => void
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      patch: () => { current = relabeled(current, patches.at(-1)?.labels); return json(current) },
+      group: () => {
+        savedBeforeStart = patches.length
+        const started = JSON.stringify({ ...current, status: 'structure', structure: GROUPING })
+        return new Promise<Response>(r => { answer = () => r(new Response(started, { status: 202 })) })
+      },
+    }))
+    renderAt('/councils/demo-1/slices')
+    const pick = (label: string) => fireEvent.click(
+      within(screen.getByRole('radiogroup', { name: 'F1' })).getByRole('radio', { name: label }))
+    await screen.findByRole('radiogroup', { name: 'F1' })
+    pick(ru['label.risk'])
+    fireEvent.click(screen.getByRole('button', { name: ru['next.propose'] }))
+    await waitFor(() => expect(groupStarts).toBe(1))
+    expect(savedBeforeStart).toBe(1)
+    pick(ru['label.question'])                      // запуск ещё в пути, ответ её не знает
+    await waitFor(() => expect(patches).toHaveLength(2))
+    answer()
+    expect(await screen.findByRole('heading', { name: ru['groups.runningTitle'] })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('link', { name: /Нарезка/ }))
+    const again = await screen.findByRole('radiogroup', { name: 'F1' })
+    expect(within(again).getByRole('radio', { checked: true }).textContent).toBe(ru['label.question'])
+  })
+
+  it('правку типа из другой вкладки видно после запуска, и свежие группы не устарели', async () => {
+    let current: Council = { ...COUNCIL, slicing: DONE }
     fetchMock.mockImplementation(server({
       council: () => current,
       group: () => {
-        savedBeforeStart = patches.length
-        current = { ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPING }
+        current = { ...current, status: 'structure', structure: { ...GROUPED, labels: { 1: 'idea', 2: 'risk' } } }
         return json(current, 202)
       },
     }))
     renderAt('/councils/demo-1/slices')
-    const first = await screen.findByRole('radiogroup', { name: 'F1' })
-    fireEvent.click(within(first).getByRole('radio', { name: ru['label.risk'] }))
+    await screen.findByRole('radiogroup', { name: 'F2' })
+    current = relabeled(current, { 2: 'risk' })         // другая вкладка
     fireEvent.click(screen.getByRole('button', { name: ru['next.propose'] }))
-    expect(await screen.findByRole('heading', { name: ru['groups.runningTitle'] })).toBeTruthy()
-    expect(savedBeforeStart).toBe(1)
+    expect(await screen.findByRole('heading', { name: 'ИИ предлагает 2 группы' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ru['groups.again'] })).toBeNull()
 
     fireEvent.click(screen.getByRole('link', { name: /Нарезка/ }))
-    const again = await screen.findByRole('radiogroup', { name: 'F1' })
-    expect(within(again).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
+    const second = await screen.findByRole('radiogroup', { name: 'F2' })
+    expect(within(second).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
   })
 
   it('разложенные — ссылка «К группам», а не новый запуск', async () => {

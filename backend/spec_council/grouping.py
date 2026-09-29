@@ -6,7 +6,7 @@
 направления нет).
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from .slicing import BadAnswer, JudgeRejected
@@ -106,7 +106,7 @@ def structure_of(data: dict, labels: Mapping[int, str]) -> StructureOption:
     raw_relations = data.get("relations") or []
     if not isinstance(raw_relations, list):
         raise BadAnswer("relations — не список")
-    relations = tuple(relation_of(raw, names) for raw in raw_relations)
+    relations = unique_relations(relation_of(raw, names) for raw in raw_relations)
     reason = data.get("reason")
     return StructureOption(tuple(groups), relations,
                            reason if isinstance(reason, str) and reason else None)
@@ -160,11 +160,9 @@ def structure_options(data: dict, labels: Mapping[int, str]) -> list[StructureOp
 
 def judged_structure(data: dict, labels: Mapping[int, str], candidates: list[StructureOption],
                      ) -> tuple[StructureOption, list[JudgeDecision]]:
-    """Итог судьи. Он может собрать раскладку из решений разных вариантов, но каждое место
-    фрагмента в группе и каждая связь должны быть хоть в одном варианте.
-
-    Группа узнаётся между вариантами по собственным фрагментам — без плавающих, то есть общих
-    хоть в одном варианте или в итоге: где им стоять, и есть предмет спора."""
+    """Итог судьи. Он может собрать раскладку из решений разных вариантов, но решает только
+    спорное: каждое место фрагмента в группе и каждая связь должны быть хоть в одном варианте,
+    а то, в чём сошлись все варианты, остаётся как есть."""
     status = data.get("status")
     if status == "no_valid_option":
         problem = data.get("problem")
@@ -173,28 +171,65 @@ def judged_structure(data: dict, labels: Mapping[int, str], candidates: list[Str
     if status != "ok":
         raise BadAnswer(f"неизвестный status: {status!r}")
     option = structure_of(data, labels)
-    floating = option.shared().union(*(candidate.shared() for candidate in candidates))
+    if candidates:
+        floating = option.shared().union(*(candidate.shared() for candidate in candidates))
+        check_groups(option, candidates, floating)
+        check_links(option, candidates, floating)
+    return option, decisions_of(data)
 
-    placed: dict[Members, set[int]] = {}   # собственные фрагменты группы → всё, что в ней бывало
+
+def check_groups(option: StructureOption, candidates: list[StructureOption],
+                 floating: Members) -> None:
+    """Группа узнаётся между вариантами по собственным фрагментам — без плавающих, то есть
+    общих хоть в одном варианте или в итоге: где им стоять, и есть предмет спора. Фрагмент,
+    которого нет ни в одном составе группы, судья добавить не может, а тот, что есть во всех, —
+    убрать. Группу из одних плавающих узнать не по чему: она должна совпасть с какой-то целиком."""
+    versions: dict[Members, list[Members]] = {}
     for candidate in candidates:
         for group in candidate.groups:
-            placed.setdefault(group.members - floating, set()).update(group.members)
+            versions.setdefault(group.members - floating, []).append(group.members)
     for group in option.groups:
         own = group.members - floating
-        if own not in placed:
+        seen = versions.get(own, [])
+        if not seen or (not own and group.members not in seen):
             raise BadAnswer(f"судья собрал группу, которой нет ни в одном варианте: "
                             f"{numbers(group.members)}")
-        moved = group.members - placed[own]
-        if moved:
-            raise BadAnswer(f"судья поместил {numbers(moved)} в группу {group.id}, "
+        added = group.members - frozenset().union(*seen)
+        if added:
+            raise BadAnswer(f"судья поместил {numbers(added)} в группу {group.id}, "
                             "куда их не помещал ни один вариант")
+        dropped = frozenset.intersection(*seen) - group.members
+        if dropped:
+            raise BadAnswer(f"судья убрал {numbers(dropped)} из группы {group.id}, "
+                            "хотя там их ставили все варианты")
 
-    known_links = frozenset().union(*(candidate.links(floating) for candidate in candidates))
+
+def check_links(option: StructureOption, candidates: list[StructureOption],
+                floating: Members) -> None:
+    """Связь судьи должна быть хоть в одном варианте, а связь из всех вариантов — в итоге."""
+    known = [candidate.links(floating) for candidate in candidates]
     for relation in option.relations:
-        if relation.type != "independent" and option.link(relation, floating) not in known_links:
+        if relation.type == "independent":
+            continue
+        if not any(option.link(relation, floating) in links for links in known):
             raise BadAnswer(f"судья придумал связь {relation.source} → {relation.target} "
                             f"({relation.type})")
-    return option, decisions_of(data)
+    if frozenset.intersection(*known) - option.links(floating):
+        raise BadAnswer("судья убрал связь, которая есть во всех вариантах")
+
+
+def unique_relations(relations: Iterable[RelationOption]) -> tuple[RelationOption, ...]:
+    """Одна связь на пару групп. Повтор той же связи просто отбрасывается, две разные —
+    противоречие: «зависит» и «связана», или зависимость в обе стороны."""
+    kept: dict[frozenset[str], RelationOption] = {}
+    for relation in relations:
+        pair = frozenset((relation.source, relation.target))
+        known = kept.setdefault(pair, relation)
+        same = known.type == relation.type and (
+            relation.type != "depends_on" or known.source == relation.source)
+        if not same:
+            raise BadAnswer(f"две разные связи между {relation.source} и {relation.target}")
+    return tuple(kept.values())
 
 
 def decisions_of(data: dict) -> list[JudgeDecision]:

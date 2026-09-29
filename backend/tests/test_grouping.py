@@ -53,6 +53,11 @@ def test_ideas_come_from_fragment_types_not_from_the_answer():
      "несуществующими группами"),
     (option(group("A", [1, 2, 3, 4]), group("B", [5]), relations=[relation("A", "B", "blocks")]),
      "тип связи"),
+    (option(group("A", [1, 2, 3, 4]), group("B", [5]),
+            relations=[relation("A", "B"), relation("A", "B", "depends_on")]), "две разные связи"),
+    (option(group("A", [1, 2, 3, 4]), group("B", [5]),
+            relations=[relation("A", "B", "depends_on"), relation("B", "A", "depends_on")]),
+     "две разные связи"),
     (option(group("A", ["1", 2, 3, 4]), group("B", [5])), "нужен список номеров"),
     ({"groups": []}, "нет списка groups"),
 ])
@@ -82,6 +87,12 @@ def test_a_moved_fragment_or_a_new_relation_is_a_different_grouping():
     assert structure_of(moved, LABELS).key() != base
     assert structure_of(related, LABELS).key() != base
     assert structure_of(independent, LABELS).key() == base   # независимость — не связь
+
+
+def test_a_repeated_relation_is_kept_once():
+    twice = option(group("A", [1, 2, 3, 4]), group("B", [5]),
+                   relations=[relation("A", "B"), relation("B", "A")])
+    assert len(structure_of(twice, LABELS).relations) == 1
 
 
 def test_related_has_no_direction_but_depends_on_has():
@@ -128,6 +139,38 @@ def test_judge_may_share_a_fragment_only_where_some_variant_placed_it():
                    group("C", [3, 5], shared=[4]))
     with pytest.raises(BadAnswer, match="поместил F4 в группу C"):
         judged_structure({"status": "ok", **wider}, LABELS, [shared, apart])
+
+
+def test_a_group_of_shared_fragments_only_must_match_a_variant_whole():
+    # Группы {F1}, {F2} — из одних общих фрагментов: их нельзя слить в новую {F1, F2}.
+    loose = structure_of(option(group("A", [1]), group("B", [2]), group("C", [3], shared=[1]),
+                                group("D", [4], shared=[2]), group("E", [5])), LABELS)
+    merged = option(group("X", [1, 2]), group("C", [3], shared=[1]), group("D", [4], shared=[2]),
+                    group("E", [5]))
+    with pytest.raises(BadAnswer, match="группу, которой нет ни в одном варианте: F1, F2"):
+        judged_structure({"status": "ok", **merged}, LABELS, [loose])
+
+
+def test_judge_may_not_undo_what_every_variant_agreed_on():
+    # Оба варианта ставят риск F3 в A и B и спорят только о связи.
+    both = option(group("A", [1], shared=[3]), group("B", [2], shared=[3]), group("C", [4, 5]))
+    linked = {**both, "relations": [relation("A", "B")]}
+    candidates = [structure_of(both, LABELS), structure_of(linked, LABELS)]
+    dropped = option(group("A", [1, 3]), group("B", [2]), group("C", [4, 5]))
+    with pytest.raises(BadAnswer, match="убрал F3 из группы B"):
+        judged_structure({"status": "ok", **dropped}, LABELS, candidates)
+
+    # Оба варианта связывают B с A и спорят только о том, общий ли F4.
+    depends = [relation("B", "A", "depends_on")]
+    apart = option(group("A", [1, 2]), group("B", [3]), group("C", [4, 5]), relations=depends)
+    shared = option(group("A", [1, 2], shared=[4]), group("B", [3]), group("C", [5], shared=[4]),
+                    relations=depends)
+    candidates = [structure_of(apart, LABELS), structure_of(shared, LABELS)]
+    unlinked = {**apart, "relations": []}
+    with pytest.raises(BadAnswer, match="убрал связь, которая есть во всех вариантах"):
+        judged_structure({"status": "ok", **unlinked}, LABELS, candidates)
+    chosen, _ = judged_structure({"status": "ok", **apart}, LABELS, candidates)
+    assert len(chosen.relations) == 1
 
 
 def test_judge_refusal_and_its_decisions():

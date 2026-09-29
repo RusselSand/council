@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus, type Label,
+  api, ApiError, councilPath, isNotFound,
+  type Council, type CouncilPatch, type CouncilStatus, type Label, type Slicing,
 } from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
@@ -30,6 +31,24 @@ const loadCouncil = (id: string) => Promise.all([
   api.settings(),
 ])
 
+/**
+ * Нарезка из ответа на запуск. sent — нарезка на экране, когда запрос ушёл: типы, поменянные
+ * здесь после этого, ответ ещё не знает, и они остаются. Остальное — как на сервере, в том
+ * числе правки из других вкладок.
+ */
+const rebased = (fresh: Slicing | null, sent: Slicing, mine: Slicing | null): Slicing | null => {
+  if (fresh?.state !== 'done' || fresh.run !== sent.run || mine?.run !== sent.run) return fresh
+  const before = new Map(sent.fragments.map(f => [f.id, f.label]))
+  const now = new Map(mine.fragments.map(f => [f.id, f.label]))
+  return {
+    ...fresh,
+    fragments: fresh.fragments.map(f => {
+      const label = now.get(f.id)
+      return label !== undefined && label !== before.get(f.id) ? { ...f, label } : f
+    }),
+  }
+}
+
 export function CouncilPage({ stage }: Readonly<{ stage: Stage }>) {
   const { id = '' } = useParams()
   // Свой экземпляр на каждый совет: очередь сохранения не перенесёт правки в чужой.
@@ -41,14 +60,12 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
 
   // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
-  // Готовая нарезка того же прогона остаётся своя: в её типах бывают правки, которые сервер
-  // ещё не подтвердил, и ответ на запуск раскладки их бы откатил.
-  const adopt = useCallback((fresh: Council) =>
-    update(([c, settings]) => {
-      const own = c.slicing?.state === 'done' && c.slicing.run === fresh.slicing?.run
-      const slicing = own ? c.slicing : fresh.slicing
-      return [{ ...c, status: fresh.status, slicing, structure: fresh.structure }, settings]
-    }), [update])
+  // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
+  const adopt = useCallback((fresh: Council, sent?: Slicing | null) =>
+    update(([c, settings]) => [{
+      ...c, status: fresh.status, structure: fresh.structure,
+      slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
+    }, settings]), [update])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {
