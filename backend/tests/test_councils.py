@@ -90,14 +90,17 @@ class FakeAgents:
         self.asked = []
         self.fresh_under_lock = []
         self.on_probe = None   # что случится, пока идёт проверка входа
+        self.online = {"sol", "fable"}
+        self.probed = []       # (кого, fresh) — каждая проверка входа
 
     def availability(self, aliases, *, fresh=False):
+        aliases = list(aliases)
+        self.probed.append((frozenset(aliases), fresh))
         if fresh:
             self.fresh_under_lock.append(councils_api._starting.locked())
             if self.on_probe:
                 self.on_probe()
-                self.on_probe = None
-        return {alias: alias in ("sol", "fable") for alias in aliases}
+        return {alias: alias in self.online for alias in aliases}
 
     def ask(self, model, prompt, key):
         self.asked.append(key)
@@ -250,6 +253,7 @@ def test_start_that_lost_the_race_during_the_login_check_is_refused(agents):
     council_id = sliced_council(agents)
 
     def other_tab_starts_and_finishes():
+        agents.on_probe = None
         finished = start(["sol", "fable"], "fable").model_copy(update={"state": "done"})
         get_store().update_council(council_id, {"slicing": finished})
 
@@ -268,3 +272,32 @@ def test_start_while_the_server_stops_leaves_a_failed_slicing_not_a_stuck_one(ag
     app.dependency_overrides[get_launcher] = lambda: closed_pool
     assert client.post(f"/api/councils/{council_id}/slicing").status_code == 503
     assert client.get(f"/api/councils/{council_id}").json()["slicing"]["state"] == "failed"
+
+
+def test_lineup_changed_during_the_login_check_is_checked_again_outside_the_lock(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+
+    def judge_changes():
+        agents.on_probe = None
+        get_store().update_council(council_id, {"judge": "astra"})
+
+    agents.on_probe = judge_changes
+    res = client.post(f"/api/councils/{council_id}/slicing")
+    assert res.status_code == 422
+    assert res.json()["detail"] == "Нет подключения к моделям: Gemini Astra 3"
+    assert agents.probed == [(frozenset({"sol", "fable"}), True),
+                             (frozenset({"sol", "fable", "astra"}), True)]
+    assert agents.fresh_under_lock == [False, False]
+
+
+def test_lineup_that_keeps_changing_gives_up_with_409(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+    agents.online.add("astra")
+    judges = iter(["astra", "fable", "astra", "fable"])
+    agents.on_probe = lambda: get_store().update_council(council_id, {"judge": next(judges)})
+    res = client.post(f"/api/councils/{council_id}/slicing")
+    assert res.status_code == 409
+    assert agents.fresh_under_lock == [False] * councils_api.PROBE_ATTEMPTS
+    assert agents.asked == []

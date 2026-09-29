@@ -25,6 +25,9 @@ CANNOT_SLICE = {
 # под замком не запускаем.
 _starting = Lock()
 
+# Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
+PROBE_ATTEMPTS = 3
+
 
 @router.get("")
 def list_councils(store: StoreDep) -> list[Council]:
@@ -89,25 +92,31 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                   launch: LauncherDep) -> Council:
     """Запускает нарезку и разметку текста советом. Идёт в фоне минутами: ход виден в
     council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
-    # Вход проверяем заново, а не из памяти: запуск платный. Это запуски CLI, поэтому до
-    # замка; под замком — снова состояние и состав, который могли поменять за это время.
+    def report(slicing: Slicing) -> None:
+        store.update_council(council_id, {"slicing": slicing}, touch=slicing.state != "running")
+
     before = startable(store.get_council(council_id))
-    check_online(before, config, agents, fresh=True)
-    with _starting:
-        council = startable(store.get_council(council_id))
-        # Пока шла проверка, нарезку мог запустить и даже закончить другой запрос: второй
-        # запуск заплатил бы за тот же ход ещё раз и затёр бы итог.
-        if run_of(council) != run_of(before):
-            raise HTTPException(409, "Нарезку уже запустили")
-        check_online(council, config, agents, fresh=False)  # проверенные — из памяти
-
-        def report(slicing: Slicing) -> None:
-            store.update_council(council_id, {"slicing": slicing}, touch=slicing.state != "running")
-
-        pipeline = Pipeline(council.id, council.brief, council.participants, council.judge,
-                            agents, report)
-        council = store.update_council(council_id, {"slicing": pipeline.state.model_copy(deep=True),
-                                                    "status": CouncilStatus.slices})
+    for _ in range(PROBE_ATTEMPTS):
+        # Вход — заново, а не из памяти: запуск платный. Это запуски CLI, поэтому вне замка.
+        check_online(before, config, agents, fresh=True)
+        with _starting:
+            council = startable(store.get_council(council_id))
+            # Пока шла проверка, нарезку мог запустить и даже закончить другой запрос: второй
+            # запуск заплатил бы за тот же ход ещё раз и затёр бы итог.
+            if run_of(council) != run_of(before):
+                raise HTTPException(409, "Нарезку уже запустили")
+            if lineup(council) == lineup(before):
+                pipeline = Pipeline(council.id, council.brief, council.participants,
+                                    council.judge, agents, report)
+                council = store.update_council(council_id, {
+                    "slicing": pipeline.state.model_copy(deep=True),
+                    "status": CouncilStatus.slices,
+                })
+                break
+        # Состав поменяли, пока шла проверка: проверяем новый, и снова вне замка.
+        before = council
+    else:
+        raise HTTPException(409, "Состав совета меняется прямо сейчас — попробуйте ещё раз")
     try:
         launch(pipeline.run)
     except RuntimeError as exc:
@@ -118,6 +127,11 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
         store.update_council(council_id, {"slicing": failed})
         raise HTTPException(503, "Сервер останавливается, нарезка не запущена") from exc
     return council
+
+
+def lineup(council: Council) -> frozenset[str]:
+    """Кого запустит нарезка: участники и судья."""
+    return frozenset([*council.participants, council.judge])
 
 
 def run_of(council: Council) -> str | None:
