@@ -5,6 +5,7 @@ COUNCIL_<ALIAS>_HOME в .env или окружении; в докере его �
 делается заранее на хосте, см. README: python -m agent_workers login --home <каталог>.
 """
 
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -94,8 +95,8 @@ class AgentRunner:
         try:
             self._worker(alias).check()
             ok = True
-        except (RuntimeError, OSError, ValueError):
-            ok = False
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            ok = False  # нет входа, CLI не запускается или зависла (TimeoutExpired)
         self._checked[alias] = (ok, time.monotonic())
         return ok
 

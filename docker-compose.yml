@@ -33,7 +33,8 @@ services:
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
       WATCHFILES_FORCE_POLLING: "true"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/settings')"]
+      # Не /api/settings: он спрашивает CLI моделей о входе, а проверка здоровья идёт каждые 5 с.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/councils')"]
       interval: 5s
       timeout: 3s
       retries: 12

@@ -2,6 +2,7 @@ from threading import Lock
 
 from fastapi import APIRouter, HTTPException
 
+from ..agents import AgentRunner
 from ..config import MIN_PARTICIPANTS, AppConfig
 from ..deps import AgentsDep, ConfigDep, LauncherDep, StoreDep
 from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Label, Slicing
@@ -18,6 +19,8 @@ CANNOT_SLICE = {
 }
 
 # Проверка «уже идёт» и запуск — одним куском, иначе два клика запустили бы две нарезки.
+# Тот же замок у правки типов: они меняют готовую нарезку. Внутри — только короткое: CLI
+# под замком не запускаем.
 _starting = Lock()
 
 
@@ -48,13 +51,15 @@ def update_council(
 ) -> Council:
     check_models(patch, config)
     changes = patch.model_dump(exclude_none=True, exclude={"labels"})
-    with _starting:  # типы и запуск нарезки не должны разойтись
-        if patch.labels is not None:
+    if patch.labels is None:
+        council = store.update_council(council_id, changes)
+    else:
+        with _starting:  # типы и запуск нарезки не должны разойтись
             current = store.get_council(council_id)
             if current is None:
                 raise HTTPException(404, "Совет не найден")
             changes["slicing"] = relabeled(current.slicing, patch.labels)
-        council = store.update_council(council_id, changes)
+            council = store.update_council(council_id, changes)
     if council is None:
         raise HTTPException(404, "Совет не найден")
     return council
@@ -78,20 +83,12 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                   launch: LauncherDep) -> Council:
     """Запускает нарезку и разметку текста советом. Идёт в фоне минутами: ход виден в
     council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
+    # Вход проверяем заново, а не из памяти: запуск платный. Это запуски CLI, поэтому до
+    # замка; под замком — снова состояние и состав, который могли поменять за это время.
+    check_online(startable(store.get_council(council_id)), config, agents, fresh=True)
     with _starting:
-        council = store.get_council(council_id)
-        if council is None:
-            raise HTTPException(404, "Совет не найден")
-        if council.slicing and council.slicing.state == "running":
-            raise HTTPException(409, "Нарезка уже идёт")
-        if not council.brief.strip():
-            raise HTTPException(422, "Нарезать нечего: текст пуст")
-        names = {model.alias: model.display_name for model in config.models}
-        # Проверяем вход заново, а не из памяти: запуск платный.
-        available = agents.availability([*council.participants, council.judge], fresh=True)
-        offline = [names.get(m, m) for m, ok in available.items() if not ok]
-        if offline:
-            raise HTTPException(422, f"Нет подключения к моделям: {', '.join(offline)}")
+        council = startable(store.get_council(council_id))
+        check_online(council, config, agents, fresh=False)  # проверенные — из памяти
 
         def report(slicing: Slicing) -> None:
             store.update_council(council_id, {"slicing": slicing}, touch=slicing.state != "running")
@@ -102,6 +99,24 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                                                     "status": CouncilStatus.slices})
     launch(pipeline.run)
     return council
+
+
+def startable(council: Council | None) -> Council:
+    if council is None:
+        raise HTTPException(404, "Совет не найден")
+    if council.slicing and council.slicing.state == "running":
+        raise HTTPException(409, "Нарезка уже идёт")
+    if not council.brief.strip():
+        raise HTTPException(422, "Нарезать нечего: текст пуст")
+    return council
+
+
+def check_online(council: Council, config: AppConfig, agents: AgentRunner, *, fresh: bool) -> None:
+    names = {model.alias: model.display_name for model in config.models}
+    available = agents.availability([*council.participants, council.judge], fresh=fresh)
+    offline = [names.get(m, m) for m, ok in available.items() if not ok]
+    if offline:
+        raise HTTPException(422, f"Нет подключения к моделям: {', '.join(offline)}")
 
 
 def check_models(patch: CouncilPatch, config: AppConfig) -> None:

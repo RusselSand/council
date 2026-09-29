@@ -1,10 +1,12 @@
 """Совет: участники, судья, правки с экрана ввода и запуск нарезки."""
 
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
 
+from spec_council.api import councils as councils_api
 from spec_council.app import app
 from spec_council.config import DEFAULT_CONFIG
 from spec_council.deps import get_agents, get_launcher, get_store
@@ -86,8 +88,11 @@ class FakeAgents:
     def __init__(self, text):
         self.text = text
         self.asked = []
+        self.fresh_under_lock = []
 
     def availability(self, aliases, *, fresh=False):
+        if fresh:
+            self.fresh_under_lock.append(councils_api._starting.locked())
         return {alias: alias in ("sol", "fable") for alias in aliases}
 
     def ask(self, model, prompt, key):
@@ -195,3 +200,19 @@ def test_labels_need_a_finished_slicing(agents):
     council_id = new_council()
     res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
     assert res.status_code == 409
+
+
+def test_login_check_before_a_start_runs_outside_the_lock(agents):
+    sliced_council(agents)
+    assert agents.fresh_under_lock == [False]
+
+
+def test_ordinary_edits_do_not_wait_for_a_slicing_start():
+    council_id = new_council()
+    done = []
+    with councils_api._starting:   # как будто идёт запуск нарезки
+        edit = threading.Thread(daemon=True, target=lambda: done.append(
+            client.patch(f"/api/councils/{council_id}", json={"name": "Проект"}).status_code))
+        edit.start()
+        edit.join(5)
+    assert done == [200]

@@ -1,5 +1,7 @@
 """Подключение моделей: вход подтверждает CLI, а не файлы в каталоге."""
 
+import subprocess
+
 from spec_council.agents import AgentRunner
 from spec_council.config import Agent
 
@@ -13,7 +15,10 @@ class Login:
 
     def check(self):
         self.checks += 1
-        if not self.answers.pop(0):
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        if not answer:
             raise RuntimeError("нет входа")
 
 
@@ -50,3 +55,8 @@ def test_no_folder_means_no_login_without_asking_the_cli(tmp_path, monkeypatch):
 def test_model_without_a_provider_is_never_available(tmp_path):
     runner = AgentRunner({"sol": Agent(provider="codex", model="gpt-5.6-sol")})
     assert runner.availability(["astra"]) == {"astra": False}
+
+
+def test_hung_cli_is_not_logged_in_and_not_a_500(tmp_path, monkeypatch):
+    login = Login(subprocess.TimeoutExpired(["claude", "auth", "status"], 60))
+    assert runner_with(tmp_path, monkeypatch, login).available("sol") is False

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
@@ -67,8 +67,18 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule({ labels: Object.fromEntries(fragments.map(f => [f.id, f.label])) }, 0)
   }, [council?.slicing, update, schedule])
 
-  useInterval(() => { api.council(id).then(sliced, () => { /* следующий опрос */ }) },
-              council?.slicing?.state === 'running' ? POLL_MS : null)
+  // Опрос, пока нарезка идёт. Следующий запрос — только после ответа на предыдущий, и ответ
+  // принимается, только пока нарезка на экране ещё идёт: запоздалый не затрёт итог и правки типов.
+  const polling = useRef(false)
+  const polled = useCallback((fresh: Council) =>
+    update(([c, settings]) => (c.slicing?.state === 'running'
+      ? [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]
+      : [c, settings])), [update])
+  useInterval(() => {
+    if (polling.current) return
+    polling.current = true
+    api.council(id).then(polled, () => { /* следующий опрос */ }).finally(() => { polling.current = false })
+  }, council?.slicing?.state === 'running' ? POLL_MS : null)
 
   if (state.kind === 'error' && state.error instanceof CouncilMissing) return (
     <main className="main">

@@ -33,9 +33,12 @@ class InMemoryStore:
         self._lock = Lock()
 
     def list_councils(self) -> list[Council]:
+        # Снимок под замком: запись переставляет совет в словаре, и обход без замка
+        # мог бы пропустить его, повторить или упасть на изменившемся размере.
+        with self._lock:
+            councils = list(self._councils.values())
         # Свежие сверху. При равном времени выше тот, кого тронули позже: он дальше в словаре.
-        councils = reversed(self._councils.values())
-        return sorted(councils, key=lambda council: council.updated_at, reverse=True)
+        return sorted(reversed(councils), key=lambda council: council.updated_at, reverse=True)
 
     def get_council(self, council_id: str) -> Council | None:
         return self._councils.get(council_id)

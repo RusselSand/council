@@ -131,7 +131,8 @@ describe('CouncilPage', () => {
     fetchMock.mockImplementation(server())
     renderAt('/councils/demo-1/brief')
     expect(await screen.findByRole('heading', { name: COUNCIL.name })).toBeTruthy()
-    expect(screen.getByRole('banner').textContent).toContain(COUNCIL.name)
+    // Имя в шапку ставит эффект страницы — он может отработать чуть позже заголовка.
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain(COUNCIL.name))
     expect(screen.getByRole('link', { name: /Нарезка/ }).textContent).toContain(ru['council.stageDone'])
     expect(screen.getByRole('link', { name: /Структура/ }).textContent).not.toContain(ru['council.stageDone'])
   })
@@ -380,6 +381,35 @@ describe('Нарезка', () => {
     fireEvent.click(await screen.findByRole('button', { name: ru['slices.retry'] }))
     expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
     expect(screen.queryByText('Нарезка уже идёт')).toBeNull()
+  })
+
+  it('опрос не копит запросы, а запоздалый ответ не затирает правку типа', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const pending: ((council: Council) => void)[] = []
+      let first = true
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (url === '/api/councils/demo-1' && !init?.method) {
+          if (first) { first = false; return json({ ...COUNCIL, slicing: RUNNING }) }
+          return new Promise<Response>(r => pending.push(c => r(new Response(JSON.stringify(c)))))
+        }
+        return server()(url, init)
+      })
+      renderAt('/councils/demo-1/slices')
+      expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
+
+      vi.advanceTimersByTime(POLL_MS * 3)          // три такта, а ответа всё нет
+      expect(pending).toHaveLength(1)
+
+      pending[0]({ ...COUNCIL, slicing: DONE })
+      const first1 = await screen.findByRole('radiogroup', { name: 'F1' })
+      fireEvent.click(within(first1).getByRole('radio', { name: ru['label.risk'] }))
+      vi.advanceTimersByTime(POLL_MS * 3)          // нарезка готова — больше не спрашиваем
+      expect(pending).toHaveLength(1)
+      expect(within(first1).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('упавшая — причина и повтор', async () => {
