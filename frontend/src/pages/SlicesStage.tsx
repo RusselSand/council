@@ -12,7 +12,7 @@ import { Progress } from '../components/Progress'
 import { ReadyBadge, RunStatus } from '../components/RunStatus'
 import { SaveStatus } from '../components/SaveStatus'
 import type { Autosave } from '../useAutosave'
-import { useStart } from '../useStart'
+import { useAction } from '../useAction'
 
 /**
  * Нарезка: участники по отдельности режут текст на смысловые фрагменты и размечают их,
@@ -62,7 +62,7 @@ function NextStep({ council, onStart, saver }: Readonly<{
   const { t } = useTranslation()
   const nav = useNavigate()
   const sent = useRef<Slicing | null>(null)
-  const { busy, error, go } = useStart(started => onStart(started, sent.current))
+  const { busy, error, go } = useAction(started => onStart(started, sent.current))
   const structure = council.structure
   const stale = structure !== null && structureIsStale(council)
   const propose = () => {

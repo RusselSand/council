@@ -173,6 +173,21 @@ a.card:hover { border-color: var(--accent) }
 .group-letter { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: var(--fg); color: #fff; font-size: 12.5px; font-weight: 600 }
 .group-tag { padding: 1px 8px; border-radius: 99px; background: #ececef; color: var(--fg-soft); font-size: 12px }
 .group-actions { display: flex; gap: 8px; margin-left: auto }
+.group-title { display: flex; min-width: 0 }
+.group-title-button { padding: 0; border: 0; background: none; font-weight: inherit; text-align: left; cursor: text }
+.group-title-button:disabled { cursor: default }
+.group-title-pen { margin-left: 6px; color: var(--fg-faint); font-weight: 400; opacity: 0; transition: opacity .15s }
+.group-title-button:hover .group-title-pen, .group-title-button:focus-visible .group-title-pen { opacity: 1 }
+.group-title-input { min-width: 24ch; padding: 3px 8px; font-size: inherit }
+.merge { position: relative }
+.merge-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 10; display: grid; width: max-content; min-width: 240px; max-width: 420px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 8%) }
+.merge-menu button { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: 6px; background: none; font-size: 13.5px; text-align: left }
+.merge-menu button:hover, .merge-menu button:focus-visible { background: var(--surface-sunken) }
+.merge-menu .group-letter { flex: none; width: 20px; height: 20px; font-size: 11px }
+.group-fragment-pick { display: contents; cursor: pointer }
+.group-fragment-pick input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent) }
+.group-split { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px }
+.group-split .text-field { flex: 1; min-width: 200px; padding: 7px 12px; font-weight: 400 }
 .group-note { margin: 10px 0 0; color: var(--fg-soft); font-size: 13px }
 .group-fragments { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none }
 .group-fragment { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px }

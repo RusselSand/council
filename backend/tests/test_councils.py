@@ -97,7 +97,7 @@ class FakeAgents:
         aliases = list(aliases)
         self.probed.append((frozenset(aliases), fresh))
         if fresh:
-            self.fresh_under_lock.append(councils_api._starting.locked())
+            self.fresh_under_lock.append(councils_api.council_lock.locked())
             if self.on_probe:
                 self.on_probe()
         return {alias: alias in self.online for alias in aliases}
@@ -229,7 +229,7 @@ def test_login_check_before_a_start_runs_outside_the_lock(agents):
 def test_ordinary_edits_do_not_wait_for_a_slicing_start():
     council_id = new_council()
     done = []
-    with councils_api._starting:   # как будто идёт запуск нарезки
+    with councils_api.council_lock:   # как будто идёт запуск нарезки
         edit = threading.Thread(daemon=True, target=lambda: done.append(
             client.patch(f"/api/councils/{council_id}", json={"name": "Проект"}).status_code))
         edit.start()
@@ -319,6 +319,8 @@ def test_groups_are_built_from_a_finished_slicing(agents):
     assert [(g["id"], g["title"], g["fragment_ids"]) for g in structure["groups"]] == [
         ("A", "Воркер", [1])]
     assert structure["labels"] == {"1": "idea"}
+    assert structure["proposal"]["groups"] == structure["groups"]
+    assert structure["edited"] is False
 
 
 def test_groups_need_a_finished_slicing(agents):

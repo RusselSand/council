@@ -50,6 +50,8 @@ export interface StructureDecision { issue: string; decision: string; reason: st
 export interface Structure {
   state: 'running' | 'done' | 'failed'; run: string; slicing_run: string; labels: Record<number, Label>
   steps: Step[]; groups: Group[]; relations: GroupRelation[]; decisions: StructureDecision[]
+  /** Как предложил совет; groups и relations — с правками человека, edited — они различаются. */
+  proposal: { groups: Group[]; relations: GroupRelation[] } | null; edited: boolean
   error: string | null
 }
 /** Правка с экрана: меняются только присланные поля. */
@@ -90,6 +92,12 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
 const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
 
+/** Правка готовых групп; run — к какой раскладке она (Structure.run), иначе 409. */
+const editGroups = (id: string, action: 'merge' | 'split' | 'rename' | 'restore', body: object) =>
+  request<Council>(`${councilUrl(id)}/structure/${action}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+
 export const api = {
   councils: () => request<Council[]>('/api/councils'),
   council: (id: string) => request<Council>(councilUrl(id)),
@@ -99,6 +107,14 @@ export const api = {
   }),
   startSlicing: (id: string) => request<Council>(`${councilUrl(id)}/slicing`, { method: 'POST' }),
   startStructure: (id: string) => request<Council>(`${councilUrl(id)}/structure`, { method: 'POST' }),
+  /** group — где нажали: её буква и название остаются. */
+  mergeGroups: (id: string, run: string, group: string, other: string) =>
+    editGroups(id, 'merge', { run, group, other }),
+  splitGroup: (id: string, run: string, group: string, fragmentIds: number[], title: string) =>
+    editGroups(id, 'split', { run, group, fragment_ids: fragmentIds, title }),
+  renameGroup: (id: string, run: string, group: string, title: string) =>
+    editGroups(id, 'rename', { run, group, title }),
+  restoreGroups: (id: string, run: string) => editGroups(id, 'restore', { run }),
   settings: () => request<Settings>('/api/settings'),
 }
 
