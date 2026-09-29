@@ -726,6 +726,55 @@ describe('Правка групп', () => {
     expect(within(await card('Воркер')).queryByRole('alert')).toBeNull()
   })
 
+  it('состав группы поменялся, пока открыто разделение, — черновик сброшен', async () => {
+    // Откат возвращает A = {F1}, B = {F2}: отмеченное к прежнему составу уже не относится.
+    const proposal: Structure = { ...GROUPED, relations: [],
+      groups: [{ ...GROUPED.groups[0], fragment_ids: [1], shared_fragment_ids: [] },
+               { ...GROUPED.groups[1], shared_fragment_ids: [] }] }
+    openWith(() => json(grouped(proposal)), grouped(MERGED))
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F2' }))
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.restore'] }))
+    expect(await screen.findByRole('region', { name: 'Хранение' })).toBeTruthy()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.queryByRole('form')).toBeNull()
+  })
+
+  it('пока запускается новая раскладка, группы не правятся', async () => {
+    let answer!: () => void
+    const stale = grouped({ ...GROUPED, labels: { 1: 'idea', 2: 'risk' } })
+    fetchMock.mockImplementation(server({
+      council: () => stale,
+      group: () => new Promise<Response>(r => { answer = () => r(new Response(JSON.stringify(stale), { status: 202 })) }),
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(await screen.findByRole('button', { name: ru['groups.again'] }))
+    const a = await card('Воркер')
+    await waitFor(() => expect(groupStarts).toBe(1))
+    for (const name of [ru['groups.merge'], ru['groups.split'], 'Воркер']) {
+      expect((within(a).getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
+    }
+    answer()
+    await waitFor(() => expect((within(a).getByRole('button', { name: ru['groups.merge'] }) as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('группы, где правили, больше нет (409) — ошибка в шапке', async () => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = grouped({ ...GROUPED, run: 'g2', relations: [], groups: [{ ...GROUPED.groups[0], shared_fragment_ids: [] }] })
+        return json({ detail: 'Группы уже разложили заново — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await card('Хранение')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'A Воркер' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Группы уже разложили заново — правка была к прежним')
+    expect(screen.queryByRole('region', { name: 'Хранение' })).toBeNull()
+  })
+
   it('группы уже разложили заново (409) — видны нынешние', async () => {
     let current = grouped()
     fetchMock.mockImplementation(server({

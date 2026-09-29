@@ -58,6 +58,9 @@ function Result({ council, structure, restart, onChange }: Readonly<{
   const { t } = useTranslation()
   const again = useAction(onChange)
   const edits = useAction(onChange, 'groups.editFailed')
+  // Правка, пока запускается новая раскладка, пропала бы под ней, поэтому пока идёт одно —
+  // другое недоступно.
+  const busy = again.busy || edits.busy
   // Где была последняя правка: там и показать, если сервер её не принял.
   const [editedAt, setEditedAt] = useState<string | null>(null)
   const answered = structure.steps.find(s => s.name === 'structure')?.runs.filter(r => r.state === 'done').length ?? 0
@@ -81,7 +84,9 @@ function Result({ council, structure, restart, onChange }: Readonly<{
     split: (ids, title) => edit(group.id, run => api.splitGroup(council.id, run, group.id, ids, title)),
     rename: title => edit(group.id, run => api.renameGroup(council.id, run, group.id, title)),
   })
-  const errorAt = (where: string | null) => (editedAt === where ? edits.error : null)
+  // Группы, где правили, после ответа может уже не быть (409 — разложили заново): тогда в шапку.
+  const target = editedAt !== null && structure.groups.some(g => g.id === editedAt) ? editedAt : null
+  const errorAt = (where: string | null) => (target === where ? edits.error : null)
 
   return (
     <>
@@ -90,7 +95,7 @@ function Result({ council, structure, restart, onChange }: Readonly<{
         {structure.edited && (
           <p className="fragment-note">
             {t('groups.edited')}{' '}
-            <button className="btn-link" disabled={edits.busy}
+            <button className="btn-link" disabled={busy}
                     onClick={() => void edit(null, run => api.restoreGroups(council.id, run))}>
               {t('groups.restore')}
             </button>
@@ -99,7 +104,7 @@ function Result({ council, structure, restart, onChange }: Readonly<{
         {stale && (
           <p className="fragment-note">
             {t('groups.stale')}{' '}
-            <button className="btn-link" onClick={() => void again.go(restart)} disabled={again.busy}>{t('groups.again')}</button>
+            <button className="btn-link" onClick={() => void again.go(restart)} disabled={busy}>{t('groups.again')}</button>
           </p>
         )}
         {again.error && <p className="error-text" role="alert">{again.error}</p>}
@@ -110,10 +115,12 @@ function Result({ council, structure, restart, onChange }: Readonly<{
           </p>
         ))}
       </Panel>
+      {/* Состав группы поменялся (объединение, откат) — карточка заново: черновик разделения
+          был к прежнему составу. */}
       {structure.groups.map(group => (
-        <GroupCard key={group.id} group={group} groups={structure.groups} fragments={fragments}
-                   relations={structure.relations.filter(r => r.source === group.id || r.target === group.id)}
-                   edits={editsOf(group)} busy={edits.busy} error={errorAt(group.id)} />
+        <GroupCard key={`${group.id}:${group.fragment_ids.join(',')}`} group={group} groups={structure.groups}
+                   fragments={fragments} edits={editsOf(group)} busy={busy} error={errorAt(group.id)}
+                   relations={structure.relations.filter(r => r.source === group.id || r.target === group.id)} />
       ))}
     </>
   )

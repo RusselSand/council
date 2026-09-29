@@ -105,7 +105,7 @@ export const en: Dict = {
   'groups.merge': 'Merge with…',
   'groups.mergeMenu': 'Which group to merge with',
   'groups.split': 'Split',
-  'groups.splitHint': 'Check what goes to the new group. Ideas and links stay with this one.',
+  'groups.splitHint': 'Check what goes to the new group. Links to other groups stay with this one.',
   'groups.newTitle': 'New group title',
   'groups.cancel': 'Cancel',
   'groups.rename': 'Rename',
