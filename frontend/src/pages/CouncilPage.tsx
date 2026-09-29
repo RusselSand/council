@@ -25,7 +25,7 @@ const isDone = (stageIndex: number, status: CouncilStatus) => stageIndex < STATU
 class CouncilMissing extends Error {}
 
 const loadCouncil = (id: string) => Promise.all([
-  api.council(id).catch((e: unknown) => Promise.reject(isNotFound(e) ? new CouncilMissing() : e)),
+  api.council(id).catch((e: unknown) => { throw isNotFound(e) ? new CouncilMissing() : e }),
   api.settings(),
 ])
 
