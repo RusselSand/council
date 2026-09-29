@@ -88,12 +88,71 @@ a.card:hover { border-color: var(--accent) }
 .select-label { display: block; font-size: 10.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted) }
 .select-field select { width: 100%; padding: 2px 22px 2px 0; border: 0; outline: 0; background: transparent no-repeat right 2px center / 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2318181b' stroke-width='1.6'/%3E%3C/svg%3E"); appearance: none; font-weight: 600; cursor: inherit }
 
-/* Этап «Ввод». Не .brief: это класс статуса у .pill. */
-.brief-layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 20px; align-items: start }
-.brief-side { display: grid; gap: 16px }
+/* Этап: основное слева, панели справа. Не .brief и не .slices: это классы статуса у .pill. */
+.stage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 410px; gap: 20px; align-items: start }
+.stage-side { display: grid; gap: 16px }
+
+/* Этап «Ввод». */
 .brief-text { display: block; min-height: 300px; padding: 14px 16px; resize: vertical; line-height: 1.7 }
 .brief-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px }
 .brief-foot > .btn-primary { margin-left: auto }
 @media (max-width: 900px) {
-  .brief-layout { grid-template-columns: 1fr }
+  .stage-layout { grid-template-columns: 1fr }
+}
+
+.model-offline { color: var(--danger) }
+
+/* Этап «Нарезка»: ход работы по шагам и моделям. */
+.step-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none }
+.step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px }
+.step-note { margin: 0; color: var(--fg-muted); font-size: 12.5px }
+.step-name { min-width: 0; font-weight: 600; font-size: 13.5px }
+.step-state, .run-state { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap }
+.step-state.running, .run-state.running { color: var(--accent) }
+.step-state.done, .run-state.done { color: var(--ok) }
+.step-state.failed, .run-state.failed { color: var(--danger) }
+.run { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px }
+.run + .run { margin-top: 6px }
+.run-error { flex-basis: 100%; margin: 2px 0 0; color: var(--danger); font-size: 12.5px; overflow-wrap: anywhere }
+
+/* Типы фрагментов: один набор цветов для чипов, подсветки и легенды.
+   Классы с префиксом label-: голые имена заняты статусами .pill. */
+.label-idea { --label-fg: #3f4fc9; --label-bg: #eceefc; --label-border: #8b95e6 }
+.label-question { --label-fg: #7a3fb8; --label-bg: #f3ebfb; --label-border: #b48be0 }
+.label-proposal { --label-fg: #8a5a00; --label-bg: #fdf1dc; --label-border: #d9a441 }
+.label-constraint { --label-fg: #52525b; --label-bg: #ececef; --label-border: #a1a1aa }
+.label-risk { --label-fg: #b3261e; --label-bg: #fde8e7; --label-border: #e8918b }
+
+.label-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px }
+.label-chip { padding: 2px 10px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface); color: var(--fg-muted); font-size: 12px; white-space: nowrap }
+.label-chip:hover { border-color: var(--fg-faint); color: var(--fg-soft) }
+.label-chip.selected { border-color: var(--label-border); background: var(--label-bg); color: var(--label-fg); font-weight: 600; cursor: default }
+
+.sliced-text { margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-sunken); line-height: 2.1; white-space: pre-wrap }
+.fragment-mark { padding: 3px 5px; border-radius: 4px; background: var(--label-bg); color: var(--label-fg); -webkit-box-decoration-break: clone; box-decoration-break: clone }
+
+.label-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 14px 0 0; padding: 0; list-style: none; color: var(--fg-muted); font-size: 12.5px }
+.label-swatch { display: inline-block; width: 11px; height: 11px; margin-right: 6px; border: 1.5px solid var(--label-border); border-radius: 3px; vertical-align: -1px }
+
+/* Итог нарезки: слева ход работы, справа текст и фрагменты. */
+.slices-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; align-items: start }
+/* min-width: 0 — длинный текст в узкой колонке переносится, а не раздвигает её. */
+.slices-side { grid-column: 1; grid-row: 1; min-width: 0 }
+.slices-side .step-list > li, .slices-side .run { min-width: 0 }
+.slices-main { grid-column: 2; display: grid; gap: 16px }
+.slices-side .run { padding: 6px 8px }
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px }
+.panel-title.caps { margin-bottom: 8px; color: var(--fg-muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase }
+.pill.badge { text-transform: uppercase; letter-spacing: .04em }
+
+.fragment-list { margin: 0; padding: 0; list-style: none }
+.fragment-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 4px 12px; align-items: start; padding: 12px 0; border-top: 1px solid var(--border) }
+.fragment-row:first-child { border-top: 0; padding-top: 4px }
+.fragment-id { padding-top: 1px; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums }
+.fragment-note { margin: 4px 0 0; color: #8a5a00; font-size: 12px }
+@media (max-width: 900px) {
+  .slices-layout { grid-template-columns: 1fr }
+  .slices-side, .slices-main { grid-column: 1; grid-row: auto }
+  .fragment-row { grid-template-columns: 28px minmax(0, 1fr) }
+  .fragment-row .label-chips { grid-column: 2; justify-content: flex-start }
 }

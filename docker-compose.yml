@@ -2,20 +2,50 @@
 # Сборка в один контейнер — профиль prod (сервис app).
 name: council
 
+# Где модели совета видят свои учётные записи внутри контейнера. HOME — куда CLI пишут
+# мелочи вне своих каталогов: под произвольным UID без записи в /etc/passwd это «/», а туда
+# писать нельзя.
+x-accounts: &accounts
+  COUNCIL_SOL_HOME: /data/accounts/sol
+  COUNCIL_FABLE_HOME: /data/accounts/fable
+  HOME: /tmp
+
+# Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста.
+# - Windows и macOS: root, по умолчанию. Docker Desktop показывает каталоги учётных записей
+#   принадлежащими root и с правами «только владельцу», другой пользователь в них не войдёт.
+# - Linux: впишите в .env свои id -u и id -g как COUNCIL_UID и COUNCIL_GID. Иначе root
+#   оставит в .accounts свои файлы, и login, pending, collect на хосте их не тронут.
+x-user: &user "${COUNCIL_UID:-0}:${COUNCIL_GID:-0}"
+
 services:
   backend:
     build:
       context: ./backend
       secrets: [agent_workers_token]
+    # agent-workers после хода снимает всю группу процессов CLI; без init убитые потомки
+    # остались бы зомби до перезапуска контейнера.
+    init: true
+    user: *user
     ports:
       - "8420:8420"
     volumes:
       - ./backend:/app
+      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      - type: bind
+        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
+        target: /data/accounts/sol
+        bind: { create_host_path: true }
+      - type: bind
+        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
+        target: /data/accounts/fable
+        bind: { create_host_path: true }
     environment:
+      <<: *accounts
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
       WATCHFILES_FORCE_POLLING: "true"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/settings')"]
+      # Не /api/settings: он спрашивает CLI моделей о входе, а проверка здоровья идёт каждые 5 с.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8420/api/councils')"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -42,8 +72,21 @@ services:
       context: .
       dockerfile: Dockerfile
       secrets: [agent_workers_token]
+    init: true
+    user: *user
     ports:
       - "8080:8420"
+    volumes:
+      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      - type: bind
+        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
+        target: /data/accounts/sol
+        bind: { create_host_path: true }
+      - type: bind
+        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
+        target: /data/accounts/fable
+        bind: { create_host_path: true }
+    environment: *accounts
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.
 # Compose берёт AGENT_WORKERS_TOKEN из .env рядом с этим файлом (образец — .env.example).

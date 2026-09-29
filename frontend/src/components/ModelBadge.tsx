@@ -1,13 +1,24 @@
+import { useTranslation } from 'react-i18next'
 import type { Model } from '../api'
 
-/** Модель: плашка с буквой, полное имя и CLI, через которую она работает. */
-export function ModelBadge({ model }: Readonly<{ model: Model }>) {
+/** Модель: плашка с буквой, полное имя и CLI, через которую она работает, — или что её не запустить. */
+export function ModelBadge({ model, compact }: Readonly<{ model: Model; compact?: boolean }>) {
+  const { t } = useTranslation()
+  // Для узких колонок: плашка и короткое имя.
+  if (compact) return (
+    <span className="model-badge">
+      <span className={`model-tile ${model.cli}`} aria-hidden="true">{model.short_name.charAt(0)}</span>
+      <span className="model-name">{model.short_name}</span>
+    </span>
+  )
   return (
     <span className="model-badge">
       <span className={`model-tile ${model.cli}`} aria-hidden="true">{model.short_name.charAt(0)}</span>
       <span className="model-text">
         <span className="model-name">{model.display_name}</span>
-        <span className="model-cli">{model.cli} cli</span>
+        <span className="model-cli">
+          {model.cli} cli{!model.available && <span className="model-offline"> · {t('model.offline')}</span>}
+        </span>
       </span>
     </span>
   )

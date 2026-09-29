@@ -5,6 +5,22 @@ export type SaveState = 'idle' | 'saving' | 'error'
 
 const isEmpty = (patch: object) => Object.keys(patch).length === 0
 
+const isMap = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/**
+ * Новая правка поверх старой. Словари сливаются по ключам: две правки типов разных
+ * фрагментов, пока идёт запрос, не затирают друг друга. Всё остальное просто заменяется.
+ */
+export const merge = <P extends object>(older: P, newer: P): P => {
+  const out = { ...older } as Record<string, unknown>
+  for (const [key, value] of Object.entries(newer)) {
+    const before = out[key]
+    out[key] = isMap(before) && isMap(value) ? { ...before, ...value } : value
+  }
+  return out as P
+}
+
 /**
  * Сохраняет правки без кнопки «Сохранить». Правки копятся и уходят одним запросом через
  * `wait` мс; следующий запрос — только после ответа на предыдущий, поэтому старое значение
@@ -28,14 +44,14 @@ export function useAutosave<P extends object>(send: (patch: P) => Promise<unknow
 
   const flush = useCallback((): Promise<boolean> => {
     clearTimeout(timer.current)
-    if (running.current) return running.current.then(() => flush())
+    if (running.current !== null) return running.current.then(() => flush())
     if (isEmpty(pending.current)) return Promise.resolve(true)
 
     const patch = pending.current
     pending.current = {} as P
     setState('saving')
     const run = sendRef.current(patch).then(() => true, () => {
-      pending.current = { ...patch, ...pending.current }  // новые правки важнее упавших
+      pending.current = merge(patch, pending.current)  // новые правки важнее упавших
       return false
     }).then(saved => {
       running.current = null
@@ -49,7 +65,7 @@ export function useAutosave<P extends object>(send: (patch: P) => Promise<unknow
   }, [])
 
   const schedule = useCallback((patch: P, wait: number) => {
-    pending.current = { ...pending.current, ...patch }
+    pending.current = merge(pending.current, patch)
     clearTimeout(timer.current)
     timer.current = setTimeout(() => { void flush() }, wait)
   }, [flush])

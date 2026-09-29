@@ -7,20 +7,33 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build          # -> /src/frontend/dist
 
-FROM python:3.14-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Node для CLI моделей — как в backend/Dockerfile: bookworm с обеих сторон.
+FROM node:24-bookworm-slim AS node
 
-# git нужен uv, чтобы забрать зависимость agent-workers из GitHub.
+FROM python:3.14-slim-bookworm
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+# git нужен uv для agent-workers; Claude Code и Codex — CLI моделей совета. Версии — как в
+# backend/Dockerfile: разбор ответов завязан на их вывод.
+ARG CLAUDE_CODE_VERSION=2.1.282
+ARG CODEX_VERSION=0.155.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && npm install -g --allow-scripts=@anthropic-ai/claude-code \
+        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
+    && npm cache clean --force
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DISABLE_AUTOUPDATER=1
 
 WORKDIR /app
 

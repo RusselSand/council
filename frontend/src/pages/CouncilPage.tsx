@@ -1,13 +1,20 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
-import { api, councilPath, isNotFound, type CouncilPatch, type CouncilStatus } from '../api'
+import {
+  api, ApiError, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus, type Label,
+} from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
+import { useInterval } from '../useInterval'
 import { useLoad } from '../useLoad'
 import { BriefStage } from './BriefStage'
+import { SlicesStage } from './SlicesStage'
 
 export const STAGES = ['brief', 'slices', 'structure', 'spec', 'history'] as const
+
+/** Как часто спрашивать сервер, пока идёт нарезка: ходы моделей длятся минутами. */
+export const POLL_MS = 2000
 export type Stage = (typeof STAGES)[number]
 
 /** Этап i пройден, если статус совета ушёл дальше него. «История» пройденной не бывает. */
@@ -18,7 +25,7 @@ const isDone = (stageIndex: number, status: CouncilStatus) => stageIndex < STATU
 class CouncilMissing extends Error {}
 
 const loadCouncil = (id: string) => Promise.all([
-  api.council(id).catch((e: unknown) => Promise.reject(isNotFound(e) ? new CouncilMissing() : e)),
+  api.council(id).catch((e: unknown) => { throw isNotFound(e) ? new CouncilMissing() : e }),
   api.settings(),
 ])
 
@@ -31,7 +38,26 @@ export function CouncilPage({ stage }: Readonly<{ stage: Stage }>) {
 function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
-  const saver = useAutosave((patch: CouncilPatch) => api.updateCouncil(id, patch))
+
+  // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
+  const sliced = useCallback((fresh: Council) =>
+    update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
+
+  const saver = useAutosave(async (patch: CouncilPatch) => {
+    try {
+      return await api.updateCouncil(id, patch)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 409 && patch.labels)) throw e
+      // Нарезку переделали, пока здесь была прежняя: её типы относятся к другим фрагментам.
+      // Остальное из правки сохраняем, типы бросаем и показываем нынешнюю нарезку.
+      const rest: CouncilPatch = { ...patch }
+      delete rest.labels
+      delete rest.slicing_run
+      if (Object.keys(rest).length > 0) await api.updateCouncil(id, rest)
+      sliced(await api.council(id))
+      return undefined
+    }
+  })
   const { schedule } = saver
 
   const council = state.kind === 'ok' ? state.data[0] : null
@@ -47,6 +73,29 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     update(([c, settings]) => [{ ...c, ...patch }, settings])
     schedule(patch, wait)
   }, [update, schedule])
+
+  // Тип фрагмента, выбранный человеком. Уходит только он: правка из другой вкладки по
+  // другому фрагменту не откатится, а очередь сохранения сольёт несколько правок в одну.
+  const relabel = useCallback((fragmentId: number, label: Label) => {
+    const done = council?.slicing
+    if (!done) return
+    const fragments = done.fragments.map(f => (f.id === fragmentId ? { ...f, label } : f))
+    update(([c, settings]) => [{ ...c, slicing: { ...done, fragments } }, settings])
+    schedule({ labels: { [fragmentId]: label }, slicing_run: done.run }, 0)
+  }, [council?.slicing, update, schedule])
+
+  // Опрос, пока нарезка идёт. Следующий запрос — только после ответа на предыдущий, и ответ
+  // принимается, только пока нарезка на экране ещё идёт: запоздалый не затрёт итог и правки типов.
+  const polling = useRef(false)
+  const polled = useCallback((fresh: Council) =>
+    update(([c, settings]) => (c.slicing?.state === 'running'
+      ? [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]
+      : [c, settings])), [update])
+  useInterval(() => {
+    if (polling.current) return
+    polling.current = true
+    api.council(id).then(polled, () => { /* следующий опрос */ }).finally(() => { polling.current = false })
+  }, council?.slicing?.state === 'running' ? POLL_MS : null)
 
   if (state.kind === 'error' && state.error instanceof CouncilMissing) return (
     <main className="main">
@@ -86,9 +135,17 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       <main className="main">
         <h1 className="sr-only">{title ?? t('common.loading')}</h1>
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
-        {state.kind === 'ok' && (stage === 'brief'
-          ? <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change} saver={saver} />
-          : <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>)}
+        {state.kind === 'ok' && stage === 'brief' && (
+          <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change}
+                      onStart={sliced} saver={saver} />
+        )}
+        {state.kind === 'ok' && stage === 'slices' && (
+          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={sliced}
+                       onRelabel={relabel} saver={saver} />
+        )}
+        {state.kind === 'ok' && stage !== 'brief' && stage !== 'slices' && (
+          <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
+        )}
       </main>
     </>
   )

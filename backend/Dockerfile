@@ -1,12 +1,25 @@
 # Бек для разработки: зависимости живут в образе, код приезжает bind-mount'ом.
-FROM python:3.14-slim
+# Node — только ради CLI моделей; bookworm с обеих сторон, чтобы бинарники node подошли.
+FROM node:24-bookworm-slim AS node
+
+FROM python:3.14-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# git нужен uv, чтобы забрать зависимость agent-workers из GitHub.
+# git нужен uv, чтобы забрать зависимость agent-workers из GitHub. Claude Code и Codex — CLI,
+# через которые agent-workers зовёт модели совета. Версии закреплены, как в kromka-agent-worker:
+# разбор ответов завязан на их вывод, и тихое обновление внутри образа было бы тихой поломкой.
+ARG CLAUDE_CODE_VERSION=2.1.282
+ARG CODEX_VERSION=0.155.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && npm install -g --allow-scripts=@anthropic-ai/claude-code \
+        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
+    && npm cache clean --force
 
 # Венв вне /app: иначе его затрёт bind-mount с кодом хоста (там .venv под Windows).
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -14,7 +27,8 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
     PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DISABLE_AUTOUPDATER=1
 
 WORKDIR /app
 
