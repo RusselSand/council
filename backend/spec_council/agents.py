@@ -24,7 +24,10 @@ STOP = threading.Event()
 
 # Нарезки идут в своём пуле, а не фоновыми задачами запроса: uvicorn при остановке ждёт
 # фоновые задачи и только потом зовёт lifespan, так что STOP не дошёл бы до идущих ходов.
-PIPELINES = ThreadPoolExecutor(max_workers=4, thread_name_prefix="slicing")
+# Пул живёт от запуска до остановки приложения; следующий запуск в том же процессе (тесты,
+# второе приложение) получает новый пул и снятый STOP.
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
 
 # Вход подтверждает сама CLI. Ответ помним недолго, чтобы страница не ждала её каждый раз;
 # «нет входа» — совсем недолго: после входа модель должна подключиться почти сразу.
@@ -33,13 +36,22 @@ LOGIN_MISSING_TTL = 5.0
 
 
 def launch(job: Callable[[], object]) -> None:
-    PIPELINES.submit(job)
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            STOP.clear()
+            _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="slicing")
+        _pool.submit(job)
 
 
 def shutdown() -> None:
     """Остановка приложения: идущие ходы сворачиваются, пул дожидается их отчёта."""
-    STOP.set()
-    PIPELINES.shutdown(wait=True, cancel_futures=True)
+    global _pool
+    with _pool_lock:
+        pool, _pool = _pool, None
+        STOP.set()
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def home_key(alias: str) -> str:
@@ -72,6 +84,12 @@ class AgentRunner:
         self._locks = {alias: threading.Lock() for alias in agents}
         self._entries: dict[str, tuple[str, object]] = {}
         self._checked: dict[str, tuple[bool, float]] = {}
+
+    def identity(self, alias: str) -> str:
+        """Что именно отвечает под этим alias: провайдер и модель. Входит в ключ ответа,
+        чтобы после смены модели повтор не взял оплаченный ответ прежней."""
+        agent = self._agents.get(alias)
+        return f"{agent.provider}/{agent.model}" if agent else alias
 
     def home(self, alias: str) -> Path | None:
         if alias not in self._agents:

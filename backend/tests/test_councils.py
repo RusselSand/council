@@ -108,6 +108,9 @@ class FakeAgents:
     def forget(self, keys):
         pass
 
+    def identity(self, model):
+        return model
+
 
 @pytest.fixture
 def agents():
@@ -253,3 +256,15 @@ def test_start_that_lost_the_race_during_the_login_check_is_refused(agents):
     agents.on_probe = other_tab_starts_and_finishes
     assert client.post(f"/api/councils/{council_id}/slicing").status_code == 409
     assert len([k for k in agents.asked if "-slice-" in k]) == 2   # только первый запуск
+
+
+def test_start_while_the_server_stops_leaves_a_failed_slicing_not_a_stuck_one(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+
+    def closed_pool(job):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    app.dependency_overrides[get_launcher] = lambda: closed_pool
+    assert client.post(f"/api/councils/{council_id}/slicing").status_code == 503
+    assert client.get(f"/api/councils/{council_id}").json()["slicing"]["state"] == "failed"

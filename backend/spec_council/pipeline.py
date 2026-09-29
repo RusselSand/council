@@ -63,6 +63,9 @@ class Runner(Protocol):
     def forget(self, keys: Iterable[str]) -> None:
         """Убрать оплаченные ответы из лотка: они больше не нужны."""
 
+    def identity(self, model: str) -> str:
+        """Провайдер и модель за alias: сменились — это другой ответ, а не повтор."""
+
 
 def start(participants: list[str], judge: str, text: str = "") -> Slicing:
     return Slicing(state="running", run=uuid4().hex[:8], text=text, steps=[
@@ -215,7 +218,9 @@ class Pipeline:
         return answer
 
     def _ask[T](self, step: Step, model: str, prompt: str, parse: Callable[[dict], T]) -> T | None:
-        key = f"{self.council_id}-{step}-{model}-{digest(prompt)}"
+        # Повтор с тем же ключом берёт оплаченный ответ даром — только если отвечает та же
+        # модель: провайдер и модель за alias тоже в ключе.
+        key = f"{self.council_id}-{step}-{model}-{digest(self.runner.identity(model) + prompt)}"
         self._set_run(step, model, "running")
         try:
             reply = self.runner.ask(model, prompt, key)

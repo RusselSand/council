@@ -1,6 +1,7 @@
 """Подключение моделей: вход подтверждает CLI, а не файлы в каталоге."""
 
 import subprocess
+import threading
 
 from spec_council.agents import AgentRunner
 from spec_council.config import Agent
@@ -60,3 +61,19 @@ def test_model_without_a_provider_is_never_available(tmp_path):
 def test_hung_cli_is_not_logged_in_and_not_a_500(tmp_path, monkeypatch):
     login = Login(subprocess.TimeoutExpired(["claude", "auth", "status"], 60))
     assert runner_with(tmp_path, monkeypatch, login).available("sol") is False
+
+
+def test_pool_comes_back_after_a_shutdown():
+    from spec_council import agents
+    agents.shutdown()
+    assert agents.STOP.is_set()
+    ran = threading.Event()
+    agents.launch(ran.set)          # новый жизненный цикл: новый пул, STOP снят
+    assert ran.wait(5)
+    assert not agents.STOP.is_set()
+    agents.shutdown()
+
+
+def test_identity_names_provider_and_model():
+    runner = AgentRunner({"sol": Agent(provider="codex", model="gpt-5.6-sol")})
+    assert runner.identity("sol") == "codex/gpt-5.6-sol"

@@ -32,6 +32,7 @@ class FakeRunner:
         self.asked: dict[tuple[str, str], str] = {}
         self.keys: list[str] = []
         self.forgotten: list[str] = []
+        self.identities: dict[str, str] = {}
 
     def ask(self, model, prompt, key):
         step = next(s for s in STEPS if f"-{s}-{model}-" in key)
@@ -44,6 +45,9 @@ class FakeRunner:
 
     def forget(self, keys):
         self.forgotten.extend(keys)
+
+    def identity(self, model):
+        return self.identities.get(model, model)
 
 
 def run(replies, participants=("sol", "fable"), judge="fable"):
@@ -217,3 +221,14 @@ def test_judge_refusing_every_option_makes_a_retry_ask_the_participants_again():
     assert "негодный ответ" not in result.steps[1].runs[0].error   # ответ честный, не мусор
     # Кандидаты из лотка — повтор спросит участников; и отказ судьи тоже: он был про них.
     assert sorted(runner.forgotten) == sorted(k for k in runner.keys if "-slice" in k)
+
+
+def test_another_model_behind_an_alias_is_a_new_call_not_a_free_retry():
+    _, before, _ = run(AGREED)
+    runner = FakeRunner(AGREED)
+    runner.identities = {"sol": "codex/gpt-5.7-sol"}
+    Pipeline("c1", TEXT, ["sol", "fable"], "fable", runner, lambda _: None).run()
+    sol_keys = lambda r: sorted(k for k in r.keys if "-sol-" in k)          # noqa: E731
+    fable_keys = lambda r: sorted(k for k in r.keys if "-fable-" in k)      # noqa: E731
+    assert set(sol_keys(before)).isdisjoint(sol_keys(runner))
+    assert fable_keys(before) == fable_keys(runner)

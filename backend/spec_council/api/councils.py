@@ -14,6 +14,7 @@ NOT_FOUND = {404: {"description": "Совет не найден"}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
 NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
 CANNOT_SLICE = {
+    503: {"description": "Сервер останавливается, нарезка не запущена"},
     409: {"description": "Нарезка уже идёт"},
     422: {"description": "Текст пуст или к моделям совета нет подключения"},
 }
@@ -106,7 +107,15 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                             agents, report)
         council = store.update_council(council_id, {"slicing": pipeline.state.model_copy(deep=True),
                                                     "status": CouncilStatus.slices})
-    launch(pipeline.run)
+    try:
+        launch(pipeline.run)
+    except RuntimeError as exc:
+        # Пул закрыт: приложение останавливается. Нарезка не началась — так и записываем,
+        # иначе совет навсегда остался бы «идёт» и повтор получал бы 409.
+        failed = pipeline.state.model_copy(
+            update={"state": "failed", "error": f"не запущена: {exc}"})
+        store.update_council(council_id, {"slicing": failed})
+        raise HTTPException(503, "Сервер останавливается, нарезка не запущена") from exc
     return council
 
 
