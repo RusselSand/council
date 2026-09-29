@@ -22,6 +22,11 @@ class BadAnswer(ValueError):
     """Ответ модели не годится: не JSON, не та форма, не тот текст."""
 
 
+class JudgeRejected(ValueError):
+    """Судья нарезки по протоколу не принял ни один вариант. Ответ честный — негодны
+    кандидаты, и повтор должен спросить участников заново."""
+
+
 Bounds = tuple[int, ...]
 
 
@@ -148,7 +153,8 @@ def judged_bounds(text: str, data: dict, candidates: list[SliceOption]) -> Bound
     status = data.get("status")
     if status == "no_valid_option":
         problem = data.get("problem")
-        raise BadAnswer(f"судья не принял ни один вариант: {problem or 'без объяснения'}")
+        raise JudgeRejected(f"не принял ни один вариант: {problem or 'без объяснения'}; "
+                            "повтор спросит участников заново")
     if status != "ok":
         raise BadAnswer(f"неизвестный status: {status!r}")
     bounds = bounds_of(text, data.get("fragments"))
@@ -175,17 +181,36 @@ def boundary_notes(data: dict) -> list[BoundaryNote]:
     return notes
 
 
+# Края цитат судьи сравниваем без пробелов и знаков: «без базы» и «без базы.» — одно.
+EDGES = " \t\r\n.,;:!?…—–-«»„“\"'()[]"
+
+
 def note_places(fragments: list[str], notes: list[BoundaryNote]) -> dict[int, str]:
-    """К какому фрагменту (индекс) отнести пояснение: где начинается правая часть границы,
-    иначе где стоит левая. Не нашлось — пояснение пропускается."""
+    """К какому фрагменту (индекс) отнести пояснение. Ищем по паре цитат, а не по одной:
+    одна и та же фраза может встретиться в тексте дважды. Не нашлось — пропускается."""
     placed: dict[int, list[str]] = {}
     for note in notes:
-        for quote in (note.right, note.left):
-            index = next((i for i, f in enumerate(fragments) if quote and quote in f), None)
-            if index is not None:
-                placed.setdefault(index, []).append(note.reason)
-                break
+        index = boundary_index(fragments, note)
+        if index is not None:
+            placed.setdefault(index, []).append(note.reason)
     return {index: " ".join(reasons) for index, reasons in placed.items()}
+
+
+def boundary_index(fragments: list[str], note: BoundaryNote) -> int | None:
+    left, right = note.left.strip(EDGES), note.right.strip(EDGES)
+    if not left or not right:
+        return None
+    # Проведённая граница: левая цитата кончает фрагмент, правая начинает следующий.
+    for i in range(1, len(fragments)):
+        before, after = fragments[i - 1].strip(EDGES), fragments[i].strip(EDGES)
+        if before.endswith(left) and after.startswith(right):
+            return i
+    # Непроведённая: обе цитаты по порядку внутри одного фрагмента.
+    for i, fragment in enumerate(fragments):
+        at = fragment.find(left)
+        if at >= 0 and fragment.find(right, at + len(left)) >= 0:
+            return i
+    return None
 
 
 def label_options(data: dict, ids: list[int]) -> dict[int, list[LabelOption]]:

@@ -4,6 +4,7 @@
 и одна строка в deps.py; роуты и тесты остаются как есть.
 """
 
+from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from threading import Lock
@@ -29,7 +30,9 @@ class InMemoryStore:
     поэтому запись идёт под замком: иначе одна правка затёрла бы другую."""
 
     def __init__(self, councils: Iterable[Council] = ()) -> None:
-        self._councils: dict[str, Council] = {council.id: council for council in councils}
+        # Порядок — кого трогали позже, тот дальше: move_to_end двигает без удаления, и
+        # чтение не застанет совет отсутствующим посреди записи.
+        self._councils: OrderedDict[str, Council] = OrderedDict((c.id, c) for c in councils)
         self._lock = Lock()
 
     def list_councils(self) -> list[Council]:
@@ -41,7 +44,8 @@ class InMemoryStore:
         return sorted(reversed(councils), key=lambda council: council.updated_at, reverse=True)
 
     def get_council(self, council_id: str) -> Council | None:
-        return self._councils.get(council_id)
+        with self._lock:
+            return self._councils.get(council_id)
 
     def create_council(self, *, participants: list[str], judge: str) -> Council:
         council = Council(
@@ -69,8 +73,8 @@ class InMemoryStore:
                 council = self._councils[council_id] = council.model_copy(update=changes)
                 return council
             council = council.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
-            del self._councils[council_id]  # в конец словаря: так он выиграет и равное время
             self._councils[council_id] = council
+            self._councils.move_to_end(council_id)  # так он выиграет и равное время
             return council
 
 

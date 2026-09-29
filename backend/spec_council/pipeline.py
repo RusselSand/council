@@ -28,6 +28,7 @@ from .prompts import PromptError, render
 from .slicing import (
     BadAnswer,
     BoundaryNote,
+    JudgeRejected,
     LabelOption,
     SliceOption,
     agreed_label,
@@ -100,7 +101,7 @@ class Pipeline:
         self.report = report
         self.state = start(participants, judge, brief)
         self._lock = Lock()
-        self._keys: list[str] = []
+        self._keys: dict[Step, list[str]] = {}  # принятые ответы по шагам
 
     def run(self) -> Slicing:
         try:
@@ -115,7 +116,8 @@ class Pipeline:
             self._finish(error=f"внутренняя ошибка: {exc}")
             return self.state
         self._finish(fragments=labeled)
-        self.runner.forget(self._keys)  # итог уже сохранён report'ом
+        # Итог уже сохранён report'ом — оплаченные ответы больше не нужны.
+        self.runner.forget([key for keys in self._keys.values() for key in keys])
         return self.state
 
     # --- шаги
@@ -221,6 +223,14 @@ class Pipeline:
             return None
         try:
             answer = parse(parse_json(reply))
+        except JudgeRejected as exc:
+            # Судья честно отверг всех кандидатов. Их ответы — из лотка, иначе повтор взял бы
+            # тех же кандидатов даром и снова заплатил бы судье за тот же отказ.
+            with self._lock:
+                candidates = self._keys.pop(Step.slice, [])
+            self.runner.forget([*candidates, key])
+            self._set_run(step, model, "failed", str(exc))
+            return None
         except Exception as exc:
             # Любая ошибка разбора — негодный ответ, и из лотка его вон: иначе повтор взял бы
             # тот же ответ даром и упал бы на нём снова. Не BadAnswer — это недосмотр разбора.
@@ -230,7 +240,7 @@ class Pipeline:
             self._set_run(step, model, "failed", f"негодный ответ: {exc}")
             return None
         with self._lock:
-            self._keys.append(key)
+            self._keys.setdefault(step, []).append(key)
         self._set_run(step, model, "done")
         return answer
 

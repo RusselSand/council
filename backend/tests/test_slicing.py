@@ -4,6 +4,8 @@ import pytest
 
 from spec_council.slicing import (
     BadAnswer,
+    BoundaryNote,
+    JudgeRejected,
     LabelOption,
     SliceOption,
     agreed_label,
@@ -79,7 +81,7 @@ def test_judge_cannot_invent_a_boundary():
 
 
 def test_judge_may_refuse_every_option():
-    with pytest.raises(BadAnswer, match="не принял ни один вариант: все теряют текст"):
+    with pytest.raises(JudgeRejected, match="не принял ни один вариант: все теряют текст"):
         judged_bounds(TEXT, {"status": "no_valid_option", "problem": "все теряют текст"}, [])
 
 
@@ -141,3 +143,20 @@ def test_list_markers_and_quotes_stay_with_their_own_fragment(text, fragments):
 def test_decisions_that_are_not_a_list_are_just_no_notes():
     assert boundary_notes({"decisions": 1}) == []
     assert boundary_notes({"decisions": "граница"}) == []
+
+
+def test_note_finds_its_boundary_by_both_quotes_when_a_phrase_repeats():
+    fragments = ["Use files.", "Use files remotely."]
+    note = BoundaryNote("Use files.", "Use files", "две разные мысли")
+    assert note_places(fragments, [note]) == {1: "две разные мысли"}
+
+
+def test_note_about_a_boundary_not_drawn_lands_inside_the_fragment():
+    fragments = ["Первое.", "Одна мысль, её продолжение.", "Третье."]
+    note = BoundaryNote("Одна мысль,", "её продолжение", "не делить")
+    assert note_places(fragments, [note]) == {1: "не делить"}
+
+
+def test_quotes_compare_without_edge_punctuation():
+    fragments = ["без базы.", "Главное — не потерять."]
+    assert note_places(fragments, [BoundaryNote("без базы", "«Главное", "ок")]) == {1: "ок"}

@@ -205,3 +205,15 @@ def test_shuffle_depends_on_the_variants_not_on_who_sent_them_first():
     variants = [{"fragments": [str(i)]} for i in range(6)]
     assert shuffled(variants) == shuffled(list(reversed(variants)))
     assert sorted(map(str, shuffled(variants))) == sorted(map(str, variants))
+
+
+def test_judge_refusing_every_option_makes_a_retry_ask_the_participants_again():
+    replies = {**AGREED, ("slice", "fable"): sliced([TEXT]),
+               ("slice_judge", "fable"): {"status": "no_valid_option",
+                                          "problem": "обе теряют текст"}}
+    result, runner, _ = run(replies)
+    assert result.state == "failed"
+    assert "не принял ни один вариант: обе теряют текст" in result.error
+    assert "негодный ответ" not in result.steps[1].runs[0].error   # ответ честный, не мусор
+    # Кандидаты из лотка — повтор спросит участников; и отказ судьи тоже: он был про них.
+    assert sorted(runner.forgotten) == sorted(k for k in runner.keys if "-slice" in k)
