@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus, type Label,
+  api, ApiError, councilPath, isNotFound, type Council, type CouncilPatch, type CouncilStatus, type Label,
 } from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
@@ -38,7 +38,26 @@ export function CouncilPage({ stage }: Readonly<{ stage: Stage }>) {
 function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
-  const saver = useAutosave((patch: CouncilPatch) => api.updateCouncil(id, patch))
+
+  // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
+  const sliced = useCallback((fresh: Council) =>
+    update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
+
+  const saver = useAutosave(async (patch: CouncilPatch) => {
+    try {
+      return await api.updateCouncil(id, patch)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 409 && patch.labels)) throw e
+      // Нарезку переделали, пока здесь была прежняя: её типы относятся к другим фрагментам.
+      // Остальное из правки сохраняем, типы бросаем и показываем нынешнюю нарезку.
+      const rest: CouncilPatch = { ...patch }
+      delete rest.labels
+      delete rest.slicing_run
+      if (Object.keys(rest).length > 0) await api.updateCouncil(id, rest)
+      sliced(await api.council(id))
+      return undefined
+    }
+  })
   const { schedule } = saver
 
   const council = state.kind === 'ok' ? state.data[0] : null
@@ -55,9 +74,6 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule(patch, wait)
   }, [update, schedule])
 
-  // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
-  const sliced = useCallback((fresh: Council) =>
-    update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
   // Тип фрагмента, выбранный человеком. Уходит только он: правка из другой вкладки по
   // другому фрагменту не откатится, а очередь сохранения сольёт несколько правок в одну.
   const relabel = useCallback((fragmentId: number, label: Label) => {
@@ -65,7 +81,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     if (!done) return
     const fragments = done.fragments.map(f => (f.id === fragmentId ? { ...f, label } : f))
     update(([c, settings]) => [{ ...c, slicing: { ...done, fragments } }, settings])
-    schedule({ labels: { [fragmentId]: label } }, 0)
+    schedule({ labels: { [fragmentId]: label }, slicing_run: done.run }, 0)
   }, [council?.slicing, update, schedule])
 
   // Опрос, пока нарезка идёт. Следующий запрос — только после ответа на предыдущий, и ответ

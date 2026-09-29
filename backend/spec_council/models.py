@@ -64,6 +64,9 @@ class Slicing(BaseModel):
     """Нарезка и разметка текста советом: ход по шагам и итог."""
 
     state: Literal["running", "done", "failed"]
+    # Свой у каждого запуска. Номера фрагментов в каждой нарезке с 1, поэтому правка типа
+    # несёт run: правка к прежней нарезке не ляжет на чужие фрагменты новой.
+    run: str = ""
     # Текст, который нарезали: исходник мог поменяться после запуска.
     text: str = ""
     steps: list[SlicingStep]
@@ -101,6 +104,8 @@ class CouncilPatch(BaseModel):
     judge: str | None = None
     # Типы фрагментов готовой нарезки: {id: тип}. Только изменённые, остальные не трогаются.
     labels: dict[int, Label] | None = None
+    # К какой нарезке относятся labels: Slicing.run. Обязателен вместе с ними.
+    slicing_run: str | None = None
 
 
 class Model(BaseModel):

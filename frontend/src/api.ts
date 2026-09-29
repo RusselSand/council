@@ -21,6 +21,8 @@ export interface LabeledFragment {
 /** Нарезка и разметка текста советом: идёт в фоне минутами, фронт опрашивает совет. */
 export interface Slicing {
   state: 'running' | 'done' | 'failed'; steps: SlicingStep[]; fragments: LabeledFragment[]; error: string | null
+  /** Свой у каждого запуска: правка типа несёт его, чтобы не лечь на фрагменты новой нарезки. */
+  run: string
   /** Текст, который нарезали: исходник мог поменяться после запуска. */
   text: string
 }
@@ -35,6 +37,8 @@ export interface Council {
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
   /** Типы фрагментов готовой нарезки, {id: тип}: только изменённые, остальные не трогаются. */
   labels?: Record<number, Label>
+  /** К какой нарезке относятся labels: Slicing.run. */
+  slicing_run?: string
 }
 
 /** available — есть подключение к CLI: без него модель видна, но не запускается. */

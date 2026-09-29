@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Protocol
+from uuid import uuid4
 
 from .models import LabeledFragment, ModelRun, Slicing, SlicingStep, SlicingStepName, Vote
 from .prompts import PromptError, render
@@ -64,7 +65,7 @@ class Runner(Protocol):
 
 
 def start(participants: list[str], judge: str, text: str = "") -> Slicing:
-    return Slicing(state="running", text=text, steps=[
+    return Slicing(state="running", run=uuid4().hex[:8], text=text, steps=[
         SlicingStep(name=Step.slice, runs=[ModelRun(model=m) for m in participants]),
         SlicingStep(name=Step.slice_judge, runs=[ModelRun(model=judge)]),
         SlicingStep(name=Step.label, runs=[ModelRun(model=m) for m in participants]),

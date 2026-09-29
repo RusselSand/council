@@ -89,10 +89,14 @@ class FakeAgents:
         self.text = text
         self.asked = []
         self.fresh_under_lock = []
+        self.on_probe = None   # что случится, пока идёт проверка входа
 
     def availability(self, aliases, *, fresh=False):
         if fresh:
             self.fresh_under_lock.append(councils_api._starting.locked())
+            if self.on_probe:
+                self.on_probe()
+                self.on_probe = None
         return {alias: alias in ("sol", "fable") for alias in aliases}
 
     def ask(self, model, prompt, key):
@@ -176,12 +180,14 @@ def sliced_council(agents):
 
 def test_person_can_change_a_type_and_the_council_one_stays(agents):
     council_id = sliced_council(agents)
-    res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
+    run = client.get(f"/api/councils/{council_id}").json()["slicing"]["run"]
+    res = client.patch(f"/api/councils/{council_id}",
+                       json={"labels": {"1": "risk"}, "slicing_run": run})
     assert res.status_code == 200
     fragment = client.get(f"/api/councils/{council_id}").json()["slicing"]["fragments"][0]
     assert (fragment["label"], fragment["council_label"]) == ("risk", "idea")
 
-    client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "idea"}})
+    client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "idea"}, "slicing_run": run})
     fragment = client.get(f"/api/councils/{council_id}").json()["slicing"]["fragments"][0]
     assert fragment["label"] == fragment["council_label"] == "idea"
 
@@ -192,13 +198,15 @@ def test_person_can_change_a_type_and_the_council_one_stays(agents):
 ])
 def test_bad_labels_are_refused(agents, labels, status):
     council_id = sliced_council(agents)
-    res = client.patch(f"/api/councils/{council_id}", json={"labels": labels})
+    run = client.get(f"/api/councils/{council_id}").json()["slicing"]["run"]
+    res = client.patch(f"/api/councils/{council_id}", json={"labels": labels, "slicing_run": run})
     assert res.status_code == status
 
 
 def test_labels_need_a_finished_slicing(agents):
     council_id = new_council()
-    res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
+    res = client.patch(f"/api/councils/{council_id}",
+                       json={"labels": {"1": "risk"}, "slicing_run": "x"})
     assert res.status_code == 409
 
 
@@ -216,3 +224,32 @@ def test_ordinary_edits_do_not_wait_for_a_slicing_start():
         edit.start()
         edit.join(5)
     assert done == [200]
+
+
+def test_labels_for_an_earlier_slicing_do_not_land_on_the_new_one(agents):
+    council_id = sliced_council(agents)
+    old_run = client.get(f"/api/councils/{council_id}").json()["slicing"]["run"]
+    client.post(f"/api/councils/{council_id}/slicing")   # другая вкладка переделала нарезку
+    res = client.patch(f"/api/councils/{council_id}",
+                       json={"labels": {"1": "risk"}, "slicing_run": old_run})
+    assert res.status_code == 409
+    fragment = client.get(f"/api/councils/{council_id}").json()["slicing"]["fragments"][0]
+    assert fragment["label"] == "idea"
+
+
+def test_labels_without_their_slicing_run_are_refused(agents):
+    council_id = sliced_council(agents)
+    res = client.patch(f"/api/councils/{council_id}", json={"labels": {"1": "risk"}})
+    assert res.status_code == 422
+
+
+def test_start_that_lost_the_race_during_the_login_check_is_refused(agents):
+    council_id = sliced_council(agents)
+
+    def other_tab_starts_and_finishes():
+        finished = start(["sol", "fable"], "fable").model_copy(update={"state": "done"})
+        get_store().update_council(council_id, {"slicing": finished})
+
+    agents.on_probe = other_tab_starts_and_finishes
+    assert client.post(f"/api/councils/{council_id}/slicing").status_code == 409
+    assert len([k for k in agents.asked if "-slice-" in k]) == 2   # только первый запуск

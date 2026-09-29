@@ -12,7 +12,7 @@ router = APIRouter(prefix="/councils", tags=["councils"])
 
 NOT_FOUND = {404: {"description": "Совет не найден"}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
-NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой нарезки"}}
+NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
 CANNOT_SLICE = {
     409: {"description": "Нарезка уже идёт"},
     422: {"description": "Текст пуст или к моделям совета нет подключения"},
@@ -50,7 +50,7 @@ def update_council(
     council_id: str, patch: CouncilPatch, store: StoreDep, config: ConfigDep
 ) -> Council:
     check_models(patch, config)
-    changes = patch.model_dump(exclude_none=True, exclude={"labels"})
+    changes = patch.model_dump(exclude_none=True, exclude={"labels", "slicing_run"})
     if patch.labels is None:
         council = store.update_council(council_id, changes)
     else:
@@ -58,18 +58,22 @@ def update_council(
             current = store.get_council(council_id)
             if current is None:
                 raise HTTPException(404, "Совет не найден")
-            changes["slicing"] = relabeled(current.slicing, patch.labels)
+            changes["slicing"] = relabeled(current.slicing, patch.labels, patch.slicing_run)
             council = store.update_council(council_id, changes)
     if council is None:
         raise HTTPException(404, "Совет не найден")
     return council
 
 
-def relabeled(slicing: Slicing | None, labels: dict[int, Label]) -> Slicing:
+def relabeled(slicing: Slicing | None, labels: dict[int, Label], run: str | None) -> Slicing:
     """Типы, выбранные человеком. Тип совета остаётся в council_label: выбор всегда можно
     вернуть, и видно, где человек не согласился."""
+    if run is None:
+        raise HTTPException(422, "Типы без slicing_run: непонятно, к какой нарезке они")
     if slicing is None or slicing.state != "done":
         raise HTTPException(409, "Типы меняются только у готовой нарезки")
+    if slicing.run != run:
+        raise HTTPException(409, "Нарезку уже переделали: эти типы относятся к прежней")
     unknown = sorted(set(labels) - {fragment.id for fragment in slicing.fragments})
     if unknown:
         raise HTTPException(422, f"Нет фрагментов: {', '.join(map(str, unknown))}")
@@ -85,9 +89,14 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
     council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
     # Вход проверяем заново, а не из памяти: запуск платный. Это запуски CLI, поэтому до
     # замка; под замком — снова состояние и состав, который могли поменять за это время.
-    check_online(startable(store.get_council(council_id)), config, agents, fresh=True)
+    before = startable(store.get_council(council_id))
+    check_online(before, config, agents, fresh=True)
     with _starting:
         council = startable(store.get_council(council_id))
+        # Пока шла проверка, нарезку мог запустить и даже закончить другой запрос: второй
+        # запуск заплатил бы за тот же ход ещё раз и затёр бы итог.
+        if run_of(council) != run_of(before):
+            raise HTTPException(409, "Нарезку уже запустили")
         check_online(council, config, agents, fresh=False)  # проверенные — из памяти
 
         def report(slicing: Slicing) -> None:
@@ -99,6 +108,10 @@ def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: A
                                                     "status": CouncilStatus.slices})
     launch(pipeline.run)
     return council
+
+
+def run_of(council: Council) -> str | None:
+    return council.slicing.run if council.slicing else None
 
 
 def startable(council: Council | None) -> Council:

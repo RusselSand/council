@@ -30,7 +30,7 @@ const run = (model: string, state: 'waiting' | 'running' | 'done' | 'failed', er
   ({ model, state, error })
 const SLICED_TEXT = 'Хочу воркер. Состояние держать в файлах, без базы.'
 const RUNNING: Slicing = {
-  state: 'running', text: SLICED_TEXT, fragments: [], error: null, steps: [
+  state: 'running', run: 'r1', text: SLICED_TEXT, fragments: [], error: null, steps: [
     { name: 'slice', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'slice_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
     { name: 'label', state: 'waiting', runs: [run('sol', 'waiting'), run('fable', 'waiting')] },
@@ -38,7 +38,7 @@ const RUNNING: Slicing = {
   ],
 }
 const DONE: Slicing = {
-  state: 'done', text: SLICED_TEXT, error: null,
+  state: 'done', run: 'r1', text: SLICED_TEXT, error: null,
   steps: [
     { name: 'slice', state: 'done', runs: [run('sol', 'failed', 'нет входа в подписку'), run('fable', 'done')] },
     { name: 'slice_judge', state: 'skipped', runs: [] },
@@ -359,7 +359,25 @@ describe('Нарезка', () => {
     expect(within(first).getByRole('radio', { checked: true }).textContent).toBe(ru['label.risk'])
     expect(screen.getByText('вы выбрали другой тип, у совета — «идея»')).toBeTruthy()
     expect(screen.getByText(`${ru['label.risk']} · 1`)).toBeTruthy()
-    await waitFor(() => expect(patches).toEqual([{ labels: { 1: 'risk' } }]))
+    await waitFor(() => expect(patches).toEqual([{ labels: { 1: 'risk' }, slicing_run: 'r1' }]))
+  })
+
+  it('нарезку переделали в другой вкладке — прежние типы не ложатся на новую, экран её показывает', async () => {
+    const redone: Slicing = {
+      ...DONE, run: 'r2', text: 'Совсем другой текст.',
+      fragments: [{ ...DONE.fragments[0], text: 'Совсем другой текст.' }],
+    }
+    let current: Council = { ...COUNCIL, slicing: DONE }
+    openSlices(() => current)
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      patch: () => { current = { ...COUNCIL, slicing: redone }; return json({ detail: 'Нарезку уже переделали' }, 409) },
+    }))
+    const first = await screen.findByRole('radiogroup', { name: 'F1' })
+    fireEvent.click(within(first).getByRole('radio', { name: ru['label.risk'] }))
+    expect(await screen.findByText('Совсем другой текст.', { selector: '.fragment-text' })).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(patches).toEqual([{ labels: { 1: 'risk' }, slicing_run: 'r1' }])
   })
 
   it('правки типов, пока идёт сохранение, уходят следом вместе и не затирают друг друга', async () => {
@@ -384,7 +402,10 @@ describe('Нарезка', () => {
     pick('F1', ru['label.question'])
     release()
     await waitFor(() => expect(patches).toHaveLength(2))
-    expect(patches).toEqual([{ labels: { 1: 'risk' } }, { labels: { 1: 'question', 2: 'idea' } }])
+    expect(patches).toEqual([
+      { labels: { 1: 'risk' }, slicing_run: 'r1' },
+      { labels: { 1: 'question', 2: 'idea' }, slicing_run: 'r1' },
+    ])
   })
 
   it('пока идёт — спрашивает сервер и сам показывает итог', async () => {
