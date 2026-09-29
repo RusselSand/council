@@ -818,6 +818,23 @@ describe('Правка групп', () => {
     expect(edits).toHaveLength(1)
   })
 
+  it('открытое меню объединения не работает, пока сохраняется другая правка', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    const item = screen.getByRole('menuitem', { name: 'B Хранение' }) as HTMLButtonElement
+    // Клавиатурой меню остаётся открытым: переименовываем другую группу.
+    fireEvent.click(within(await card('Хранение')).getByRole('button', { name: 'Хранение' }))
+    const field = screen.getByRole('textbox', { name: 'Название группы B' })
+    fireEvent.change(field, { target: { value: 'Хранилище' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => expect(item.disabled).toBe(true))
+    fireEvent.click(item)
+    release(grouped())
+    await waitFor(() => expect(item.disabled).toBe(false))
+    expect(edits.map(e => e.action)).toEqual(['rename'])
+  })
+
   it('откат названия сбрасывает открытый черновик', async () => {
     const renamed = grouped({ ...GROUPED, edited: true,
       groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] })

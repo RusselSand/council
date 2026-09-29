@@ -304,7 +304,7 @@ function MergeMenu({ others, busy, merge }: Readonly<{
       {open && (
         <span className="merge-menu" role="menu" aria-label={t('groups.mergeMenu')}>
           {others.map(g => (
-            <button key={g.id} role="menuitem" onClick={() => { setOpen(false); void merge(g.id) }}>
+            <button key={g.id} role="menuitem" disabled={busy} onClick={() => { setOpen(false); void merge(g.id) }}>
               <span className="group-letter">{g.id}</span> {g.title}
             </button>
           ))}
