@@ -34,7 +34,8 @@ def test_a_valid_structure_is_read_with_shared_fragments():
     parsed = structure_of(TWO, LABELS)
     assert [g.members for g in parsed.groups] == [frozenset({1, 2, 3, 4}), frozenset({4, 5})]
     assert parsed.shared() == frozenset({4})
-    assert parsed.group("A").ideas == frozenset({1}) and not parsed.group("B").ideas
+    assert parsed.group("A").ideas == frozenset({1})
+    assert parsed.group("B").ideas == frozenset()
 
 
 def test_ideas_come_from_fragment_types_not_from_the_answer():
@@ -115,12 +116,12 @@ def test_judge_may_combine_variants_but_not_invent_groups_or_relations():
     chosen, _ = judged_structure({"status": "ok", **mixed}, LABELS, candidates)
     assert len(chosen.groups) == 2
 
+    regrouped = option(group("A", [1, 2]), group("B", [3, 4, 5]))
     with pytest.raises(BadAnswer, match="группу, которой нет ни в одном варианте: F1, F2"):
-        judged_structure({"status": "ok", **option(group("A", [1, 2]), group("B", [3, 4, 5]))},
-                         LABELS, candidates)
+        judged_structure({"status": "ok", **regrouped}, LABELS, candidates)
+    invented = option(group("A", [1, 2, 3, 4]), group("B", [5], shared=[4]),
+                      relations=[relation("A", "B", "depends_on")])
     with pytest.raises(BadAnswer, match="придумал связь"):
-        invented = option(group("A", [1, 2, 3, 4]), group("B", [5], shared=[4]),
-                          relations=[relation("A", "B", "depends_on")])
         judged_structure({"status": "ok", **invented}, LABELS, candidates)
 
 
@@ -167,10 +168,48 @@ def test_judge_may_not_undo_what_every_variant_agreed_on():
                     relations=depends)
     candidates = [structure_of(apart, LABELS), structure_of(shared, LABELS)]
     unlinked = {**apart, "relations": []}
-    with pytest.raises(BadAnswer, match="убрал связь, которая есть во всех вариантах"):
+    with pytest.raises(BadAnswer, match="оставил A и B без связи, а все варианты, где они есть"):
         judged_structure({"status": "ok", **unlinked}, LABELS, candidates)
     chosen, _ = judged_structure({"status": "ok", **apart}, LABELS, candidates)
     assert len(chosen.relations) == 1
+
+
+def test_judge_may_not_drop_a_group_every_variant_has():
+    # Оба варианта: A = {F1, F2, F3} и B = {F2}, спорят только о связи A–B.
+    base = option(group("A", [1, 3], shared=[2]), group("B", [], shared=[2]), group("C", [4, 5]))
+    linked = {**base, "relations": [relation("A", "B")]}
+    candidates = [structure_of(base, LABELS), structure_of(linked, LABELS)]
+    without_b = option(group("A", [1, 2, 3]), group("C", [4, 5]))
+    with pytest.raises(BadAnswer, match="убрал группу"):
+        judged_structure({"status": "ok", **without_b}, LABELS, candidates)
+
+
+def test_links_of_groups_made_of_shared_fragments_stay_apart():
+    # A = {F1} и B = {F2} — из одних общих фрагментов; связь A → C не даёт права на B → C.
+    loose = option(group("A", [1]), group("B", [2]), group("C", [3], shared=[1]),
+                   group("D", [4], shared=[2]), group("E", [5]),
+                   relations=[relation("A", "C", "depends_on")])
+    also_b = {**loose, "relations": [relation("A", "C", "depends_on"),
+                                     relation("B", "C", "depends_on")]}
+    candidates = [structure_of(loose, LABELS)]
+    with pytest.raises(BadAnswer, match="придумал связь B → C"):
+        judged_structure({"status": "ok", **also_b}, LABELS, candidates)
+
+
+def test_no_link_is_a_choice_too():
+    groups = (group("A", [1, 2]), group("B", [3, 4, 5]))
+    related = structure_of(option(*groups, relations=[relation("A", "B")]), LABELS)
+    depends = structure_of(option(*groups, relations=[relation("A", "B", "depends_on")]), LABELS)
+    candidates = [related, depends]
+    unlinked = option(*groups)
+    with pytest.raises(BadAnswer, match="оставил A и B без связи"):
+        judged_structure({"status": "ok", **unlinked}, LABELS, candidates)
+    backwards = option(*groups, relations=[relation("B", "A", "depends_on")])
+    with pytest.raises(BadAnswer, match="придумал связь B → A"):
+        judged_structure({"status": "ok", **backwards}, LABELS, candidates)
+    chosen, _ = judged_structure({"status": "ok", **option(*groups, relations=[
+        relation("B", "A")])}, LABELS, candidates)
+    assert chosen.relations[0].type == "related"
 
 
 def test_judge_refusal_and_its_decisions():

@@ -8,12 +8,16 @@
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from itertools import combinations
 
 from .slicing import BadAnswer, JudgeRejected
 
 RELATION_TYPES = ("independent", "depends_on", "related")
 Members = frozenset[int]
-Link = tuple[Members, Members, str]
+# Как узнать группу в другом варианте: ("own", собственные фрагменты) или ("whole", весь состав).
+Identity = tuple[str, tuple[int, ...]]
+Pair = tuple[Identity, Identity]
+Tie = tuple[str, Identity | None]   # тип связи и, у depends_on, какая группа зависит
 
 
 @dataclass(frozen=True)
@@ -50,20 +54,30 @@ class StructureOption:
             seen |= group.members
         return frozenset(twice)
 
-    def link(self, relation: RelationOption, floating: Members = frozenset()) -> Link:
-        """Связь, описанная составами групп (без плавающих фрагментов): так она сравнима между
-        вариантами. У related направления нет, поэтому концы идут в одном порядке."""
-        source = self.group(relation.source).members - floating
-        target = self.group(relation.target).members - floating
-        if relation.type == "related" and sorted(target) < sorted(source):
-            source, target = target, source
-        return source, target, relation.type
+    def ties(self, floating: Members = frozenset()) -> dict[Pair, Tie]:
+        """Связи по парам групп, узнанных identity_of: так они сравнимы между вариантами. Пара
+        идёт в одном порядке; у depends_on сказано, кто зависит, у related направления нет.
+        independent — то же, что никакой связи."""
+        ties: dict[Pair, Tie] = {}
+        for relation in self.relations:
+            if relation.type == "independent":
+                continue
+            source = identity_of(self.group(relation.source), floating)
+            target = identity_of(self.group(relation.target), floating)
+            ties[min(source, target), max(source, target)] = (
+                relation.type, source if relation.type == "depends_on" else None)
+        return ties
 
-    def links(self, floating: Members = frozenset()) -> frozenset[Link]:
-        return frozenset(self.link(r, floating) for r in self.relations if r.type != "independent")
+    def key(self) -> tuple[frozenset[Members], frozenset[tuple[Pair, Tie]]]:
+        return frozenset(group.members for group in self.groups), frozenset(self.ties().items())
 
-    def key(self) -> tuple[frozenset[Members], frozenset[Link]]:
-        return frozenset(group.members for group in self.groups), self.links()
+
+def identity_of(group: GroupOption, floating: Members) -> Identity:
+    """Как узнать группу в другом варианте. По собственным фрагментам — без плавающих, то есть
+    общих хоть в одном варианте или в итоге: где им стоять, и есть предмет спора. Группу из
+    одних плавающих узнать не по чему, кроме всего состава."""
+    own = group.members - floating
+    return ("own", tuple(sorted(own))) if own else ("whole", tuple(sorted(group.members)))
 
 
 @dataclass(frozen=True)
@@ -180,18 +194,15 @@ def judged_structure(data: dict, labels: Mapping[int, str], candidates: list[Str
 
 def check_groups(option: StructureOption, candidates: list[StructureOption],
                  floating: Members) -> None:
-    """Группа узнаётся между вариантами по собственным фрагментам — без плавающих, то есть
-    общих хоть в одном варианте или в итоге: где им стоять, и есть предмет спора. Фрагмент,
-    которого нет ни в одном составе группы, судья добавить не может, а тот, что есть во всех, —
-    убрать. Группу из одних плавающих узнать не по чему: она должна совпасть с какой-то целиком."""
-    versions: dict[Members, list[Members]] = {}
+    """Группы итога — из вариантов. Фрагмент, которого нет ни в одном составе группы, судья
+    добавить не может, а тот, что есть во всех, — убрать; как и группу, что есть во всех."""
+    versions: dict[Identity, list[Members]] = {}
     for candidate in candidates:
         for group in candidate.groups:
-            versions.setdefault(group.members - floating, []).append(group.members)
+            versions.setdefault(identity_of(group, floating), []).append(group.members)
     for group in option.groups:
-        own = group.members - floating
-        seen = versions.get(own, [])
-        if not seen or (not own and group.members not in seen):
+        seen = versions.get(identity_of(group, floating))
+        if not seen:
             raise BadAnswer(f"судья собрал группу, которой нет ни в одном варианте: "
                             f"{numbers(group.members)}")
         added = group.members - frozenset().union(*seen)
@@ -202,20 +213,35 @@ def check_groups(option: StructureOption, candidates: list[StructureOption],
         if dropped:
             raise BadAnswer(f"судья убрал {numbers(dropped)} из группы {group.id}, "
                             "хотя там их ставили все варианты")
+    everywhere = set.intersection(*({identity_of(group, floating) for group in candidate.groups}
+                                    for candidate in candidates))
+    missing = everywhere - {identity_of(group, floating) for group in option.groups}
+    if missing:
+        _, ids = min(missing)
+        raise BadAnswer(f"судья убрал группу ({numbers(frozenset(ids))}), "
+                        "которая есть во всех вариантах")
 
 
 def check_links(option: StructureOption, candidates: list[StructureOption],
                 floating: Members) -> None:
-    """Связь судьи должна быть хоть в одном варианте, а связь из всех вариантов — в итоге."""
-    known = [candidate.links(floating) for candidate in candidates]
-    for relation in option.relations:
-        if relation.type == "independent":
+    """Связь каждой пары групп итога — такая же, как хоть у одного варианта, где есть обе
+    группы; отсутствие связи — тоже выбор. Паре, которой нет ни в одном варианте, связь взять
+    неоткуда."""
+    names = {identity_of(group, floating): group.id for group in option.groups}
+    final = option.ties(floating)
+    views = [({identity_of(group, floating) for group in candidate.groups},
+              candidate.ties(floating)) for candidate in candidates]
+    for pair in combinations(sorted(names), 2):
+        tie = final.get(pair)
+        choices = [ties.get(pair) for present, ties in views if set(pair) <= present]
+        if tie in choices or (tie is None and not choices):
             continue
-        if not any(option.link(relation, floating) in links for links in known):
-            raise BadAnswer(f"судья придумал связь {relation.source} → {relation.target} "
-                            f"({relation.type})")
-    if frozenset.intersection(*known) - option.links(floating):
-        raise BadAnswer("судья убрал связь, которая есть во всех вариантах")
+        if tie is None:
+            raise BadAnswer(f"судья оставил {names[pair[0]]} и {names[pair[1]]} без связи, "
+                            "а все варианты, где они есть, их связывают")
+        kind, source = tie
+        ends = pair if source in (None, pair[0]) else pair[::-1]
+        raise BadAnswer(f"судья придумал связь {names[ends[0]]} → {names[ends[1]]} ({kind})")
 
 
 def unique_relations(relations: Iterable[RelationOption]) -> tuple[RelationOption, ...]:
