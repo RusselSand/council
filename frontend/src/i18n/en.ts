@@ -86,7 +86,7 @@ export const en: Dict = {
   'groups.title_many': 'AI proposes {{count}} groups',
   'groups.title_other': 'AI proposes {{count}} groups',
   'groups.hint': 'Only your fragments — nothing added. A shared fragment is copied into each group with a link to its source. Once confirmed, each group becomes a separate stream.',
-  'groups.stale': 'Fragment types changed after grouping — the groups may be out of date.',
+  'groups.stale': 'Fragment types changed after grouping — the groups may be out of date. Group again to edit them.',
   'groups.again': 'Group again',
   'groups.decision': 'Judge: {{issue}} → {{decision}}. {{reason}}',
   'groups.missingIdea': 'no idea',

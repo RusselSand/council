@@ -62,7 +62,7 @@ const GROUPING: Structure = {
     { name: 'structure', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'structure_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
   ],
-  groups: [], relations: [], decisions: [], proposal: null, edited: false, error: null,
+  groups: [], relations: [], decisions: [], proposal: null, edited: false, revision: 0, error: null,
 }
 const GROUPED: Structure = {
   ...GROUPING, state: 'done',
@@ -644,7 +644,7 @@ describe('Правка групп', () => {
     const menu = screen.getByRole('menu', { name: ru['groups.mergeMenu'] })
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'B Хранение' }))
     expect(await screen.findByRole('heading', { name: '1 группа — с вашими правками' })).toBeTruthy()
-    expect(edits).toEqual([{ action: 'merge', body: { run: 'g1', group: 'A', other: 'B' } }])
+    expect(edits).toEqual([{ action: 'merge', body: { run: 'g1', revision: 0, group: 'A', other: 'B' } }])
     expect(screen.queryByRole('region', { name: 'Хранение' })).toBeNull()
     expect(screen.getByRole('button', { name: ru['groups.restore'] })).toBeTruthy()
   })
@@ -679,7 +679,7 @@ describe('Правка групп', () => {
     fireEvent.click(within(a).getByRole('checkbox', { name: 'F1' }))
     fireEvent.click(submit)
     expect(await screen.findByRole('region', { name: 'Факты' })).toBeTruthy()
-    expect(edits).toEqual([{ action: 'split', body: { run: 'g1', group: 'A', fragment_ids: [2], title: 'Факты' } }])
+    expect(edits).toEqual([{ action: 'split', body: { run: 'g1', revision: 0, group: 'A', fragment_ids: [2], title: 'Факты' } }])
     expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
@@ -707,14 +707,14 @@ describe('Правка групп', () => {
     fireEvent.change(field(), { target: { value: '  Воркер Codex ' } })
     fireEvent.keyDown(field(), { key: 'Enter' })
     expect(await screen.findByRole('region', { name: 'Воркер Codex' })).toBeTruthy()
-    expect(edits).toEqual([{ action: 'rename', body: { run: 'g1', group: 'A', title: 'Воркер Codex' } }])
+    expect(edits).toEqual([{ action: 'rename', body: { run: 'g1', revision: 0, group: 'A', title: 'Воркер Codex' } }])
   })
 
   it('«Вернуть как предложил совет» отменяет правки', async () => {
     openWith(() => json(grouped()), grouped(MERGED))
     fireEvent.click(await screen.findByRole('button', { name: ru['groups.restore'] }))
     expect(await screen.findByRole('heading', { name: 'ИИ предлагает 2 группы' })).toBeTruthy()
-    expect(edits).toEqual([{ action: 'restore', body: { run: 'g1' } }])
+    expect(edits).toEqual([{ action: 'restore', body: { run: 'g1', revision: 0 } }])
   })
 
   it('отказ сервера — у той группы, где правили', async () => {
@@ -741,22 +741,16 @@ describe('Правка групп', () => {
     expect(screen.queryByRole('form')).toBeNull()
   })
 
-  it('пока запускается новая раскладка, группы не правятся', async () => {
-    let answer!: () => void
-    const stale = grouped({ ...GROUPED, labels: { 1: 'idea', 2: 'risk' } })
-    fetchMock.mockImplementation(server({
-      council: () => stale,
-      group: () => new Promise<Response>(r => { answer = () => r(new Response(JSON.stringify(stale), { status: 202 })) }),
-    }))
-    renderAt('/councils/demo-1/structure')
-    fireEvent.click(await screen.findByRole('button', { name: ru['groups.again'] }))
+  it('типы поменялись после раскладки — группы не правятся, пока их не разложат заново', async () => {
+    openWith(() => json(grouped()), grouped({ ...MERGED, labels: { 1: 'idea', 2: 'risk' } }))
     const a = await card('Воркер')
-    await waitFor(() => expect(groupStarts).toBe(1))
     for (const name of [ru['groups.merge'], ru['groups.split'], 'Воркер']) {
       expect((within(a).getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
     }
-    answer()
-    await waitFor(() => expect((within(a).getByRole('button', { name: ru['groups.merge'] }) as HTMLButtonElement).disabled).toBe(false))
+    expect((screen.getByRole('button', { name: ru['groups.restore'] }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.again'] }))
+    await waitFor(() => expect(groupStarts).toBe(1))
+    expect(edits).toEqual([])
   })
 
   it('группы, где правили, больше нет (409) — ошибка в шапке', async () => {

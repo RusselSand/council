@@ -95,13 +95,16 @@ function Result({ council, structure, restart, again, edits }: Readonly<{
   const answered = structure.steps.find(s => s.name === 'structure')?.runs.filter(r => r.state === 'done').length ?? 0
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const stale = structureIsStale(council)
+  // Типы поменяли после раскладки — группы могли устареть, и новая раскладка всё равно
+  // заменит правки. Править их можно, разложив заново.
+  const locked = busy || stale
   const { id } = council
-  const { run } = structure
+  const at = { run: structure.run, revision: structure.revision }
 
   const editsOf = (group: Group): GroupEdits => ({
-    merge: other => edits.edit(group.id, () => api.mergeGroups(id, run, group.id, other)),
-    split: (ids, title) => edits.edit(group.id, () => api.splitGroup(id, run, group.id, ids, title)),
-    rename: title => edits.edit(group.id, () => api.renameGroup(id, run, group.id, title)),
+    merge: other => edits.edit(group.id, () => api.mergeGroups(id, at, group.id, other)),
+    split: (ids, title) => edits.edit(group.id, () => api.splitGroup(id, at, group.id, ids, title)),
+    rename: title => edits.edit(group.id, () => api.renameGroup(id, at, group.id, title)),
   })
   // Группы, где правили, после ответа может уже не быть (409 — разложили заново): тогда в шапку.
   const target = edits.at !== null && structure.groups.some(g => g.id === edits.at) ? edits.at : null
@@ -114,8 +117,8 @@ function Result({ council, structure, restart, again, edits }: Readonly<{
         {structure.edited && (
           <p className="fragment-note">
             {t('groups.edited')}{' '}
-            <button className="btn-link" disabled={busy}
-                    onClick={() => void edits.edit(null, () => api.restoreGroups(id, run))}>
+            <button className="btn-link" disabled={locked}
+                    onClick={() => void edits.edit(null, () => api.restoreGroups(id, at))}>
               {t('groups.restore')}
             </button>
           </p>
@@ -138,7 +141,7 @@ function Result({ council, structure, restart, again, edits }: Readonly<{
           был к прежнему составу. */}
       {structure.groups.map(group => (
         <GroupCard key={`${group.id}:${group.fragment_ids.join(',')}`} group={group} groups={structure.groups}
-                   fragments={fragments} edits={editsOf(group)} busy={busy} error={errorAt(group.id)}
+                   fragments={fragments} edits={editsOf(group)} busy={locked} error={errorAt(group.id)}
                    relations={structure.relations.filter(r => r.source === group.id || r.target === group.id)} />
       ))}
     </>

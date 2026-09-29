@@ -1,6 +1,6 @@
 """Правки готовых групп человеком: объединить, разделить, переименовать, вернуть как
-предложил совет. Каждая правка привязана к раскладке (run): разложили заново — прежняя
-правка уже не про эти группы."""
+предложил совет. Каждая правка привязана к раскладке (run) и версии её групп (revision):
+разложили заново или поправили в другой вкладке — прежняя правка уже не про эти группы."""
 
 from collections.abc import Callable
 from typing import Any
@@ -9,14 +9,22 @@ from fastapi import APIRouter, HTTPException
 
 from ..deps import StoreDep
 from ..groups import EditRefused, merged, renamed, restored, split
-from ..models import Council, GroupsEdit, MergeGroups, RenameGroup, SplitGroup, Structure
+from ..models import (
+    Council,
+    GroupsEdit,
+    MergeGroups,
+    RenameGroup,
+    Slicing,
+    SplitGroup,
+    Structure,
+)
 from .councils import MISSING, NOT_FOUND, council_lock
 
 router = APIRouter(prefix="/councils", tags=["groups"])
 
 EDIT_RESPONSES = {
     **NOT_FOUND,
-    409: {"description": "Группы уже разложили заново или их ещё нет"},
+    409: {"description": "Группы уже другие, их ещё нет или они устарели после смены типов"},
     422: {"description": "Правка без смысла: нет такой группы, делить нечего, пустое название"},
 }
 
@@ -54,12 +62,26 @@ def edited(council_id: str, store: StoreDep, edit: GroupsEdit,
         structure = council.structure
         if structure is None or structure.state != "done" or structure.run != edit.run:
             raise HTTPException(409, "Группы уже разложили заново — правка была к прежним")
+        if structure.revision != edit.revision:
+            raise HTTPException(409, "Группы уже поменяли — правка была к прежним")
+        if outdated(council.slicing, structure):
+            raise HTTPException(
+                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
         try:
             changes = change(structure)
         except EditRefused as exc:
             raise HTTPException(422, str(exc)) from exc
-        council = store.update_council(
-            council_id, {"structure": structure.model_copy(update=changes)})
+        council = store.update_council(council_id, {"structure": structure.model_copy(
+            update={**changes, "revision": structure.revision + 1})})
     if council is None:
         raise HTTPException(404, MISSING)
     return council
+
+
+def outdated(slicing: Slicing | None, structure: Structure) -> bool:
+    """Нарезку переделали или типы поменяли после раскладки: группы могли устареть. Править
+    их — править то, что новая раскладка всё равно заменит, да и идеи групп — по прежним типам."""
+    if slicing is None or slicing.run != structure.slicing_run:
+        return True
+    return any(structure.labels.get(fragment.id) != fragment.label
+               for fragment in slicing.fragments)

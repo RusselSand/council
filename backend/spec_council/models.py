@@ -131,6 +131,9 @@ class Structure(BaseModel):
     relations: list[GroupRelation] = []
     decisions: list[StructureDecision] = []
     proposal: StructureProposal | None = None
+    # Сколько раз человек правил группы этой раскладки. Правка несёт номер версии, к которой
+    # она сделана: из другой вкладки к прежней версии она не ляжет на нынешнюю.
+    revision: int = 0
     error: str | None = None
 
     @computed_field
@@ -177,11 +180,13 @@ class CouncilPatch(BaseModel):
 
 
 class GroupsEdit(BaseModel):
-    """Правка готовых групп человеком. run — к какой раскладке она относится: Structure.run."""
+    """Правка готовых групп человеком: к какой раскладке (Structure.run) и какой версии её
+    групп (Structure.revision) она сделана."""
 
     model_config = ConfigDict(extra="forbid")
 
     run: str
+    revision: int
 
 
 class MergeGroups(GroupsEdit):
