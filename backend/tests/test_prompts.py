@@ -12,6 +12,8 @@ GIVEN = {
     "slice_judge": {"input", "options"},
     "label": {"input", "fragments"},
     "label_judge": {"input", "fragments", "label_options"},
+    "structure": {"input", "fragments"},
+    "structure_judge": {"input", "fragments", "structure_options"},
 }
 
 

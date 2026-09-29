@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Council, CouncilPatch, Settings, Slicing } from '../api'
+import type { Council, CouncilPatch, Settings, Slicing, Structure } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
 import { en } from '../i18n/en'
@@ -12,6 +12,7 @@ import { CouncilPage, POLL_MS, STAGES } from './CouncilPage'
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
   participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', slicing: null,
+  structure: null,
 }
 const SETTINGS: Settings = {
   models: [
@@ -55,13 +56,38 @@ const DONE: Slicing = {
   ],
 }
 
+const GROUPING: Structure = {
+  state: 'running', run: 'g1', slicing_run: 'r1', labels: { 1: 'idea', 2: 'proposal' },
+  steps: [
+    { name: 'structure', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
+    { name: 'structure_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
+  ],
+  groups: [], relations: [], decisions: [], error: null,
+}
+const GROUPED: Structure = {
+  ...GROUPING, state: 'done',
+  steps: [
+    { name: 'structure', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+    { name: 'structure_judge', state: 'done', runs: [run('fable', 'done')] },
+  ],
+  groups: [
+    { id: 'A', title: 'Воркер', fragment_ids: [1, 2], idea_fragment_ids: [1], missing_idea: false,
+      shared_fragment_ids: [2] },
+    { id: 'B', title: 'Хранение', fragment_ids: [2], idea_fragment_ids: [], missing_idea: true,
+      shared_fragment_ids: [2] },
+  ],
+  relations: [{ source: 'B', target: 'A', type: 'related', reason: 'Пишет туда же, что и A.' }],
+  decisions: [{ issue: 'F2: A или A+B', decision: 'A+B', reason: 'Касается обеих.' }],
+}
+
 let fetchMock: ReturnType<typeof vi.fn>
 let patches: CouncilPatch[]
 let starts: number
+let groupStarts: number
 beforeEach(async () => {
   await setLanguage('ru')
   fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
-  patches = []; starts = 0
+  patches = []; starts = 0; groupStarts = 0
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -73,12 +99,17 @@ const server = ({
   council = () => COUNCIL,
   patch = () => json(COUNCIL),
   start = () => json({ ...COUNCIL, status: 'slices', slicing: RUNNING }, 202),
-}: { council?: () => Council; patch?: () => Promise<Response>; start?: () => Promise<Response> } = {}) =>
+  group = () => json({ ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPING }, 202),
+}: {
+  council?: () => Council; patch?: () => Promise<Response>
+  start?: () => Promise<Response>; group?: () => Promise<Response>
+} = {}) =>
   (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     if (url === '/api/settings') return json(SETTINGS)
     if (url === '/api/councils') return method === 'POST' ? json({ id: COUNCIL.id }) : json([council()])
     if (url.endsWith('/slicing')) { starts++; return start() }
+    if (url.endsWith('/structure')) { groupStarts++; return group() }
     if (method === 'PATCH') { patches.push(JSON.parse(String(init?.body))); return patch() }
     return json(council())
   }
@@ -134,7 +165,7 @@ describe('CouncilPage', () => {
     // Имя в шапку ставит эффект страницы — он может отработать чуть позже заголовка.
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain(COUNCIL.name))
     expect(screen.getByRole('link', { name: /Нарезка/ }).textContent).toContain(ru['council.stageDone'])
-    expect(screen.getByRole('link', { name: /Структура/ }).textContent).not.toContain(ru['council.stageDone'])
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).not.toContain(ru['council.stageDone'])
   })
 
   it('404 → «Проект не найден»', async () => {
@@ -355,7 +386,7 @@ describe('Нарезка', () => {
       + 'решил судья: Способ хранения.')).toBeTruthy()
     expect(screen.getByText('граница — решение судьи нарезки: две мысли')).toBeTruthy()
 
-    expect(screen.getByText(ru['slices.stepState.skipped'])).toBeTruthy()
+    expect(screen.getByText(ru['progress.stepState.skipped'])).toBeTruthy()
     expect(screen.getByText('нет входа в подписку')).toBeTruthy()
   })
 
@@ -431,7 +462,7 @@ describe('Нарезка', () => {
       current = { ...COUNCIL, slicing: RUNNING }   // её уже запустили в другой вкладке
       return json({ detail: 'Нарезка уже идёт' }, 409)
     })
-    fireEvent.click(await screen.findByRole('button', { name: ru['slices.retry'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
     expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
     expect(screen.queryByText('Нарезка уже идёт')).toBeNull()
   })
@@ -469,9 +500,65 @@ describe('Нарезка', () => {
     const failed: Slicing = { ...RUNNING, state: 'failed', error: 'ни один участник не справился' }
     openSlices(() => ({ ...COUNCIL, slicing: failed }))
     expect((await screen.findByRole('alert')).textContent).toBe('ни один участник не справился')
-    fireEvent.click(screen.getByRole('button', { name: ru['slices.retry'] }))
+    fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
     expect(await screen.findByRole('heading', { name: ru['slices.runningTitle'] })).toBeTruthy()
     expect(starts).toBe(1)
+  })
+})
+
+describe('Группы', () => {
+  const openAt = (stage: string, council: () => Council) => {
+    fetchMock.mockImplementation(server({ council }))
+    renderAt(`/councils/demo-1/${stage}`)
+  }
+
+  it('после нарезки — «Дальше»: предложить группы и перейти к ним', async () => {
+    let current: Council = { ...COUNCIL, slicing: DONE }
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      group: () => { current = { ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPING }
+                     return json(current, 202) },
+    }))
+    renderAt('/councils/demo-1/slices')
+    fireEvent.click(await screen.findByRole('button', { name: ru['next.propose'] }))
+    expect(await screen.findByRole('heading', { name: ru['groups.runningTitle'] })).toBeTruthy()
+    expect(groupStarts).toBe(1)
+    expect(screen.getByText(ru['step.structure'])).toBeTruthy()
+  })
+
+  it('разложенные — ссылка «К группам», а не новый запуск', async () => {
+    openAt('slices', () => ({ ...COUNCIL, slicing: DONE, structure: GROUPED }))
+    expect(await screen.findByRole('link', { name: ru['next.open'] })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ru['next.propose'] })).toBeNull()
+  })
+
+  it('группы: буквы, названия, связи, общий фрагмент, решение судьи', async () => {
+    openAt('structure', () => ({ ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPED }))
+    expect(await screen.findByRole('heading', { name: 'ИИ предлагает 2 группы' })).toBeTruthy()
+    const a = screen.getByRole('region', { name: 'Воркер' })
+    const b = screen.getByRole('region', { name: 'Хранение' })
+    expect(within(a).getByText('связана с B')).toBeTruthy()
+    expect(within(b).getByText(ru['groups.missingIdea'])).toBeTruthy()
+    expect(within(b).getByText('Пишет туда же, что и A.')).toBeTruthy()
+    expect(within(a).queryByText('Пишет туда же, что и A.')).toBeNull()
+    expect(within(a).getByText('копия · общий с B')).toBeTruthy()
+    expect(within(b).getByText('копия · общий с A')).toBeTruthy()
+    expect(within(a).getAllByText(ru['label.proposal'])).toHaveLength(1)
+    expect(screen.getByText('Судья: F2: A или A+B → A+B. Касается обеих.')).toBeTruthy()
+    expect((within(a).getByRole('button', { name: ru['groups.merge'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('готово ×2')).toBeTruthy()
+  })
+
+  it('типы поменяли после раскладки — предупреждение и «Разложить заново»', async () => {
+    const stale = { ...GROUPED, labels: { 1: 'idea' as const, 2: 'risk' as const } }
+    openAt('structure', () => ({ ...COUNCIL, status: 'structure', slicing: DONE, structure: stale }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['groups.again'] }))
+    await waitFor(() => expect(groupStarts).toBe(1))
+  })
+
+  it('без раскладки — дорога к нарезке', async () => {
+    openAt('structure', () => ({ ...COUNCIL, slicing: DONE }))
+    expect(await screen.findByRole('link', { name: ru['groups.toSlices'] })).toBeTruthy()
   })
 })
 

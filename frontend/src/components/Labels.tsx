@@ -20,6 +20,12 @@ export function LabelChips({ value, onChange, name }: Readonly<{
   )
 }
 
+/** Тип фрагмента меткой в его цвете — там, где его не меняют. */
+export function LabelPill({ label }: Readonly<{ label: Label }>) {
+  const { t } = useTranslation()
+  return <span className={`label-pill label-${label}`}>{t(`label.${label}`)}</span>
+}
+
 /** Цвета типов и сколько фрагментов каждого. */
 export function LabelLegend({ fragments }: Readonly<{ fragments: LabeledFragment[] }>) {
   const { t } = useTranslation()

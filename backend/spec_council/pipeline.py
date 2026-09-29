@@ -1,10 +1,15 @@
-"""Нарезка и разметка советом: участники работают по отдельности, судья решает споры.
+"""Ход совета: участники работают по отдельности, судья решает только там, где разошлись.
 
+Нарезка (SlicingRun):
 1. slice — каждый участник нарезает текст (prompts/slice.md);
 2. slice_judge — если нарезки разошлись или кто-то видит несколько вариантов, судья
    выбирает итоговую (slice_judge.md); если все сошлись, шаг пропускается;
 3. label — каждый участник размечает итоговые фрагменты (label.md);
 4. label_judge — фрагменты, где типы разошлись, решает судья (label_judge.md).
+
+Группы (GroupingRun):
+1. structure — каждый участник раскладывает фрагменты готовой нарезки по группам (structure.md);
+2. structure_judge — если раскладки разошлись, судья выбирает итоговую (structure_judge.md).
 
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
@@ -20,11 +25,24 @@ import json
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from string import ascii_uppercase
 from threading import Lock
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
-from .models import LabeledFragment, ModelRun, Slicing, SlicingStep, SlicingStepName, Vote
+from .grouping import StructureOption, judged_structure, structure_options
+from .models import (
+    Group,
+    GroupRelation,
+    LabeledFragment,
+    ModelRun,
+    Slicing,
+    Step,
+    StepName,
+    Structure,
+    StructureDecision,
+    Vote,
+)
 from .prompts import PromptError, render
 from .slicing import (
     BadAnswer,
@@ -45,14 +63,15 @@ from .slicing import (
 
 log = logging.getLogger(__name__)
 
-Step = SlicingStepName
+# Судья отверг всех кандидатов шага — чьи ответы при этом выбросить из лотка.
+CANDIDATES = {StepName.slice_judge: StepName.slice, StepName.structure_judge: StepName.structure}
 
 
 class ModelFailed(RuntimeError):
     """Модель не ответила: нет входа, лимит, CLI упала. Текст — для человека."""
 
 
-class SlicingFailed(RuntimeError):
+class StageFailed(RuntimeError):
     """Шаг не дал результата, дальше идти не с чем."""
 
 
@@ -67,13 +86,25 @@ class Runner(Protocol):
         """Провайдер и модель за alias: сменились — это другой ответ, а не повтор."""
 
 
+def steps(participants: list[str], judge: str, *pairs: tuple[StepName, StepName]) -> list[Step]:
+    """Шаги хода: для каждой пары — участники, потом судья."""
+    return [step
+            for work, judging in pairs
+            for step in (Step(name=work, runs=[ModelRun(model=m) for m in participants]),
+                         Step(name=judging, runs=[ModelRun(model=judge)]))]
+
+
 def start(participants: list[str], judge: str, text: str = "") -> Slicing:
-    return Slicing(state="running", run=uuid4().hex[:8], text=text, steps=[
-        SlicingStep(name=Step.slice, runs=[ModelRun(model=m) for m in participants]),
-        SlicingStep(name=Step.slice_judge, runs=[ModelRun(model=judge)]),
-        SlicingStep(name=Step.label, runs=[ModelRun(model=m) for m in participants]),
-        SlicingStep(name=Step.label_judge, runs=[ModelRun(model=judge)]),
-    ])
+    return Slicing(state="running", run=uuid4().hex[:8], text=text,
+                   steps=steps(participants, judge, (StepName.slice, StepName.slice_judge),
+                               (StepName.label, StepName.label_judge)))
+
+
+def start_structure(participants: list[str], judge: str, slicing: Slicing) -> Structure:
+    return Structure(state="running", run=uuid4().hex[:8], slicing_run=slicing.run,
+                     labels={f.id: f.label for f in slicing.fragments},
+                     steps=steps(participants, judge,
+                                 (StepName.structure, StepName.structure_judge)))
 
 
 def digest(text: str) -> str:
@@ -94,108 +125,44 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class Pipeline:
-    def __init__(self, council_id: str, brief: str, participants: list[str], judge: str,
-                 runner: Runner, report: Callable[[Slicing], None]) -> None:
+class CouncilRun[S: (Slicing, Structure)]:
+    """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
+    Что именно делают шаги — в work() наследника; он возвращает поля итога."""
+
+    what = "ход"
+
+    def __init__(self, council_id: str, participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[S], None], state: S) -> None:
         self.council_id = council_id
-        self.brief = brief
         self.participants = participants
         self.judge = judge
         self.runner = runner
         self.report = report
-        self.state = start(participants, judge, brief)
+        self.state = state
         self._lock = Lock()
-        self._keys: dict[Step, list[str]] = {}  # принятые ответы по шагам
+        self._keys: dict[StepName, list[str]] = {}  # принятые ответы по шагам
 
-    def run(self) -> Slicing:
+    def run(self) -> S:
         try:
-            bounds, notes = self._slice()
-            fragments = cut(self.brief, bounds)
-            labeled = self._label(fragments, note_places(fragments, notes))
-        except (SlicingFailed, PromptError) as exc:
+            result = self.work()
+        except (StageFailed, PromptError) as exc:
             self._finish(error=str(exc))
             return self.state
         except Exception as exc:
-            log.exception("нарезка совета %s упала", self.council_id)
+            log.exception("%s совета %s упал", self.what, self.council_id)
             self._finish(error=f"внутренняя ошибка: {exc}")
             return self.state
-        self._finish(fragments=labeled)
+        self._finish(**result)
         # Итог уже сохранён report'ом — оплаченные ответы больше не нужны.
         self.runner.forget([key for keys in self._keys.values() for key in keys])
         return self.state
 
-    # --- шаги
-
-    def _slice(self) -> tuple[tuple[int, ...], list[BoundaryNote]]:
-        prompt = render("slice", input=self.brief)
-        answers = self._ask_all(Step.slice, prompt, lambda data: slice_options(self.brief, data))
-        distinct: dict[tuple[int, ...], list[str]] = {}
-        for options in answers.values():
-            for option in options:
-                reasons = distinct.setdefault(option.bounds, [])
-                if option.reason and option.reason not in reasons:
-                    reasons.append(option.reason)
-        if len(distinct) == 1:
-            self._skip(Step.slice_judge)
-            return next(iter(distinct)), []
-
-        candidates = [SliceOption(bounds, "; ".join(reasons) or None)
-                      for bounds, reasons in distinct.items()]
-        variants = shuffled([{"fragments": cut(self.brief, option.bounds), "reason": option.reason}
-                             for option in candidates])
-        prompt = render("slice_judge", input=self.brief,
-                        options=as_json([{"variant": n, **v} for n, v in enumerate(variants, 1)]))
-        return self._ask_judge(Step.slice_judge, prompt, lambda data: (
-            judged_bounds(self.brief, data, candidates), boundary_notes(data)))
-
-    def _label(self, fragments: list[str], notes: dict[int, str]) -> list[LabeledFragment]:
-        """notes — пояснения судьи нарезки по индексу фрагмента."""
-        ids = list(range(1, len(fragments) + 1))
-        texts = dict(zip(ids, fragments, strict=True))
-        prompt = render("label", input=self.brief,
-                        fragments=as_json([{"id": i, "text": texts[i]} for i in ids]))
-        answers = self._ask_all(Step.label, prompt, lambda data: label_options(data, ids))
-
-        final: dict[int, LabelOption] = {}
-        disputed: dict[int, list[LabelOption]] = {}
-        for i in ids:
-            per_model = [options[i] for options in answers.values()]
-            agreed = agreed_label(per_model)
-            if agreed:
-                final[i] = agreed
-            else:
-                disputed[i] = list(dict.fromkeys(o for options in per_model for o in options))
-
-        if not disputed:
-            self._skip(Step.label_judge)
-        else:
-            prompt = render(
-                "label_judge", input=self.brief,
-                fragments=as_json([{"id": i, "text": texts[i]} for i in disputed]),
-                label_options=as_json([
-                    {"id": i, "options": shuffled([{"label": o.label, "reason": o.reason}
-                                                  for o in options])}
-                    for i, options in disputed.items()
-                ]),
-            )
-            final |= self._ask_judge(Step.label_judge, prompt,
-                                     lambda data: judged_labels(data, list(disputed)))
-
-        return [
-            LabeledFragment(
-                id=i, text=texts[i], label=final[i].label, reason=final[i].reason,
-                council_label=final[i].label,
-                decided_by="judge" if i in disputed else "agreed",
-                votes=[Vote(model=model, labels=[o.label for o in options[i]])
-                       for model, options in answers.items()],
-                slice_note=notes.get(i - 1),
-            )
-            for i in ids
-        ]
+    def work(self) -> dict[str, Any]:
+        raise NotImplementedError
 
     # --- вызовы моделей
 
-    def _ask_all[T](self, step: Step, prompt: str, parse: Callable[[dict], T]) -> dict[str, T]:
+    def _ask_all[T](self, step: StepName, prompt: str, parse: Callable[[dict], T]) -> dict[str, T]:
         """Все участники параллельно. Упавший выбывает из шага, остальные идут дальше."""
         self._set_step(step, "running")
         with ThreadPoolExecutor(max_workers=len(self.participants)) as pool:
@@ -204,20 +171,21 @@ class Pipeline:
         if not answers:
             self._set_step(step, "failed")
             errors = "; ".join(f"{run.model}: {run.error}" for run in self._step(step).runs)
-            raise SlicingFailed(f"ни один участник не справился с шагом {step}: {errors}")
+            raise StageFailed(f"ни один участник не справился с шагом {step}: {errors}")
         self._set_step(step, "done")
         return answers
 
-    def _ask_judge[T](self, step: Step, prompt: str, parse: Callable[[dict], T]) -> T:
+    def _ask_judge[T](self, step: StepName, prompt: str, parse: Callable[[dict], T]) -> T:
         self._set_step(step, "running")
         answer = self._ask(step, self.judge, prompt, parse)
         if answer is None:
             self._set_step(step, "failed")
-            raise SlicingFailed(f"судья {self.judge}: {self._step(step).runs[0].error}")
+            raise StageFailed(f"судья {self.judge}: {self._step(step).runs[0].error}")
         self._set_step(step, "done")
         return answer
 
-    def _ask[T](self, step: Step, model: str, prompt: str, parse: Callable[[dict], T]) -> T | None:
+    def _ask[T](self, step: StepName, model: str, prompt: str,
+                parse: Callable[[dict], T]) -> T | None:
         # Повтор с тем же ключом берёт оплаченный ответ даром — только если отвечает та же
         # модель: провайдер и модель за alias тоже в ключе.
         key = f"{self.council_id}-{step}-{model}-{digest(self.runner.identity(model) + prompt)}"
@@ -233,7 +201,7 @@ class Pipeline:
             # Судья честно отверг всех кандидатов. Их ответы — из лотка, иначе повтор взял бы
             # тех же кандидатов даром и снова заплатил бы судье за тот же отказ.
             with self._lock:
-                candidates = self._keys.pop(Step.slice, [])
+                candidates = self._keys.pop(CANDIDATES[step], [])
             self.runner.forget([*candidates, key])
             self._set_run(step, model, "failed", str(exc))
             return None
@@ -252,34 +220,196 @@ class Pipeline:
 
     # --- состояние
 
-    def _step(self, name: Step) -> SlicingStep:
+    def _step(self, name: StepName) -> Step:
         return next(step for step in self.state.steps if step.name == name)
 
-    def _set_step(self, name: Step, state: str) -> None:
+    def _set_step(self, name: StepName, state: str) -> None:
         with self._lock:
             self._step(name).state = state
             self._publish()
 
-    def _skip(self, name: Step) -> None:
+    def _skip(self, name: StepName) -> None:
         with self._lock:
             step = self._step(name)
             step.state = "skipped"
             step.runs = []
             self._publish()
 
-    def _set_run(self, name: Step, model: str, state: str, error: str | None = None) -> None:
+    def _set_run(self, name: StepName, model: str, state: str, error: str | None = None) -> None:
         with self._lock:
             run = next(run for run in self._step(name).runs if run.model == model)
             run.state, run.error = state, error
             self._publish()
 
-    def _finish(self, *, fragments: list[LabeledFragment] | None = None,
-                error: str | None = None) -> None:
+    def _finish(self, *, error: str | None = None, **result: Any) -> None:
         with self._lock:
             self.state.state = "failed" if error else "done"
             self.state.error = error
-            self.state.fragments = fragments or []
+            for field, value in result.items():
+                setattr(self.state, field, value)
             self._publish()
 
     def _publish(self) -> None:
         self.report(self.state.model_copy(deep=True))
+
+
+class SlicingRun(CouncilRun[Slicing]):
+    """Нарезка текста на смысловые фрагменты и их разметка."""
+
+    what = "нарезка"
+
+    def __init__(self, council_id: str, brief: str, participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[Slicing], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start(participants, judge, brief))
+        self.brief = brief
+
+    def work(self) -> dict[str, Any]:
+        bounds, notes = self._slice()
+        fragments = cut(self.brief, bounds)
+        return {"fragments": self._label(fragments, note_places(fragments, notes))}
+
+    def _slice(self) -> tuple[tuple[int, ...], list[BoundaryNote]]:
+        prompt = render("slice", input=self.brief)
+        answers = self._ask_all(StepName.slice, prompt,
+                                lambda data: slice_options(self.brief, data))
+        distinct: dict[tuple[int, ...], list[str]] = {}
+        for options in answers.values():
+            for option in options:
+                reasons = distinct.setdefault(option.bounds, [])
+                if option.reason and option.reason not in reasons:
+                    reasons.append(option.reason)
+        if len(distinct) == 1:
+            self._skip(StepName.slice_judge)
+            return next(iter(distinct)), []
+
+        candidates = [SliceOption(bounds, "; ".join(reasons) or None)
+                      for bounds, reasons in distinct.items()]
+        variants = shuffled([{"fragments": cut(self.brief, option.bounds), "reason": option.reason}
+                             for option in candidates])
+        prompt = render("slice_judge", input=self.brief,
+                        options=as_json([{"variant": n, **v} for n, v in enumerate(variants, 1)]))
+        return self._ask_judge(StepName.slice_judge, prompt, lambda data: (
+            judged_bounds(self.brief, data, candidates), boundary_notes(data)))
+
+    def _label(self, fragments: list[str], notes: dict[int, str]) -> list[LabeledFragment]:
+        """notes — пояснения судьи нарезки по индексу фрагмента."""
+        ids = list(range(1, len(fragments) + 1))
+        texts = dict(zip(ids, fragments, strict=True))
+        prompt = render("label", input=self.brief,
+                        fragments=as_json([{"id": i, "text": texts[i]} for i in ids]))
+        answers = self._ask_all(StepName.label, prompt, lambda data: label_options(data, ids))
+
+        final: dict[int, LabelOption] = {}
+        disputed: dict[int, list[LabelOption]] = {}
+        for i in ids:
+            per_model = [options[i] for options in answers.values()]
+            agreed = agreed_label(per_model)
+            if agreed:
+                final[i] = agreed
+            else:
+                disputed[i] = list(dict.fromkeys(o for options in per_model for o in options))
+
+        if not disputed:
+            self._skip(StepName.label_judge)
+        else:
+            prompt = render(
+                "label_judge", input=self.brief,
+                fragments=as_json([{"id": i, "text": texts[i]} for i in disputed]),
+                label_options=as_json([
+                    {"id": i, "options": shuffled([{"label": o.label, "reason": o.reason}
+                                                  for o in options])}
+                    for i, options in disputed.items()
+                ]),
+            )
+            final |= self._ask_judge(StepName.label_judge, prompt,
+                                     lambda data: judged_labels(data, list(disputed)))
+
+        return [
+            LabeledFragment(
+                id=i, text=texts[i], label=final[i].label, reason=final[i].reason,
+                council_label=final[i].label,
+                decided_by="judge" if i in disputed else "agreed",
+                votes=[Vote(model=model, labels=[o.label for o in options[i]])
+                       for model, options in answers.items()],
+                slice_note=notes.get(i - 1),
+            )
+            for i in ids
+        ]
+
+
+class GroupingRun(CouncilRun[Structure]):
+    """Раскладка фрагментов готовой нарезки по группам — вокруг идей. Типы берутся как есть
+    сейчас, с правками человека: они и есть итог нарезки."""
+
+    what = "группировка"
+
+    def __init__(self, council_id: str, slicing: Slicing, participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[Structure], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_structure(participants, judge, slicing))
+        self.slicing = slicing
+
+    def work(self) -> dict[str, Any]:
+        ids = [f.id for f in self.slicing.fragments]
+        fragments = as_json([{"id": f.id, "text": f.text, "type": f.label}
+                             for f in self.slicing.fragments])
+        prompt = render("structure", input=self.slicing.text, fragments=fragments)
+        answers = self._ask_all(StepName.structure, prompt,
+                                lambda data: structure_options(data, ids))
+
+        # Одинаковые по содержанию раскладки — одна; первая встреченная даёт названия.
+        distinct: dict[object, StructureOption] = {}
+        for options in answers.values():
+            for option in options:
+                distinct.setdefault(option.key(), option)
+        if len(distinct) == 1:
+            self._skip(StepName.structure_judge)
+            return final_structure(next(iter(distinct.values())), [])
+
+        candidates = list(distinct.values())
+        variants = shuffled([as_variant(option) for option in candidates])
+        numbered = [{"variant": n, **v} for n, v in enumerate(variants, 1)]
+        prompt = render("structure_judge", input=self.slicing.text, fragments=fragments,
+                        structure_options=as_json(numbered))
+        chosen, decisions = self._ask_judge(StepName.structure_judge, prompt,
+                                            lambda data: judged_structure(data, ids, candidates))
+        return final_structure(chosen, [
+            StructureDecision(issue=d.issue, decision=d.decision, reason=d.reason)
+            for d in decisions
+        ])
+
+
+def as_variant(option: StructureOption) -> dict[str, Any]:
+    """Раскладка для судьи — в той же форме, в какой её прислал участник."""
+    shared = option.shared()
+    return {
+        "groups": [{"id": g.id, "title": g.title, "idea_fragment_ids": sorted(g.ideas),
+                    "fragment_ids": sorted(g.members - shared), "missing_idea": not g.ideas,
+                    "shared_fragment_ids": sorted(g.members & shared)} for g in option.groups],
+        "relations": [{"from": r.source, "to": r.target, "type": r.type, "reason": r.reason}
+                      for r in option.relations],
+        "reason": option.reason,
+    }
+
+
+def final_structure(option: StructureOption, decisions: list[StructureDecision]) -> dict[str, Any]:
+    """Итог для экрана: группы по порядку первого фрагмента под буквами A, B, C…, связи — между
+    ними, независимость — просто отсутствие связи."""
+    ordered = sorted(option.groups, key=lambda group: min(group.members))
+    letters = {group.id: letter_for(n) for n, group in enumerate(ordered)}
+    shared = option.shared()
+    groups = [Group(id=letters[g.id], title=g.title or letters[g.id],
+                    fragment_ids=sorted(g.members), idea_fragment_ids=sorted(g.ideas),
+                    missing_idea=not g.ideas, shared_fragment_ids=sorted(g.members & shared))
+              for g in ordered]
+    relations = [GroupRelation(source=letters[r.source], target=letters[r.target], type=r.type,
+                               reason=r.reason)
+                 for r in option.relations if r.type != "independent"]
+    return {"groups": groups, "relations": relations, "decisions": decisions}
+
+
+def letter_for(n: int) -> str:
+    """A…Z, потом A2, B2…: групп больше 26 не ждём, но и падать не должны."""
+    letter = ascii_uppercase[n % len(ascii_uppercase)]
+    return letter if n < len(ascii_uppercase) else f"{letter}{n // len(ascii_uppercase) + 1}"

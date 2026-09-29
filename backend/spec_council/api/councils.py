@@ -1,12 +1,14 @@
+from collections.abc import Callable
 from threading import Lock
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 
 from ..agents import AgentRunner
 from ..config import MIN_PARTICIPANTS, AppConfig
-from ..deps import AgentsDep, ConfigDep, LauncherDep, StoreDep
-from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Label, Slicing
-from ..pipeline import Pipeline
+from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, Store, StoreDep
+from ..models import Council, CouncilCreated, CouncilPatch, CouncilStatus, Label, Slicing, Structure
+from ..pipeline import CouncilRun, GroupingRun, SlicingRun
 
 router = APIRouter(prefix="/councils", tags=["councils"])
 
@@ -14,19 +16,22 @@ MISSING = "Совет не найден"
 NOT_FOUND = {404: {"description": MISSING}}
 INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
 NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
-CANNOT_SLICE = {
-    503: {"description": "Не запущена: сервер останавливается или состав совета меняется"},
-    409: {"description": "Нарезка уже идёт или её только что запустил другой запрос"},
-    422: {"description": "Текст пуст или к моделям совета нет подключения"},
+CANNOT_START = {
+    503: {"description": "Не запущено: сервер останавливается или состав совета меняется"},
+    409: {"description": "Этот ход уже идёт или его только что запустил другой запрос"},
+    423: {"description": "Идёт другой ход совета, от которого этот зависит"},
+    422: {"description": "Нечего обрабатывать или к моделям совета нет подключения"},
 }
 
-# Проверка «уже идёт» и запуск — одним куском, иначе два клика запустили бы две нарезки.
+# Проверка «уже идёт» и запуск — одним куском, иначе два клика запустили бы два хода.
 # Тот же замок у правки типов: они меняют готовую нарезку. Внутри — только короткое: CLI
 # под замком не запускаем.
 _starting = Lock()
 
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
+
+Field = Literal["slicing", "structure"]
 
 
 @router.get("")
@@ -87,66 +92,109 @@ def relabeled(slicing: Slicing | None, labels: dict[int, Label], run: str | None
     return slicing.model_copy(update={"fragments": fragments})
 
 
-@router.post("/{council_id}/slicing", status_code=202, responses={**NOT_FOUND, **CANNOT_SLICE})
+@router.post("/{council_id}/slicing", status_code=202, responses={**NOT_FOUND, **CANNOT_START})
 def start_slicing(council_id: str, store: StoreDep, config: ConfigDep, agents: AgentsDep,
                   launch: LauncherDep) -> Council:
     """Запускает нарезку и разметку текста советом. Идёт в фоне минутами: ход виден в
-    council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром."""
-    def report(slicing: Slicing) -> None:
-        store.update_council(council_id, {"slicing": slicing}, touch=slicing.state != "running")
+    council.slicing, фронт его опрашивает. Повтор после сбоя берёт оплаченные ответы даром.
+    Прежние группы при этом сбрасываются: они были про прежние фрагменты."""
+    def ready(council: Council) -> None:
+        if running(council.structure):
+            raise HTTPException(
+                423, "Идёт раскладка по группам — дождитесь её, потом нарезайте заново")
+        if not council.brief.strip():
+            raise HTTPException(422, "Нарезать нечего: текст пуст")
+
+    return start_run(
+        council_id, store, config, agents, launch, "slicing", ready, CouncilStatus.slices,
+        lambda council, report: SlicingRun(council.id, council.brief, council.participants,
+                                           council.judge, agents, report),
+        also={"structure": None},
+    )
+
+
+@router.post("/{council_id}/structure", status_code=202, responses={**NOT_FOUND, **CANNOT_START})
+def start_structure(council_id: str, store: StoreDep, config: ConfigDep, agents: AgentsDep,
+                    launch: LauncherDep) -> Council:
+    """Запускает раскладку фрагментов готовой нарезки по группам, в фоне. Ход — в
+    council.structure. Типы берутся текущие, с правками человека."""
+    def ready(council: Council) -> None:
+        if running(council.slicing):
+            raise HTTPException(423, "Нарезка ещё идёт — группы после неё")
+        if council.slicing is None or council.slicing.state != "done":
+            raise HTTPException(422, "Раскладывать нечего: сначала нужна готовая нарезка")
+
+    return start_run(
+        council_id, store, config, agents, launch, "structure", ready, CouncilStatus.structure,
+        lambda council, report: GroupingRun(council.id, council.slicing, council.participants,
+                                            council.judge, agents, report),
+    )
+
+
+def start_run(council_id: str, store: Store, config: AppConfig, agents: AgentRunner,
+              launch: Launcher, field: Field, ready: Callable[[Council], None],
+              status: CouncilStatus, build: Callable[[Council, Callable], CouncilRun],
+              also: dict | None = None) -> Council:
+    """Общий запуск хода совета (нарезки или групп).
+
+    Вход проверяется заново, а не из памяти: запуск платный. Это запуски CLI, поэтому вне
+    замка; под замком — только сверка: не запустил ли ход кто-то другой и не поменялся ли
+    состав совета, пока шла проверка. Поменялся — проверяем новый, и снова вне замка.
+    """
+    def report(state: Slicing | Structure) -> None:
+        store.update_council(council_id, {field: state}, touch=state.state != "running")
+
+    def startable(council: Council | None) -> Council:
+        if council is None:
+            raise HTTPException(404, MISSING)
+        if running(getattr(council, field)):
+            raise HTTPException(409, "Этот ход уже идёт")
+        ready(council)
+        return council
 
     before = startable(store.get_council(council_id))
     for _ in range(PROBE_ATTEMPTS):
-        # Вход — заново, а не из памяти: запуск платный. Это запуски CLI, поэтому вне замка.
         check_online(before, config, agents, fresh=True)
         with _starting:
             council = startable(store.get_council(council_id))
-            # Пока шла проверка, нарезку мог запустить и даже закончить другой запрос: второй
-            # запуск заплатил бы за тот же ход ещё раз и затёр бы итог.
-            if run_of(council) != run_of(before):
-                raise HTTPException(409, "Нарезку уже запустили")
+            # Пока шла проверка, ход мог запустить и даже закончить другой запрос: второй
+            # запуск заплатил бы за те же ходы моделей ещё раз и затёр бы итог.
+            if run_of(council, field) != run_of(before, field):
+                raise HTTPException(409, "Этот ход уже запустили")
             if lineup(council) == lineup(before):
-                pipeline = Pipeline(council.id, council.brief, council.participants,
-                                    council.judge, agents, report)
+                pipeline = build(council, report)
                 council = store.update_council(council_id, {
-                    "slicing": pipeline.state.model_copy(deep=True),
-                    "status": CouncilStatus.slices,
+                    field: pipeline.state.model_copy(deep=True), "status": status, **(also or {}),
                 })
                 break
-        # Состав поменяли, пока шла проверка: проверяем новый, и снова вне замка.
         before = council
     else:
-        # Не 409: 409 значит «нарезка уже есть — следите за ней», а здесь её никто не запускал.
+        # Не 409: 409 значит «ход уже есть — следите за ним», а здесь его никто не запускал.
         raise HTTPException(503, "Состав совета меняется прямо сейчас — попробуйте ещё раз")
     try:
         launch(pipeline.run)
     except RuntimeError as exc:
-        # Пул закрыт: приложение останавливается. Нарезка не началась — так и записываем,
-        # иначе совет навсегда остался бы «идёт» и повтор получал бы 409.
+        # Пул закрыт: приложение останавливается. Ход не начался — так и записываем, иначе
+        # совет навсегда остался бы «идёт» и повтор получал бы 409.
         failed = pipeline.state.model_copy(
-            update={"state": "failed", "error": f"не запущена: {exc}"})
-        store.update_council(council_id, {"slicing": failed})
-        raise HTTPException(503, "Сервер останавливается, нарезка не запущена") from exc
+            update={"state": "failed", "error": f"не запущен: {exc}"})
+        store.update_council(council_id, {field: failed})
+        raise HTTPException(503, "Сервер останавливается, ход не запущен") from exc
     return council
+
+
+def running(state: Slicing | Structure | None) -> bool:
+    return state is not None and state.state == "running"
 
 
 def lineup(council: Council) -> frozenset[str]:
-    """Кого запустит нарезка: участники и судья."""
+    """Кого запустит ход: участники и судья."""
     return frozenset([*council.participants, council.judge])
 
 
-def run_of(council: Council) -> str | None:
-    return council.slicing.run if council.slicing else None
-
-
-def startable(council: Council | None) -> Council:
-    if council is None:
-        raise HTTPException(404, MISSING)
-    if council.slicing and council.slicing.state == "running":
-        raise HTTPException(409, "Нарезка уже идёт")
-    if not council.brief.strip():
-        raise HTTPException(422, "Нарезать нечего: текст пуст")
-    return council
+def run_of(council: Council, field: Field) -> str | None:
+    state = getattr(council, field)
+    return state.run if state else None
 
 
 def check_online(council: Council, config: AppConfig, agents: AgentRunner, *, fresh: bool) -> None:

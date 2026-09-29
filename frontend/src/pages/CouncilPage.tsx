@@ -9,9 +9,10 @@ import { useAutosave } from '../useAutosave'
 import { useInterval } from '../useInterval'
 import { useLoad } from '../useLoad'
 import { BriefStage } from './BriefStage'
+import { GroupsStage } from './GroupsStage'
 import { SlicesStage } from './SlicesStage'
 
-export const STAGES = ['brief', 'slices', 'structure', 'spec', 'history'] as const
+export const STAGES = ['brief', 'slices', 'structure', 'streams', 'history'] as const
 
 /** Как часто спрашивать сервер, пока идёт нарезка: ходы моделей длятся минутами. */
 export const POLL_MS = 2000
@@ -39,9 +40,11 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
 
-  // С сервера берём только нарезку и статус: текст и название могут быть ещё не сохранены.
-  const sliced = useCallback((fresh: Council) =>
-    update(([c, settings]) => [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]), [update])
+  // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
+  const adopt = useCallback((fresh: Council) =>
+    update(([c, settings]) => [
+      { ...c, status: fresh.status, slicing: fresh.slicing, structure: fresh.structure }, settings,
+    ]), [update])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {
@@ -54,7 +57,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       delete rest.labels
       delete rest.slicing_run
       if (Object.keys(rest).length > 0) await api.updateCouncil(id, rest)
-      sliced(await api.council(id))
+      adopt(await api.council(id))
       return undefined
     }
   })
@@ -84,18 +87,23 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule({ labels: { [fragmentId]: label }, slicing_run: done.run }, 0)
   }, [council?.slicing, update, schedule])
 
-  // Опрос, пока нарезка идёт. Следующий запрос — только после ответа на предыдущий, и ответ
-  // принимается, только пока нарезка на экране ещё идёт: запоздалый не затрёт итог и правки типов.
+  // Опрос, пока идёт нарезка или раскладка. Следующий запрос — только после ответа на
+  // предыдущий, и из ответа берётся только тот ход, что на экране ещё идёт: запоздалый ответ
+  // не затрёт готовый итог и правки типов.
   const polling = useRef(false)
   const polled = useCallback((fresh: Council) =>
-    update(([c, settings]) => (c.slicing?.state === 'running'
-      ? [{ ...c, status: fresh.status, slicing: fresh.slicing }, settings]
-      : [c, settings])), [update])
+    update(([c, settings]) => {
+      const next = { ...c, status: fresh.status }
+      if (c.slicing?.state === 'running') next.slicing = fresh.slicing
+      if (c.structure?.state === 'running') next.structure = fresh.structure
+      return [next, settings]
+    }), [update])
+  const working = council?.slicing?.state === 'running' || council?.structure?.state === 'running'
   useInterval(() => {
     if (polling.current) return
     polling.current = true
     api.council(id).then(polled, () => { /* следующий опрос */ }).finally(() => { polling.current = false })
-  }, council?.slicing?.state === 'running' ? POLL_MS : null)
+  }, working ? POLL_MS : null)
 
   if (state.kind === 'error' && state.error instanceof CouncilMissing) return (
     <main className="main">
@@ -137,13 +145,16 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
         {state.kind === 'ok' && stage === 'brief' && (
           <BriefStage council={state.data[0]} settings={state.data[1]} onChange={change}
-                      onStart={sliced} saver={saver} />
+                      onStart={adopt} saver={saver} />
         )}
         {state.kind === 'ok' && stage === 'slices' && (
-          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={sliced}
+          <SlicesStage council={state.data[0]} settings={state.data[1]} onStart={adopt}
                        onRelabel={relabel} saver={saver} />
         )}
-        {state.kind === 'ok' && stage !== 'brief' && stage !== 'slices' && (
+        {state.kind === 'ok' && stage === 'structure' && (
+          <GroupsStage council={state.data[0]} settings={state.data[1]} onStart={adopt} />
+        )}
+        {state.kind === 'ok' && (stage === 'streams' || stage === 'history') && (
           <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
         )}
       </main>

@@ -1,6 +1,11 @@
 import { useTranslation } from 'react-i18next'
 import type { Model } from '../api'
 
+/** Модель по alias. Той, что уже нет в настройках, всё равно есть что показать — её alias. */
+export const modelOf = (models: Model[], alias: string): Model =>
+  models.find(m => m.alias === alias)
+  ?? { alias, short_name: alias, display_name: alias, cli: '?', available: false }
+
 /** Модель: плашка с буквой, полное имя и CLI, через которую она работает, — или что её не запустить. */
 export function ModelBadge({ model, compact }: Readonly<{ model: Model; compact?: boolean }>) {
   const { t } = useTranslation()
