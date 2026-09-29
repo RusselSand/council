@@ -4,14 +4,14 @@ import json
 
 import pytest
 
-from spec_council.models import SlicingStepName
-from spec_council.pipeline import ModelFailed, Pipeline
+from spec_council.models import StepName
+from spec_council.pipeline import GroupingRun, ModelFailed, SlicingRun
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
 PARTS = ["Хочу воркер для Codex CLI.", "Состояние держать в файлах, без базы.",
          "Главное — не потерять результат."]
-STEPS = [name.value for name in SlicingStepName]
+STEPS = [name.value for name in StepName]
 
 
 def sliced(*variants, reason=None):
@@ -52,7 +52,7 @@ class FakeRunner:
 
 def run(replies, participants=("sol", "fable"), judge="fable"):
     runner, reports = FakeRunner(replies), []
-    result = Pipeline("c1", TEXT, list(participants), judge, runner, reports.append).run()
+    result = SlicingRun("c1", TEXT, list(participants), judge, runner, reports.append).run()
     return result, runner, reports
 
 
@@ -227,8 +227,82 @@ def test_another_model_behind_an_alias_is_a_new_call_not_a_free_retry():
     _, before, _ = run(AGREED)
     runner = FakeRunner(AGREED)
     runner.identities = {"sol": "codex/gpt-5.7-sol"}
-    Pipeline("c1", TEXT, ["sol", "fable"], "fable", runner, lambda _: None).run()
+    SlicingRun("c1", TEXT, ["sol", "fable"], "fable", runner, lambda _: None).run()
     sol_keys = lambda r: sorted(k for k in r.keys if "-sol-" in k)          # noqa: E731
     fable_keys = lambda r: sorted(k for k in r.keys if "-fable-" in k)      # noqa: E731
     assert set(sol_keys(before)).isdisjoint(sol_keys(runner))
     assert fable_keys(before) == fable_keys(runner)
+
+
+
+# --- группы
+
+def grouping(*groups, relations=()):
+    return {"groups": list(groups), "relations": list(relations), "reason": None}
+
+
+def grp(gid, fragments, ideas=(), shared=(), title=None):
+    return {"id": gid, "title": title or f"Группа {gid}", "idea_fragment_ids": list(ideas),
+            "fragment_ids": list(fragments), "missing_idea": not ideas,
+            "shared_fragment_ids": list(shared)}
+
+
+def sliced_result():
+    result, _, _ = run(AGREED)          # фрагменты 1-3: idea, proposal, risk
+    result.fragments[2].label = "constraint"   # человек поправил тип
+    return result
+
+
+def group_it(replies, participants=("sol", "fable"), judge="fable"):
+    runner, reports = FakeRunner(replies), []
+    result = GroupingRun("c1", sliced_result(), list(participants), judge, runner,
+                         reports.append).run()
+    return result, runner, reports
+
+
+# Судья у раскладки своя пара шагов: structure, structure_judge.
+ONE = grouping(grp("A", [1, 2], ideas=[1], title="Воркер"), grp("B", [3], title="Хранение"))
+
+
+def test_agreeing_groupings_need_no_judge_and_come_out_lettered_by_first_fragment():
+    renamed = grouping(grp("Z", [3]), grp("Y", [1, 2], ideas=[1]))
+    result, runner, _ = group_it({("structure", "sol"): {"options": [ONE]},
+                                  ("structure", "fable"): {"options": [renamed]}})
+    assert result.state == "done"
+    assert [(g.id, g.title, g.fragment_ids, g.missing_idea) for g in result.groups] == [
+        ("A", "Воркер", [1, 2], False), ("B", "Хранение", [3], True)]
+    assert {s.name.value: s.state for s in result.steps}["structure_judge"] == "skipped"
+    prompt = runner.asked["structure", "sol"]
+    assert '"type": "constraint"' in prompt                  # тип с правкой человека
+    assert result.labels == {1: "idea", 2: "proposal", 3: "constraint"}
+    assert sorted(runner.forgotten) == sorted(runner.keys)
+
+
+def test_different_groupings_go_to_the_judge_and_shared_fragments_are_marked():
+    merged = grouping(grp("A", [1, 2, 3], ideas=[1]))
+    judged = {"status": "ok", **grouping(grp("A", [1, 2, 3], ideas=[1]), grp("B", [3], shared=[3]),
+                                         relations=[{"from": "B", "to": "A", "type": "related",
+                                                     "reason": "пишет туда же"}]),
+              "decisions": [{"issue": "F3: A или A+B", "decision": "A+B",
+                             "reason": "касается обеих"}]}
+    candidate = grouping(grp("A", [1, 2, 3], ideas=[1]), grp("B", [3], shared=[3]),
+                         relations=[{"from": "B", "to": "A", "type": "related",
+                                     "reason": "туда же"}])
+    result, runner, _ = group_it({("structure", "sol"): {"options": [merged]},
+                                  ("structure", "fable"): {"options": [candidate]},
+                                  ("structure_judge", "fable"): judged})
+    assert [(g.id, g.fragment_ids, g.shared_fragment_ids) for g in result.groups] == [
+        ("A", [1, 2, 3], [3]), ("B", [3], [3])]
+    assert [(r.source, r.target, r.type) for r in result.relations] == [("B", "A", "related")]
+    assert result.decisions[0].decision == "A+B"
+    prompt = runner.asked["structure_judge", "fable"]
+    assert "sol" not in prompt and "fable" not in prompt
+
+
+def test_structure_judge_refusal_makes_a_retry_ask_the_participants_again():
+    result, runner, _ = group_it({
+        ("structure", "sol"): {"options": [ONE]},
+        ("structure", "fable"): {"options": [grouping(grp("A", [1, 2, 3], ideas=[1]))]},
+        ("structure_judge", "fable"): {"status": "no_valid_option", "problem": "обе теряют смысл"}})
+    assert result.state == "failed" and "обе теряют смысл" in result.error
+    assert sorted(runner.forgotten) == sorted(k for k in runner.keys if "-structure" in k)

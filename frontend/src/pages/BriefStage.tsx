@@ -1,12 +1,13 @@
-import { useId, useState } from 'react'
+import { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { ApiError, councilPath, startOrFollowSlicing, type Council, type CouncilPatch, type Settings } from '../api'
+import { api, councilPath, startOrFollow, type Council, type CouncilPatch, type Settings } from '../api'
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { SaveStatus } from '../components/SaveStatus'
 import { SelectField } from '../components/SelectField'
 import type { Autosave } from '../useAutosave'
+import { useStart } from '../useStart'
 
 /** Текст сохраняется, когда человек перестал печатать; выбор в списках — сразу. */
 export const TYPING_DELAY = 600
@@ -28,8 +29,7 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
   const nav = useNavigate()
   const briefId = useId()
   const nameId = useId()
-  const [slicing, setSlicing] = useState(false)
-  const [startError, setStartError] = useState<string | null>(null)
+  const { busy, error, go } = useStart(onStart)
   const { models, min_participants: minimum } = settings
 
   const toggle = (alias: string, on: boolean) => {
@@ -40,18 +40,10 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
   }
 
   // Нарезают сохранённый текст, поэтому сначала сохранить, потом запускать.
-  const slice = async () => {
-    setSlicing(true); setStartError(null)
-    try {
-      if (!(await saver.flush())) return
-      onStart(await startOrFollowSlicing(council.id))
-      nav(councilPath(council.id, 'slices'))
-    } catch (e) {
-      setStartError(e instanceof ApiError ? e.message : t('brief.startFailed'))
-    } finally {
-      setSlicing(false)
-    }
-  }
+  const slice = () => go(
+    async () => (await saver.flush()) ? startOrFollow(() => api.startSlicing(council.id), council.id) : null,
+    () => nav(councilPath(council.id, 'slices')),
+  )
 
   return (
     <div className="stage-layout">
@@ -62,9 +54,9 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
         <div className="brief-foot">
           <span className="muted">{t('brief.words', { count: countWords(council.brief) })}</span>
           <SaveStatus saver={saver} />
-          {startError && <span className="error-text" role="alert">{startError}</span>}
+          {error && <span className="error-text" role="alert">{error}</span>}
           <button className="btn-primary large" onClick={slice}
-                  disabled={slicing || !council.brief.trim()}>{t('brief.slice')}</button>
+                  disabled={busy || !council.brief.trim()}>{t('brief.slice')}</button>
         </div>
       </Panel>
 

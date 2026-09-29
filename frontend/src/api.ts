@@ -3,10 +3,10 @@ export type CouncilStatus = 'brief' | 'slices' | 'structure' | 'review' | 'ready
 export const LABELS = ['idea', 'question', 'proposal', 'constraint', 'risk'] as const
 export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
-export type SlicingStepName = 'slice' | 'slice_judge' | 'label' | 'label_judge'
+export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
-export interface SlicingStep { name: SlicingStepName; state: RunState | 'skipped'; runs: ModelRun[] }
+export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
 /** Что предложил участник; вариантов несколько, если он видит неоднозначность. */
 export interface Vote { model: string; labels: Label[] }
 export interface LabeledFragment {
@@ -20,7 +20,7 @@ export interface LabeledFragment {
 }
 /** Нарезка и разметка текста советом: идёт в фоне минутами, фронт опрашивает совет. */
 export interface Slicing {
-  state: 'running' | 'done' | 'failed'; steps: SlicingStep[]; fragments: LabeledFragment[]; error: string | null
+  state: 'running' | 'done' | 'failed'; steps: Step[]; fragments: LabeledFragment[]; error: string | null
   /** Свой у каждого запуска: правка типа несёт его, чтобы не лечь на фрагменты новой нарезки. */
   run: string
   /** Текст, который нарезали: исходник мог поменяться после запуска. */
@@ -32,6 +32,25 @@ export interface Council {
   participants: string[]; judge: string
   updated_at: string
   slicing: Slicing | null
+  structure: Structure | null
+}
+
+/** Фрагменты вокруг одной задумки. Общий фрагмент стоит в нескольких группах тем же номером. */
+export interface Group {
+  id: string; title: string; fragment_ids: number[]; idea_fragment_ids: number[]
+  /** Идеи в тексте нет: её восстановит следующий этап. */
+  missing_idea: boolean
+  /** Какие из fragment_ids есть и в других группах. */
+  shared_fragment_ids: number[]
+}
+/** depends_on — source требует результата target; related — связаны без зависимости. */
+export interface GroupRelation { source: string; target: string; type: 'depends_on' | 'related'; reason: string }
+export interface StructureDecision { issue: string; decision: string; reason: string }
+/** Раскладка готовой нарезки по группам; slicing_run и labels — из какой нарезки и с какими типами. */
+export interface Structure {
+  state: 'running' | 'done' | 'failed'; run: string; slicing_run: string; labels: Record<number, Label>
+  steps: Step[]; groups: Group[]; relations: GroupRelation[]; decisions: StructureDecision[]
+  error: string | null
 }
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
@@ -79,21 +98,33 @@ export const api = {
     method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
   }),
   startSlicing: (id: string) => request<Council>(`${councilUrl(id)}/slicing`, { method: 'POST' }),
+  startStructure: (id: string) => request<Council>(`${councilUrl(id)}/structure`, { method: 'POST' }),
   settings: () => request<Settings>('/api/settings'),
 }
 
 /**
- * Запустить нарезку. Если она уже идёт (409: вторая вкладка, повторный клик, потерянный
- * ответ на прошлый запуск) — вернуть совет с идущей, чтобы экран за ней следил. 409 сервер
- * отдаёт только тогда; временный отказ (503) — ошибка, которую покажет экран.
+ * Запустить ход совета (нарезку, группы). Если он уже идёт (409: вторая вкладка, повторный
+ * клик, потерянный ответ на прошлый запуск) — вернуть совет с идущим, чтобы экран за ним
+ * следил. 409 сервер отдаёт только тогда; временный отказ (503, 423) — ошибка для экрана.
  */
-export const startOrFollowSlicing = async (id: string): Promise<Council> => {
+export const startOrFollow = async (start: () => Promise<Council>, id: string): Promise<Council> => {
   try {
-    return await api.startSlicing(id)
+    return await start()
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return api.council(id)
     throw e
   }
+}
+
+/**
+ * Группы разложены по другим типам, чем сейчас у фрагментов: человек поправил тип после
+ * раскладки. Группы могли устареть — стоит разложить заново.
+ */
+export const structureIsStale = (council: Council): boolean => {
+  const { structure, slicing } = council
+  if (!structure || structure.state !== 'done' || !slicing) return false
+  if (structure.slicing_run !== slicing.run) return true
+  return slicing.fragments.some(f => structure.labels[f.id] !== f.label)
 }
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */

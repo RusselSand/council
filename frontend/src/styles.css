@@ -137,7 +137,7 @@ a.card:hover { border-color: var(--accent) }
 /* Итог нарезки: слева ход работы, справа текст и фрагменты. */
 .slices-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; align-items: start }
 /* min-width: 0 — длинный текст в узкой колонке переносится, а не раздвигает её. */
-.slices-side { grid-column: 1; grid-row: 1; min-width: 0 }
+.slices-side { grid-column: 1; grid-row: 1; display: grid; gap: 16px; align-content: start; min-width: 0 }
 .slices-side .step-list > li, .slices-side .run { min-width: 0 }
 .slices-main { grid-column: 2; display: grid; gap: 16px }
 .slices-side .run { padding: 6px 8px }
@@ -155,4 +155,30 @@ a.card:hover { border-color: var(--accent) }
   .slices-side, .slices-main { grid-column: 1; grid-row: auto }
   .fragment-row { grid-template-columns: 28px minmax(0, 1fr) }
   .fragment-row .label-chips { grid-column: 2; justify-content: flex-start }
+}
+
+/* Карточка «Дальше» на нарезке: следующий шаг. */
+.next-step { border-color: #d6dbf7 }
+.next-caps { margin: 0 0 6px; color: var(--accent); font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase }
+.btn-primary.block { display: block; width: 100%; margin-top: 4px; text-align: center }
+.btn-secondary { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; background: var(--surface); color: var(--fg-soft); font-size: 13px }
+.btn-secondary:disabled { cursor: default; color: var(--fg-muted) }
+
+/* Тип фрагмента меткой — там, где его не меняют. */
+.label-pill { flex: none; padding: 1px 8px; border-radius: 99px; background: var(--label-bg); color: var(--label-fg); font-size: 12px; white-space: nowrap }
+
+/* Этап «Группы». */
+.group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px }
+.group-head .panel-title { margin: 0 }
+.group-letter { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: var(--fg); color: #fff; font-size: 12.5px; font-weight: 600 }
+.group-tag { padding: 1px 8px; border-radius: 99px; background: #ececef; color: var(--fg-soft); font-size: 12px }
+.group-actions { display: flex; gap: 8px; margin-left: auto }
+.group-note { margin: 10px 0 0; color: var(--fg-soft); font-size: 13px }
+.group-fragments { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none }
+.group-fragment { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px }
+.group-fragment .fragment-id { flex: none; width: auto; padding: 0 }
+.group-fragment-text { flex: 1; min-width: 0 }
+.shared-chip { flex: none; padding: 1px 8px; border: 1px dashed var(--fg-faint); border-radius: 6px; color: var(--fg-muted); font-size: 12px; white-space: nowrap }
+@media (max-width: 900px) {
+  .group-fragment { flex-wrap: wrap }
 }

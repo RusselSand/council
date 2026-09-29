@@ -10,7 +10,7 @@ from spec_council.api import councils as councils_api
 from spec_council.app import app
 from spec_council.config import DEFAULT_CONFIG
 from spec_council.deps import get_agents, get_launcher, get_store
-from spec_council.pipeline import start
+from spec_council.pipeline import start, start_structure
 
 client = TestClient(app)
 
@@ -106,6 +106,11 @@ class FakeAgents:
         self.asked.append(key)
         if "-slice-" in key:
             return json.dumps({"options": [{"fragments": [self.text], "reason": None}]})
+        if "-structure-" in key:
+            return json.dumps({"options": [{"groups": [{
+                "id": "A", "title": "Воркер", "idea_fragment_ids": [1], "fragment_ids": [1],
+                "missing_idea": False, "shared_fragment_ids": []}],
+                "relations": [], "reason": None}]})
         return json.dumps({"labels": [{"id": 1, "options": [{"label": "idea", "reason": "цель"}]}]})
 
     def forget(self, keys):
@@ -301,3 +306,42 @@ def test_lineup_that_keeps_changing_gives_up_with_503(agents):
     assert res.status_code == 503   # не 409: нарезку никто не запускал
     assert agents.fresh_under_lock == [False] * councils_api.PROBE_ATTEMPTS
     assert agents.asked == []
+
+
+
+def test_groups_are_built_from_a_finished_slicing(agents):
+    council_id = sliced_council(agents)
+    res = client.post(f"/api/councils/{council_id}/structure")
+    assert res.status_code == 202
+    assert res.json()["status"] == "structure"
+    structure = client.get(f"/api/councils/{council_id}").json()["structure"]
+    assert structure["state"] == "done"
+    assert [(g["id"], g["title"], g["fragment_ids"]) for g in structure["groups"]] == [
+        ("A", "Воркер", [1])]
+    assert structure["labels"] == {"1": "idea"}
+
+
+def test_groups_need_a_finished_slicing(agents):
+    council_id = new_council()
+    client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 422
+    get_store().update_council(council_id, {"slicing": start(["sol", "fable"], "fable")})
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
+
+
+def test_slicing_again_drops_the_old_groups_and_waits_for_a_running_grouping(agents):
+    council_id = sliced_council(agents)
+    client.post(f"/api/councils/{council_id}/structure")
+    running = start_structure(["sol", "fable"], "fable",
+                              client_council(council_id).slicing)
+    get_store().update_council(council_id, {"structure": running})
+    assert client.post(f"/api/councils/{council_id}/slicing").status_code == 423
+
+    finished = running.model_copy(update={"state": "done"})
+    get_store().update_council(council_id, {"structure": finished})
+    assert client.post(f"/api/councils/{council_id}/slicing").status_code == 202
+    assert client.get(f"/api/councils/{council_id}").json()["structure"] is None
+
+
+def client_council(council_id):
+    return get_store().get_council(council_id)

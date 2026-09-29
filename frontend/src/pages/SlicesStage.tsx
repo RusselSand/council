@@ -1,29 +1,27 @@
-import { useState } from 'react'
+import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import {
-  ApiError, councilPath, startOrFollowSlicing,
+  api, councilPath, startOrFollow, structureIsStale,
   type Council, type CouncilPatch, type Label, type LabeledFragment, type Model, type Settings, type Slicing,
 } from '../api'
 import { LabelChips, LabelLegend, SlicedText } from '../components/Labels'
-import { ModelBadge } from '../components/ModelBadge'
+import { modelOf } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
+import { Progress } from '../components/Progress'
+import { ReadyBadge, RunStatus } from '../components/RunStatus'
 import { SaveStatus } from '../components/SaveStatus'
 import type { Autosave } from '../useAutosave'
-
-/** Модель, которой уже нет в настройках, всё равно показывается — по её alias. */
-const modelOf = (models: Model[], alias: string): Model =>
-  models.find(m => m.alias === alias)
-  ?? { alias, short_name: alias, display_name: alias, cli: '?', available: false }
+import { useStart } from '../useStart'
 
 /**
  * Нарезка: участники по отдельности режут текст на смысловые фрагменты и размечают их,
  * судья решает только там, где они разошлись. Итог — исходный текст с подсветкой и список
- * фрагментов, где тип можно поменять; слева — как шла работа.
+ * фрагментов, где тип можно поменять; сбоку — что дальше и как шла работа.
  */
 export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Readonly<{
   council: Council; settings: Settings
-  onStart: (started: Council) => void
+  onStart: (started: Council, sent?: Slicing | null) => void
   onRelabel: (fragmentId: number, label: Label) => void
   saver: Autosave<CouncilPatch>
 }>) {
@@ -41,12 +39,53 @@ export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Re
       <div className="slices-main">
         {slicing.state === 'done'
           ? <Result slicing={slicing} models={settings.models} onRelabel={onRelabel} saver={saver} />
-          : <Status council={council} slicing={slicing} onStart={onStart} />}
+          : <RunStatus run={slicing} kind="slices" onStart={onStart}
+                       restart={() => startOrFollow(() => api.startSlicing(council.id), council.id)} />}
       </div>
       <aside className="slices-side">
-        <Progress slicing={slicing} models={settings.models} />
+        {slicing.state === 'done' && <NextStep council={council} onStart={onStart} saver={saver} />}
+        <Progress steps={slicing.steps} models={settings.models} />
       </aside>
     </div>
+  )
+}
+
+/**
+ * Что дальше: разложить фрагменты по группам — или открыть уже разложенные. Раскладка берёт
+ * типы с сервера, поэтому сначала сохраняются правки типов; нарезка на экране в момент
+ * запуска уходит в onStart, чтобы ответ не откатил правки, сделанные, пока он шёл.
+ */
+function NextStep({ council, onStart, saver }: Readonly<{
+  council: Council; onStart: (started: Council, sent?: Slicing | null) => void
+  saver: Autosave<CouncilPatch>
+}>) {
+  const { t } = useTranslation()
+  const nav = useNavigate()
+  const sent = useRef<Slicing | null>(null)
+  const { busy, error, go } = useStart(started => onStart(started, sent.current))
+  const structure = council.structure
+  const stale = structure !== null && structureIsStale(council)
+  const propose = () => {
+    sent.current = council.slicing
+    void go(
+      async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id) : null,
+      () => nav(councilPath(council.id, 'structure')),
+    )
+  }
+
+  return (
+    <section className="card panel next-step" aria-labelledby="next-step-title">
+      <p className="next-caps">{t('next.caps')}</p>
+      <h2 id="next-step-title" className="panel-title">{t('next.title')}</h2>
+      <p className="panel-hint">{t('next.hint')}</p>
+      {stale && <p className="fragment-note">{t('next.stale')}</p>}
+      {error && <p className="error-text" role="alert">{error}</p>}
+      {structure && !stale
+        ? <Link className="btn-primary large block" to={councilPath(council.id, 'structure')}>{t('next.open')}</Link>
+        : <button className="btn-primary large block" onClick={propose} disabled={busy}>
+            {t(stale ? 'next.again' : 'next.propose')}
+          </button>}
+    </section>
   )
 }
 
@@ -60,9 +99,7 @@ function Result({ slicing, models, onRelabel, saver }: Readonly<{
   return (
     <>
       <Panel title={t('slices.resultTitle')} hint={t('slices.resultHint')} large
-             aside={<span className="pill ready badge" title={t('slices.readyHint', { count: answered })}>
-               {t('slices.ready', { count: answered })}
-             </span>}>
+             aside={<ReadyBadge count={answered} />}>
         <SlicedText text={slicing.text} fragments={slicing.fragments} />
         <LabelLegend fragments={slicing.fragments} />
       </Panel>
@@ -100,64 +137,4 @@ function notesOf(fragment: LabeledFragment, models: Model[], t: ReturnType<typeo
   }
   if (fragment.slice_note) notes.push(t('slices.noteSlice', { note: fragment.slice_note }))
   return notes
-}
-
-function Progress({ slicing, models }: Readonly<{ slicing: Slicing; models: Model[] }>) {
-  const { t } = useTranslation()
-  return (
-    <Panel title={t('slices.progressTitle')} hint={t('slices.progressHint')}>
-      <ol className="step-list">
-        {slicing.steps.map(step => (
-          <li key={step.name} className="step">
-            <div className="step-head">
-              <span className="step-name">{t(`slices.step.${step.name}`)}</span>
-              <span className={`step-state ${step.state}`}>{t(`slices.stepState.${step.state}`)}</span>
-            </div>
-            {step.state === 'skipped' && <p className="step-note">{t('slices.skippedNote')}</p>}
-            {step.runs.map(run => (
-              <div key={run.model} className="run">
-                <ModelBadge model={modelOf(models, run.model)} compact />
-                <span className={`run-state ${run.state}`}>{t(`slices.runState.${run.state}`)}</span>
-                {run.error && <p className="run-error">{run.error}</p>}
-              </div>
-            ))}
-          </li>
-        ))}
-      </ol>
-    </Panel>
-  )
-}
-
-/** Пока идёт — что происходит; если упало — почему и кнопка повтора. */
-function Status({ council, slicing, onStart }: Readonly<{
-  council: Council; slicing: Slicing; onStart: (started: Council) => void
-}>) {
-  const { t } = useTranslation()
-  const [restarting, setRestarting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const restart = async () => {
-    setRestarting(true); setError(null)
-    try {
-      onStart(await startOrFollowSlicing(council.id))
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : t('brief.startFailed'))
-    } finally {
-      setRestarting(false)
-    }
-  }
-
-  if (slicing.state === 'running') return (
-    <Panel title={t('slices.runningTitle')} hint={t('slices.runningHint')} large>
-      <p className="muted">{t('slices.runningNote')}</p>
-    </Panel>
-  )
-
-  return (
-    <Panel title={t('slices.failedTitle')} hint={t('slices.failedHint')} large>
-      <p className="error-text" role="alert">{slicing.error}</p>
-      {error && <p className="error-text" role="alert">{error}</p>}
-      <button className="btn-primary large" onClick={restart} disabled={restarting}>{t('slices.retry')}</button>
-    </Panel>
-  )
 }

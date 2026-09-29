@@ -19,11 +19,13 @@ Label =Literal["idea", "question", "proposal", "constraint", "risk"]
 RunState = Literal["waiting", "running", "done", "failed"]
 
 
-class SlicingStepName(StrEnum):
+class StepName(StrEnum):
     slice = "slice"              # участники нарезают текст, каждый сам по себе
     slice_judge = "slice_judge"  # судья выбирает нарезку, если участники разошлись
     label = "label"              # участники размечают итоговые фрагменты
     label_judge = "label_judge"  # судья решает фрагменты, где типы разошлись
+    structure = "structure"              # участники раскладывают фрагменты по группам
+    structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись
 
 
 class ModelRun(BaseModel):
@@ -32,8 +34,8 @@ class ModelRun(BaseModel):
     error: str | None = None
 
 
-class SlicingStep(BaseModel):
-    name: SlicingStepName
+class Step(BaseModel):
+    name: StepName
     # skipped — судья не понадобился: участники сошлись.
     state: Literal["waiting", "running", "done", "failed", "skipped"] = "waiting"
     runs: list[ModelRun]
@@ -69,8 +71,55 @@ class Slicing(BaseModel):
     run: str = ""
     # Текст, который нарезали: исходник мог поменяться после запуска.
     text: str = ""
-    steps: list[SlicingStep]
+    steps: list[Step]
     fragments: list[LabeledFragment] = []
+    error: str | None = None
+
+
+class Group(BaseModel):
+    """Фрагменты вокруг одной задумки. Общий фрагмент (ограничение, риск) входит в несколько
+    групп тем же ID: копия со ссылкой на источник, а не новый фрагмент."""
+
+    id: str  # A, B, C… по порядку первого фрагмента
+    title: str
+    fragment_ids: list[int]
+    idea_fragment_ids: list[int]
+    # Идеи в тексте нет: её восстановит следующий этап, сам совет её не формулирует.
+    missing_idea: bool
+    # Какие из fragment_ids есть и в других группах.
+    shared_fragment_ids: list[int] = []
+
+
+class GroupRelation(BaseModel):
+    """Связь групп. Независимость — просто отсутствие связи."""
+
+    source: str
+    target: str
+    # depends_on — source требует результата target; related — связаны без зависимости.
+    type: Literal["depends_on", "related"]
+    reason: str
+
+
+class StructureDecision(BaseModel):
+    """Решение судьи там, где раскладки участников расходились."""
+
+    issue: str
+    decision: str
+    reason: str
+
+
+class Structure(BaseModel):
+    """Раскладка фрагментов готовой нарезки по группам: ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # Из какой нарезки и с какими типами раскладывали: поменялись — раскладка устарела.
+    slicing_run: str = ""
+    labels: dict[int, Label] = {}
+    steps: list[Step]
+    groups: list[Group] = []
+    relations: list[GroupRelation] = []
+    decisions: list[StructureDecision] = []
     error: str | None = None
 
 
@@ -85,6 +134,7 @@ class Council(BaseModel):
     # Момент, а не дата: две правки за один день должны различаться порядком в списке.
     updated_at: datetime
     slicing: Slicing | None = None
+    structure: Structure | None = None
 
 
 class CouncilCreated(BaseModel):
