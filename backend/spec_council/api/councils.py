@@ -161,6 +161,10 @@ def start_run(council_id: str, store: Store, config: AppConfig, agents: AgentRun
             # запуск заплатил бы за те же ходы моделей ещё раз и затёр бы итог.
             if run_of(council, field) != run_of(before, field):
                 raise HTTPException(409, "Этот ход уже запустили")
+            # Или группы поправили в другой вкладке: новый ход молча затёр бы принятую правку.
+            # Пусть человек сначала её увидит.
+            if revision_of(council, field) != revision_of(before, field):
+                raise HTTPException(409, "Группы поправили, пока шла проверка, — посмотрите на них")
             if lineup(council) == lineup(before):
                 pipeline = build(council, report)
                 council = store.update_council(council_id, {
@@ -195,6 +199,12 @@ def lineup(council: Council) -> frozenset[str]:
 def run_of(council: Council, field: Field) -> str | None:
     state = getattr(council, field)
     return state.run if state else None
+
+
+def revision_of(council: Council, field: Field) -> int:
+    """Сколько раз итог хода правил человек: у групп — revision, у нарезки не считаем."""
+    state = getattr(council, field)
+    return state.revision if isinstance(state, Structure) else 0
 
 
 def check_online(council: Council, config: AppConfig, agents: AgentRunner, *, fresh: bool) -> None:

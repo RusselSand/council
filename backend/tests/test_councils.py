@@ -267,6 +267,24 @@ def test_start_that_lost_the_race_during_the_login_check_is_refused(agents):
     assert len([k for k in agents.asked if "-slice-" in k]) == 2   # только первый запуск
 
 
+def test_regrouping_does_not_overwrite_groups_edited_during_the_login_check(agents):
+    council_id = sliced_council(agents)
+    client.post(f"/api/councils/{council_id}/structure")
+    structure = client_council(council_id).structure
+
+    def other_tab_renames():
+        agents.on_probe = None
+        renamed = [group.model_copy(update={"title": "Своё"}) for group in structure.groups]
+        get_store().update_council(council_id, {"structure": structure.model_copy(
+            update={"groups": renamed, "revision": 1})})
+
+    agents.on_probe = other_tab_renames
+    res = client.post(f"/api/councils/{council_id}/structure")
+    assert res.status_code == 409
+    assert "поправили" in res.json()["detail"]
+    assert client_council(council_id).structure.groups[0].title == "Своё"
+
+
 def test_start_while_the_server_stops_leaves_a_failed_slicing_not_a_stuck_one(agents):
     council_id = new_council()
     client.patch(f"/api/councils/{council_id}", json={"brief": agents.text})
