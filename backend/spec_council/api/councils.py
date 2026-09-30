@@ -24,9 +24,9 @@ CANNOT_START = {
 }
 
 # Проверка «уже идёт» и запуск — одним куском, иначе два клика запустили бы два хода.
-# Тот же замок у правки типов: они меняют готовую нарезку. Внутри — только короткое: CLI
-# под замком не запускаем.
-_starting = Lock()
+# Тот же замок у правки типов и групп: они меняют готовый итог хода. Внутри — только
+# короткое: CLI под замком не запускаем.
+council_lock = Lock()
 
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
@@ -64,7 +64,7 @@ def update_council(
     if patch.labels is None:
         council = store.update_council(council_id, changes)
     else:
-        with _starting:  # типы и запуск нарезки не должны разойтись
+        with council_lock:  # типы и запуск нарезки не должны разойтись
             current = store.get_council(council_id)
             if current is None:
                 raise HTTPException(404, MISSING)
@@ -155,12 +155,16 @@ def start_run(council_id: str, store: Store, config: AppConfig, agents: AgentRun
     before = startable(store.get_council(council_id))
     for _ in range(PROBE_ATTEMPTS):
         check_online(before, config, agents, fresh=True)
-        with _starting:
+        with council_lock:
             council = startable(store.get_council(council_id))
             # Пока шла проверка, ход мог запустить и даже закончить другой запрос: второй
             # запуск заплатил бы за те же ходы моделей ещё раз и затёр бы итог.
             if run_of(council, field) != run_of(before, field):
                 raise HTTPException(409, "Этот ход уже запустили")
+            # Или группы поправили в другой вкладке: новый ход молча затёр бы принятую правку.
+            # Пусть человек сначала её увидит.
+            if revision_of(council, field) != revision_of(before, field):
+                raise HTTPException(409, "Группы поправили, пока шла проверка, — посмотрите на них")
             if lineup(council) == lineup(before):
                 pipeline = build(council, report)
                 council = store.update_council(council_id, {
@@ -195,6 +199,12 @@ def lineup(council: Council) -> frozenset[str]:
 def run_of(council: Council, field: Field) -> str | None:
     state = getattr(council, field)
     return state.run if state else None
+
+
+def revision_of(council: Council, field: Field) -> int:
+    """Сколько раз итог хода правил человек: у групп — revision, у нарезки не считаем."""
+    state = getattr(council, field)
+    return state.revision if isinstance(state, Structure) else 0
 
 
 def check_online(council: Council, config: AppConfig, agents: AgentRunner, *, fresh: bool) -> None:

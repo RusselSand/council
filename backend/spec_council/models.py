@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class CouncilStatus(StrEnum):
@@ -80,7 +80,9 @@ class Group(BaseModel):
     """Фрагменты вокруг одной задумки. Общий фрагмент (ограничение, риск) входит в несколько
     групп тем же ID: копия со ссылкой на источник, а не новый фрагмент."""
 
-    id: str  # A, B, C… по порядку первого фрагмента
+    # A, B, C… по порядку первого фрагмента. Правки человека букв не переставляют: у новой
+    # группы — первая свободная.
+    id: str
     title: str
     fragment_ids: list[int]
     idea_fragment_ids: list[int]
@@ -108,8 +110,16 @@ class StructureDecision(BaseModel):
     reason: str
 
 
+class StructureProposal(BaseModel):
+    """Группы и связи, как их предложил совет: к ним можно вернуться после своих правок."""
+
+    groups: list[Group]
+    relations: list[GroupRelation]
+
+
 class Structure(BaseModel):
-    """Раскладка фрагментов готовой нарезки по группам: ход по шагам и итог."""
+    """Раскладка фрагментов готовой нарезки по группам: ход по шагам и итог. groups и
+    relations — с правками человека, proposal — как предложил совет."""
 
     state: Literal["running", "done", "failed"]
     run: str = ""
@@ -120,7 +130,18 @@ class Structure(BaseModel):
     groups: list[Group] = []
     relations: list[GroupRelation] = []
     decisions: list[StructureDecision] = []
+    proposal: StructureProposal | None = None
+    # Сколько раз человек правил группы этой раскладки. Правка несёт номер версии, к которой
+    # она сделана: из другой вкладки к прежней версии она не ляжет на нынешнюю.
+    revision: int = 0
     error: str | None = None
+
+    @computed_field
+    @property
+    def edited(self) -> bool:
+        """Человек менял группы: они не такие, как предложил совет."""
+        return self.proposal is not None and (
+            self.groups != self.proposal.groups or self.relations != self.proposal.relations)
 
 
 class Council(BaseModel):
@@ -156,6 +177,34 @@ class CouncilPatch(BaseModel):
     labels: dict[int, Label] | None = None
     # К какой нарезке относятся labels: Slicing.run. Обязателен вместе с ними.
     slicing_run: str | None = None
+
+
+class GroupsEdit(BaseModel):
+    """Правка готовых групп человеком: к какой раскладке (Structure.run) и какой версии её
+    групп (Structure.revision) она сделана."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run: str
+    revision: int
+
+
+class MergeGroups(GroupsEdit):
+    # Где нажали «Объединить с…»: её буква и название остаются.
+    group: str
+    other: str
+
+
+class SplitGroup(GroupsEdit):
+    group: str
+    # Что уходит в новую группу; остальное остаётся.
+    fragment_ids: list[int]
+    title: str
+
+
+class RenameGroup(GroupsEdit):
+    group: str
+    title: str
 
 
 class Model(BaseModel):

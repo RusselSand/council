@@ -25,12 +25,12 @@ import json
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from string import ascii_uppercase
 from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
 from .grouping import StructureOption, judged_structure, structure_options
+from .groups import letter_for
 from .models import (
     Group,
     GroupRelation,
@@ -41,6 +41,7 @@ from .models import (
     StepName,
     Structure,
     StructureDecision,
+    StructureProposal,
     Vote,
 )
 from .prompts import PromptError, render
@@ -406,10 +407,5 @@ def final_structure(option: StructureOption, decisions: list[StructureDecision])
     relations = [GroupRelation(source=letters[r.source], target=letters[r.target], type=r.type,
                                reason=r.reason)
                  for r in option.relations if r.type != "independent"]
-    return {"groups": groups, "relations": relations, "decisions": decisions}
-
-
-def letter_for(n: int) -> str:
-    """A…Z, потом A2, B2…: групп больше 26 не ждём, но и падать не должны."""
-    letter = ascii_uppercase[n % len(ascii_uppercase)]
-    return letter if n < len(ascii_uppercase) else f"{letter}{n // len(ascii_uppercase) + 1}"
+    return {"groups": groups, "relations": relations, "decisions": decisions,
+            "proposal": StructureProposal(groups=groups, relations=relations)}

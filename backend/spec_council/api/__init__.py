@@ -2,10 +2,11 @@
 
 from fastapi import APIRouter
 
-from . import councils, settings
+from . import councils, groups, settings
 
 API_PREFIX = "/api"
 
 router = APIRouter(prefix=API_PREFIX)
 router.include_router(councils.router)
+router.include_router(groups.router)
 router.include_router(settings.router)

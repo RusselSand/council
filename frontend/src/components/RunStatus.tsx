@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import type { Council } from '../api'
-import { useStart } from '../useStart'
+import { useAction } from '../useAction'
 import { Panel } from './Panel'
 
 /** «Готово ×N»: сколько моделей сделали работу независимо друг от друга. */
@@ -20,7 +20,7 @@ export function RunStatus({ run, kind, restart, onStart }: Readonly<{
   onStart: (started: Council) => void
 }>) {
   const { t } = useTranslation()
-  const { busy, error, go } = useStart(onStart)
+  const { busy, error, go } = useAction(onStart)
 
   if (run.state === 'running') return (
     <Panel title={t(`${kind}.runningTitle`)} hint={t(`${kind}.runningHint`)} large>

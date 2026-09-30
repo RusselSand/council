@@ -62,7 +62,7 @@ const GROUPING: Structure = {
     { name: 'structure', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'structure_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
   ],
-  groups: [], relations: [], decisions: [], error: null,
+  groups: [], relations: [], decisions: [], proposal: null, edited: false, revision: 0, error: null,
 }
 const GROUPED: Structure = {
   ...GROUPING, state: 'done',
@@ -92,15 +92,16 @@ let fetchMock: ReturnType<typeof vi.fn>
 let patches: CouncilPatch[]
 let starts: number
 let groupStarts: number
+let edits: { action: string; body: unknown }[]
 beforeEach(async () => {
   await setLanguage('ru')
   fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
-  patches = []; starts = 0; groupStarts = 0
+  patches = []; starts = 0; groupStarts = 0; edits = []
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 /**
- * Сервер: список, совет, настройки, PATCH и запуск нарезки. Каждый ответ — новый Response:
+ * Сервер: список, совет, настройки, PATCH, запуски и правки групп. Каждый ответ — новый Response:
  * тело читается один раз. council — функция, если совет меняется между запросами.
  */
 const server = ({
@@ -108,9 +109,10 @@ const server = ({
   patch = () => json(COUNCIL),
   start = () => json({ ...COUNCIL, status: 'slices', slicing: RUNNING }, 202),
   group = () => json({ ...COUNCIL, status: 'structure', slicing: DONE, structure: GROUPING }, 202),
+  edit = () => json(council()),
 }: {
   council?: () => Council; patch?: () => Promise<Response>
-  start?: () => Promise<Response>; group?: () => Promise<Response>
+  start?: () => Promise<Response>; group?: () => Promise<Response>; edit?: () => Promise<Response>
 } = {}) =>
   (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
@@ -118,6 +120,8 @@ const server = ({
     if (url === '/api/councils') return method === 'POST' ? json({ id: COUNCIL.id }) : json([council()])
     if (url.endsWith('/slicing')) { starts++; return start() }
     if (url.endsWith('/structure')) { groupStarts++; return group() }
+    const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
+    if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
     if (method === 'PATCH') { patches.push(JSON.parse(String(init?.body))); return patch() }
     return json(council())
   }
@@ -605,7 +609,6 @@ describe('Группы', () => {
     expect(within(b).getByText('копия · общий с A')).toBeTruthy()
     expect(within(a).getAllByText(ru['label.proposal'])).toHaveLength(1)
     expect(screen.getByText('Судья: F2: A или A+B → A+B. Касается обеих.')).toBeTruthy()
-    expect((within(a).getByRole('button', { name: ru['groups.merge'] }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('готово ×2')).toBeTruthy()
   })
 
@@ -619,6 +622,259 @@ describe('Группы', () => {
   it('без раскладки — дорога к нарезке', async () => {
     openAt('structure', () => ({ ...COUNCIL, slicing: DONE }))
     expect(await screen.findByRole('link', { name: ru['groups.toSlices'] })).toBeTruthy()
+  })
+})
+
+describe('Правка групп', () => {
+  const grouped = (structure: Structure = GROUPED): Council =>
+    ({ ...COUNCIL, status: 'structure', slicing: DONE, structure })
+  const MERGED: Structure = {
+    ...GROUPED, edited: true, relations: [],
+    groups: [{ ...GROUPED.groups[0], fragment_ids: [1, 2], shared_fragment_ids: [] }],
+  }
+  const openWith = (edit: () => Promise<Response>, council = grouped()) => {
+    fetchMock.mockImplementation(server({ council: () => council, edit }))
+    renderAt('/councils/demo-1/structure')
+  }
+  const card = (title: string) => screen.findByRole('region', { name: title })
+
+  it('«Объединить с…»: выбор группы в меню объединяет, итог — с вашими правками', async () => {
+    openWith(() => json(grouped(MERGED)))
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    const menu = screen.getByRole('menu', { name: ru['groups.mergeMenu'] })
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'B Хранение' }))
+    expect(await screen.findByRole('heading', { name: '1 группа — с вашими правками' })).toBeTruthy()
+    expect(edits).toEqual([{ action: 'merge', body: { run: 'g1', revision: 0, group: 'A', other: 'B' } }])
+    expect(screen.queryByRole('region', { name: 'Хранение' })).toBeNull()
+    expect(screen.getByRole('button', { name: ru['groups.restore'] })).toBeTruthy()
+  })
+
+  it('меню закрывается по Escape и ничего не меняет', async () => {
+    openWith(() => json(grouped(MERGED)))
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(edits).toEqual([])
+  })
+
+  it('«Разделить»: галочки и название новой группы; без них — нельзя', async () => {
+    const split: Structure = {
+      ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], fragment_ids: [1], shared_fragment_ids: [] },
+               { ...GROUPED.groups[1], id: 'C', title: 'Факты', shared_fragment_ids: [2] },
+               { ...GROUPED.groups[1], shared_fragment_ids: [2] }],
+    }
+    openWith(() => json(grouped(split)))
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    const form = within(a).getByRole('form', { name: ru['groups.split'] })
+    const submit = within(form).getByRole('button', { name: ru['groups.split'] }) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F2' }))
+    expect(submit.disabled).toBe(true)                  // без названия
+    fireEvent.change(within(form).getByRole('textbox', { name: ru['groups.newTitle'] }), { target: { value: 'Факты' } })
+    expect(submit.disabled).toBe(false)
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F1' }))
+    expect(submit.disabled).toBe(true)                  // всё уходить не может
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F1' }))
+    fireEvent.click(submit)
+    expect(await screen.findByRole('region', { name: 'Факты' })).toBeTruthy()
+    expect(edits).toEqual([{ action: 'split', body: { run: 'g1', revision: 0, group: 'A', fragment_ids: [2], title: 'Факты' } }])
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  it('разделение можно отменить', async () => {
+    openWith(() => json(grouped()))
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.cancel'] }))
+    expect(within(a).queryByRole('checkbox')).toBeNull()
+    expect(edits).toEqual([])
+  })
+
+  it('название правится щелчком: Escape — отмена, Enter — сохранить', async () => {
+    const renamed: Structure = { ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] }
+    openWith(() => json(grouped(renamed)))
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: 'Воркер' }))
+    const field = () => screen.getByRole('textbox', { name: 'Название группы A' })
+    fireEvent.change(field(), { target: { value: 'Что-то' } })
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(edits).toEqual([])
+
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: 'Воркер' }))
+    fireEvent.change(field(), { target: { value: '  Воркер Codex ' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(await screen.findByRole('region', { name: 'Воркер Codex' })).toBeTruthy()
+    expect(edits).toEqual([{ action: 'rename', body: { run: 'g1', revision: 0, group: 'A', title: 'Воркер Codex' } }])
+  })
+
+  it('«Вернуть как предложил совет» отменяет правки', async () => {
+    openWith(() => json(grouped()), grouped(MERGED))
+    fireEvent.click(await screen.findByRole('button', { name: ru['groups.restore'] }))
+    expect(await screen.findByRole('heading', { name: 'ИИ предлагает 2 группы' })).toBeTruthy()
+    expect(edits).toEqual([{ action: 'restore', body: { run: 'g1', revision: 0 } }])
+  })
+
+  it('отказ сервера — у той группы, где правили', async () => {
+    openWith(() => json({ detail: 'Группы A и B совпали бы по составу' }, 422))
+    fireEvent.click(within(await card('Хранение')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'A Воркер' }))
+    const alert = await within(await card('Хранение')).findByRole('alert')
+    expect(alert.textContent).toBe('Группы A и B совпали бы по составу')
+    expect(within(await card('Воркер')).queryByRole('alert')).toBeNull()
+  })
+
+  it('состав группы поменялся, пока открыто разделение, — черновик сброшен', async () => {
+    // Откат возвращает A = {F1}, B = {F2}: отмеченное к прежнему составу уже не относится.
+    const proposal: Structure = { ...GROUPED, relations: [],
+      groups: [{ ...GROUPED.groups[0], fragment_ids: [1], shared_fragment_ids: [] },
+               { ...GROUPED.groups[1], shared_fragment_ids: [] }] }
+    openWith(() => json(grouped(proposal)), grouped(MERGED))
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F2' }))
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.restore'] }))
+    expect(await screen.findByRole('region', { name: 'Хранение' })).toBeTruthy()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.queryByRole('form')).toBeNull()
+  })
+
+  it('типы поменялись после раскладки — группы не правятся, пока их не разложат заново', async () => {
+    openWith(() => json(grouped()), grouped({ ...MERGED, labels: { 1: 'idea', 2: 'risk' } }))
+    const a = await card('Воркер')
+    for (const name of [ru['groups.merge'], ru['groups.split'], 'Воркер']) {
+      expect((within(a).getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
+    }
+    expect((screen.getByRole('button', { name: ru['groups.restore'] }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.again'] }))
+    await waitFor(() => expect(groupStarts).toBe(1))
+    expect(edits).toEqual([])
+  })
+
+  it('группы, где правили, больше нет (409) — ошибка в шапке', async () => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = grouped({ ...GROUPED, run: 'g2', relations: [], groups: [{ ...GROUPED.groups[0], shared_fragment_ids: [] }] })
+        return json({ detail: 'Группы уже разложили заново — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await card('Хранение')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'A Воркер' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Группы уже разложили заново — правка была к прежним')
+    expect(screen.queryByRole('region', { name: 'Хранение' })).toBeNull()
+  })
+
+  /** Ответ на правку, который приходит, только когда тест его отпустит. */
+  const held = () => {
+    let release!: (council: Council) => void
+    const response = new Promise<Response>(r => { release = c => r(new Response(JSON.stringify(c))) })
+    return { edit: () => response, release }
+  }
+
+  it('пока разделение сохраняется, его не отменить и не поменять', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    const a = await card('Воркер')
+    fireEvent.click(within(a).getByRole('button', { name: ru['groups.split'] }))
+    fireEvent.click(within(a).getByRole('checkbox', { name: 'F2' }))
+    const form = within(a).getByRole('form', { name: ru['groups.split'] })
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: 'Факты' } })
+    fireEvent.click(within(form).getByRole('button', { name: ru['groups.split'] }))
+    await waitFor(() => expect(edits).toHaveLength(1))
+    expect((within(form).getByRole('button', { name: ru['groups.cancel'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(a).getByRole('checkbox', { name: 'F2' }) as HTMLInputElement).disabled).toBe(true)
+    expect((within(form).getByRole('textbox') as HTMLInputElement).readOnly).toBe(true)
+    release(grouped({ ...GROUPED, edited: true, groups: [
+      { ...GROUPED.groups[0], fragment_ids: [1], shared_fragment_ids: [] },
+      { ...GROUPED.groups[1], id: 'C', title: 'Факты' }, GROUPED.groups[1]] }))
+    expect(await screen.findByRole('region', { name: 'Факты' })).toBeTruthy()
+    expect(screen.queryByRole('form')).toBeNull()
+  })
+
+  it('пока название сохраняется, поле не правится и Escape его не закрывает', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: 'Воркер' }))
+    const field = screen.getByRole('textbox', { name: 'Название группы A' }) as HTMLInputElement
+    fireEvent.change(field, { target: { value: 'Воркер Codex' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => expect(field.readOnly).toBe(true))
+    fireEvent.keyDown(field, { key: 'Escape' })
+    expect(screen.getByRole('textbox', { name: 'Название группы A' })).toBeTruthy()
+    release(grouped({ ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] }))
+    expect(await screen.findByRole('region', { name: 'Воркер Codex' })).toBeTruthy()
+    expect(edits).toHaveLength(1)
+  })
+
+  it('открытое меню объединения не работает, пока сохраняется другая правка', async () => {
+    const { edit, release } = held()
+    openWith(edit)
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    const item = screen.getByRole('menuitem', { name: 'B Хранение' }) as HTMLButtonElement
+    // Клавиатурой меню остаётся открытым: переименовываем другую группу.
+    fireEvent.click(within(await card('Хранение')).getByRole('button', { name: 'Хранение' }))
+    const field = screen.getByRole('textbox', { name: 'Название группы B' })
+    fireEvent.change(field, { target: { value: 'Хранилище' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    await waitFor(() => expect(item.disabled).toBe(true))
+    fireEvent.click(item)
+    release(grouped())
+    await waitFor(() => expect(item.disabled).toBe(false))
+    expect(edits.map(e => e.action)).toEqual(['rename'])
+  })
+
+  it('откат названия сбрасывает открытый черновик', async () => {
+    const renamed = grouped({ ...GROUPED, edited: true,
+      groups: [{ ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] })
+    openWith(() => json(grouped()), renamed)
+    fireEvent.click(within(await card('Воркер Codex')).getByRole('button', { name: 'Воркер Codex' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Название группы A' }), { target: { value: 'Что-то' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['groups.restore'] }))
+    expect(await screen.findByRole('button', { name: 'Воркер' })).toBeTruthy()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it.each([
+    ['группы раскладывают заново', GROUPING, ru['groups.runningTitle']],
+    ['новая нарезка стёрла группы', null, null],
+  ])('409, а %s, — ошибка правки видна', async (_, fresh, heading) => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = { ...grouped(), structure: fresh }
+        return json({ detail: 'Группы уже разложили заново — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Группы уже разложили заново — правка была к прежним')
+    if (heading) expect(screen.getByRole('heading', { name: heading })).toBeTruthy()
+    else expect(screen.getByRole('link', { name: ru['groups.toSlices'] })).toBeTruthy()
+  })
+
+  it('группы уже разложили заново (409) — видны нынешние', async () => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = grouped({ ...GROUPED, run: 'g2', groups: [{ ...GROUPED.groups[0], title: 'Новый воркер' },
+                                                           GROUPED.groups[1]] })
+        return json({ detail: 'Группы уже разложили заново — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await card('Воркер')).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
+    const fresh = await card('Новый воркер')
+    expect((await within(fresh).findByRole('alert')).textContent).toBe('Группы уже разложили заново — правка была к прежним')
   })
 })
 

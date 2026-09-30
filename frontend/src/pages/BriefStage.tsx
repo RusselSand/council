@@ -7,7 +7,7 @@ import { Panel } from '../components/Panel'
 import { SaveStatus } from '../components/SaveStatus'
 import { SelectField } from '../components/SelectField'
 import type { Autosave } from '../useAutosave'
-import { useStart } from '../useStart'
+import { useAction } from '../useAction'
 
 /** Текст сохраняется, когда человек перестал печатать; выбор в списках — сразу. */
 export const TYPING_DELAY = 600
@@ -29,7 +29,7 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
   const nav = useNavigate()
   const briefId = useId()
   const nameId = useId()
-  const { busy, error, go } = useStart(onStart)
+  const { busy, error, go } = useAction(onStart)
   const { models, min_participants: minimum } = settings
 
   const toggle = (alias: string, on: boolean) => {

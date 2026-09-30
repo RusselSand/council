@@ -97,7 +97,7 @@ class FakeAgents:
         aliases = list(aliases)
         self.probed.append((frozenset(aliases), fresh))
         if fresh:
-            self.fresh_under_lock.append(councils_api._starting.locked())
+            self.fresh_under_lock.append(councils_api.council_lock.locked())
             if self.on_probe:
                 self.on_probe()
         return {alias: alias in self.online for alias in aliases}
@@ -229,7 +229,7 @@ def test_login_check_before_a_start_runs_outside_the_lock(agents):
 def test_ordinary_edits_do_not_wait_for_a_slicing_start():
     council_id = new_council()
     done = []
-    with councils_api._starting:   # как будто идёт запуск нарезки
+    with councils_api.council_lock:   # как будто идёт запуск нарезки
         edit = threading.Thread(daemon=True, target=lambda: done.append(
             client.patch(f"/api/councils/{council_id}", json={"name": "Проект"}).status_code))
         edit.start()
@@ -265,6 +265,24 @@ def test_start_that_lost_the_race_during_the_login_check_is_refused(agents):
     agents.on_probe = other_tab_starts_and_finishes
     assert client.post(f"/api/councils/{council_id}/slicing").status_code == 409
     assert len([k for k in agents.asked if "-slice-" in k]) == 2   # только первый запуск
+
+
+def test_regrouping_does_not_overwrite_groups_edited_during_the_login_check(agents):
+    council_id = sliced_council(agents)
+    client.post(f"/api/councils/{council_id}/structure")
+    structure = client_council(council_id).structure
+
+    def other_tab_renames():
+        agents.on_probe = None
+        renamed = [group.model_copy(update={"title": "Своё"}) for group in structure.groups]
+        get_store().update_council(council_id, {"structure": structure.model_copy(
+            update={"groups": renamed, "revision": 1})})
+
+    agents.on_probe = other_tab_renames
+    res = client.post(f"/api/councils/{council_id}/structure")
+    assert res.status_code == 409
+    assert "поправили" in res.json()["detail"]
+    assert client_council(council_id).structure.groups[0].title == "Своё"
 
 
 def test_start_while_the_server_stops_leaves_a_failed_slicing_not_a_stuck_one(agents):
@@ -319,6 +337,8 @@ def test_groups_are_built_from_a_finished_slicing(agents):
     assert [(g["id"], g["title"], g["fragment_ids"]) for g in structure["groups"]] == [
         ("A", "Воркер", [1])]
     assert structure["labels"] == {"1": "idea"}
+    assert structure["proposal"]["groups"] == structure["groups"]
+    assert structure["edited"] is False
 
 
 def test_groups_need_a_finished_slicing(agents):

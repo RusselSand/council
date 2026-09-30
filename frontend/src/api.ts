@@ -50,6 +50,10 @@ export interface StructureDecision { issue: string; decision: string; reason: st
 export interface Structure {
   state: 'running' | 'done' | 'failed'; run: string; slicing_run: string; labels: Record<number, Label>
   steps: Step[]; groups: Group[]; relations: GroupRelation[]; decisions: StructureDecision[]
+  /** Как предложил совет; groups и relations — с правками человека, edited — они различаются. */
+  proposal: { groups: Group[]; relations: GroupRelation[] } | null; edited: boolean
+  /** Сколько раз группы правили: правка несёт версию, к которой сделана. */
+  revision: number
   error: string | null
 }
 /** Правка с экрана: меняются только присланные поля. */
@@ -90,6 +94,16 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
 const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
 
+/** К какой раскладке и версии её групп правка: Structure.run и revision. Не та — 409. */
+export interface GroupsVersion { run: string; revision: number }
+
+const editGroups = (id: string, action: 'merge' | 'split' | 'rename' | 'restore',
+                    at: GroupsVersion, body: object = {}) =>
+  request<Council>(`${councilUrl(id)}/structure/${action}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ run: at.run, revision: at.revision, ...body }),
+  })
+
 export const api = {
   councils: () => request<Council[]>('/api/councils'),
   council: (id: string) => request<Council>(councilUrl(id)),
@@ -99,6 +113,14 @@ export const api = {
   }),
   startSlicing: (id: string) => request<Council>(`${councilUrl(id)}/slicing`, { method: 'POST' }),
   startStructure: (id: string) => request<Council>(`${councilUrl(id)}/structure`, { method: 'POST' }),
+  /** group — где нажали: её буква и название остаются. */
+  mergeGroups: (id: string, at: GroupsVersion, group: string, other: string) =>
+    editGroups(id, 'merge', at, { group, other }),
+  splitGroup: (id: string, at: GroupsVersion, group: string, fragmentIds: number[], title: string) =>
+    editGroups(id, 'split', at, { group, fragment_ids: fragmentIds, title }),
+  renameGroup: (id: string, at: GroupsVersion, group: string, title: string) =>
+    editGroups(id, 'rename', at, { group, title }),
+  restoreGroups: (id: string, at: GroupsVersion) => editGroups(id, 'restore', at),
   settings: () => request<Settings>('/api/settings'),
 }
 
