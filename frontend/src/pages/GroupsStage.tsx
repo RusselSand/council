@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import {
-  api, ApiError, councilPath, startOrFollow, structureIsStale,
+  api, ApiError, councilPath, groupsConfirmed, startOrFollow, structureIsStale,
   type Council, type Group, type GroupRelation, type LabeledFragment, type Settings, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
@@ -14,8 +14,8 @@ import { useAction } from '../useAction'
 /**
  * Группы: совет раскладывает фрагменты готовой нарезки вокруг идей — участники по
  * отдельности, судья только там, где раскладки разошлись. Человек может объединить,
- * разделить и переименовать группы и вернуть их как предложил совет. Каждая группа потом
- * станет потоком.
+ * разделить и переименовать группы и вернуть их как предложил совет. Подтверждённые группы
+ * становятся потоками.
  */
 export function GroupsStage({ council, settings, onStart }: Readonly<{
   council: Council; settings: Settings; onStart: (started: Council) => void
@@ -49,16 +49,22 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
           : <RunStatus run={structure} kind="groups" restart={restart} onStart={onStart} />}
       </div>
       <aside className="slices-side">
+        {structure.state === 'done' && (
+          <Confirm council={council} structure={structure} busy={again.busy || edits.busy} edits={edits} />
+        )}
         <Progress steps={structure.steps} models={settings.models} />
       </aside>
     </div>
   )
 }
 
+/** Где правили, если это подтверждение: не буква, с группой не спутать. */
+const CONFIRM = 'confirm'
+
 /**
- * Правки групп: busy, ошибка и где правили — там её и показать. Живут выше экрана итога:
- * ответ на правку может его сменить, а ошибка должна остаться видна. 409 — группы уже
- * разложили заново: правка была к прежним, показываем нынешние.
+ * Правки групп и их подтверждение: busy, ошибка и где правили — там её и показать. Живут
+ * выше экрана итога: ответ на правку может его сменить, а ошибка должна остаться видна.
+ * 409 — группы уже разложили заново: правка была к прежним, показываем нынешние.
  */
 function useGroupEdits(councilId: string, onChange: (council: Council) => void) {
   const action = useAction(onChange, 'groups.editFailed')
@@ -107,7 +113,8 @@ function Result({ council, structure, restart, again, edits }: Readonly<{
     rename: title => edits.edit(group.id, () => api.renameGroup(id, at, group.id, title)),
   })
   // Группы, где правили, после ответа может уже не быть (409 — разложили заново): тогда в шапку.
-  const target = edits.at !== null && structure.groups.some(g => g.id === edits.at) ? edits.at : null
+  // Ошибка подтверждения — у его кнопки.
+  const target = edits.at === CONFIRM || structure.groups.some(g => g.id === edits.at) ? edits.at : null
   const errorAt = (where: string | null) => (target === where ? edits.error : null)
 
   return (
@@ -145,6 +152,40 @@ function Result({ council, structure, restart, again, edits }: Readonly<{
                    relations={structure.relations.filter(r => r.source === group.id || r.target === group.id)} />
       ))}
     </>
+  )
+}
+
+/**
+ * «Дальше»: подтвердить группы — каждая станет потоком — и перейти к потокам. Подтверждаются
+ * группы на экране: поправили их в другой вкладке или разложили заново — сервер откажет, и
+ * видны станут нынешние. Устаревшие после смены типов не подтвердить: сперва разложить заново.
+ */
+function Confirm({ council, structure, busy, edits }: Readonly<{
+  council: Council; structure: Structure; busy: boolean; edits: ReturnType<typeof useGroupEdits>
+}>) {
+  const { t } = useTranslation()
+  const nav = useNavigate()
+  const confirmed = groupsConfirmed(council)
+  const stale = structureIsStale(council)
+  const streams = councilPath(council.id, 'streams')
+  const confirm = async () => {
+    const at = { run: structure.run, revision: structure.revision }
+    if (await edits.edit(CONFIRM, () => api.confirmGroups(council.id, at))) nav(streams)
+  }
+
+  return (
+    <section className="card panel next-step" aria-labelledby="confirm-title">
+      <p className="next-caps">{t('next.caps')}</p>
+      <h2 id="confirm-title" className="panel-title">{t('confirm.title')}</h2>
+      <p className="panel-hint">{t(confirmed ? 'confirm.done' : 'confirm.hint')}</p>
+      {stale && !confirmed && <p className="fragment-note">{t('confirm.stale')}</p>}
+      {edits.at === CONFIRM && edits.error && <p className="error-text" role="alert">{edits.error}</p>}
+      {confirmed
+        ? <Link className="btn-primary large block" to={streams}>{t('confirm.open')}</Link>
+        : <button className="btn-primary large block" onClick={() => void confirm()} disabled={busy || stale}>
+            {t('confirm.confirm')}
+          </button>}
+    </section>
   )
 }
 

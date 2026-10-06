@@ -97,7 +97,7 @@ const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
 /** К какой раскладке и версии её групп правка: Structure.run и revision. Не та — 409. */
 export interface GroupsVersion { run: string; revision: number }
 
-const editGroups = (id: string, action: 'merge' | 'split' | 'rename' | 'restore',
+const editGroups = (id: string, action: 'merge' | 'split' | 'rename' | 'restore' | 'confirm',
                     at: GroupsVersion, body: object = {}) =>
   request<Council>(`${councilUrl(id)}/structure/${action}`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -121,6 +121,8 @@ export const api = {
   renameGroup: (id: string, at: GroupsVersion, group: string, title: string) =>
     editGroups(id, 'rename', at, { group, title }),
   restoreGroups: (id: string, at: GroupsVersion) => editGroups(id, 'restore', at),
+  /** Группы на экране становятся потоками: совет переходит к потокам. */
+  confirmGroups: (id: string, at: GroupsVersion) => editGroups(id, 'confirm', at),
   settings: () => request<Settings>('/api/settings'),
 }
 
@@ -148,6 +150,13 @@ export const structureIsStale = (council: Council): boolean => {
   if (structure.slicing_run !== slicing.run) return true
   return slicing.fragments.some(f => structure.labels[f.id] !== f.label)
 }
+
+/**
+ * Группы подтверждены: каждая стала потоком. Правки групп после этого идут в потоки, новая
+ * раскладка подтверждение снимает.
+ */
+export const groupsConfirmed = (council: Council): boolean =>
+  council.structure?.state === 'done' && (council.status === 'review' || council.status === 'ready')
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

@@ -111,6 +111,23 @@ export const en: Dict = {
   'groups.rename': 'Rename',
   'groups.titleField': 'Title of group {{group}}',
 
+  'confirm.title': 'Confirm the groups',
+  'confirm.hint': 'Each group becomes a separate stream. You can still edit the groups later — the streams follow them.',
+  'confirm.done': 'The groups are confirmed: each is now a stream. Grouping again takes the confirmation back.',
+  'confirm.stale': 'Out-of-date groups cannot be confirmed — group again first.',
+  'confirm.confirm': 'Confirm →',
+  'confirm.open': 'To streams →',
+
+  'streams.none': 'No streams yet: they appear once you confirm the groups.',
+  'streams.toGroups': 'To groups',
+  'streams.title': 'Streams · {{count}}',
+  'streams.hint': 'Each confirmed group is a separate stream. Questions, options and decisions inside a stream are not ready yet.',
+  'streams.stale': 'Fragment types changed after grouping — the groups, and the streams with them, may be out of date.',
+  'streams.fragments_one': '{{count}} fragment',
+  'streams.fragments_few': '{{count}} fragments',
+  'streams.fragments_many': '{{count}} fragments',
+  'streams.fragments_other': '{{count}} fragments',
+
   'run.note': 'This takes minutes. You can close the page: the work goes on on the server.',
   'run.failedHint': 'A retry does not pay again for answers the models have already given.',
   'run.retry': 'Run again',
