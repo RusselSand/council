@@ -26,6 +26,8 @@ class StepName(StrEnum):
     label_judge = "label_judge"  # судья решает фрагменты, где типы разошлись
     structure = "structure"              # участники раскладывают фрагменты по группам
     structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись
+    idea_discovery = "idea_discovery"    # участники восстанавливают идею группы без неё
+    idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
 
 
 class ModelRun(BaseModel):
@@ -144,6 +146,62 @@ class Structure(BaseModel):
             self.groups != self.proposal.groups or self.relations != self.proposal.relations)
 
 
+class IdeaOption(BaseModel):
+    """Формулировка идеи, как её восстановили по фрагментам группы. Одинаковые формулировки
+    разных участников — один вариант."""
+
+    idea: str
+    # На какие фрагменты группы она опирается.
+    evidence: list[int]
+    reason: str
+    # Кто предложил: человек видит, судья — нет.
+    models: list[str]
+
+
+class IdeaProposal(BaseModel):
+    """Что предлагает совет. idea None — не предлагает: никто из участников не взялся
+    восстановить идею или судья не принял ни один вариант; reason — почему."""
+
+    idea: str | None
+    evidence: list[int] = []
+    reason: str
+    # agreed — вариант один, судья не понадобился; judge — решал судья.
+    decided_by: Literal["agreed", "judge"]
+    # Какой из IdeaDiscovery.options предложен как есть; None — судья свёл формулировки.
+    option: int | None = None
+
+
+class IdeaDiscovery(BaseModel):
+    """Поиск идеи группы, в тексте которой её нет: участники по отдельности, судья — если
+    вариантов несколько. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    steps: list[Step]
+    options: list[IdeaOption] = []
+    proposal: IdeaProposal | None = None
+    error: str | None = None
+
+
+class StreamIdea(BaseModel):
+    """Идея потока, утверждённая человеком."""
+
+    text: str
+    # text — записана в тексте (фрагменты-идеи группы); council — вариант совета как есть;
+    # human — формулировка человека.
+    by: Literal["text", "council", "human"]
+    evidence: list[int] = []
+
+
+class Stream(BaseModel):
+    """Поток — подтверждённая группа под той же буквой. Первый шаг его цепочки — идея: у
+    группы без неё идею ищет совет (discovery), утверждает человек (idea)."""
+
+    group: str
+    discovery: IdeaDiscovery | None = None
+    idea: StreamIdea | None = None
+
+
 class Council(BaseModel):
     id: str
     name: str
@@ -156,6 +214,8 @@ class Council(BaseModel):
     updated_at: datetime
     slicing: Slicing | None = None
     structure: Structure | None = None
+    # Потоки подтверждённых групп, по их порядку. None — группы ещё не подтверждены.
+    streams: list[Stream] | None = None
 
 
 class CouncilCreated(BaseModel):
@@ -205,6 +265,13 @@ class SplitGroup(GroupsEdit):
 class RenameGroup(GroupsEdit):
     group: str
     title: str
+
+
+class ApproveIdea(GroupsEdit):
+    """Человек утверждает идею потока. text — его формулировка; у группы, где идея записана
+    в тексте, её не правят, и text нет."""
+
+    text: str | None = None
 
 
 class Model(BaseModel):

@@ -11,6 +11,11 @@
 1. structure — каждый участник раскладывает фрагменты готовой нарезки по группам (structure.md);
 2. structure_judge — если раскладки разошлись, судья выбирает итоговую (structure_judge.md).
 
+Идея потока (IdeaRun) — у подтверждённой группы, в тексте которой идеи нет:
+1. idea_discovery — каждый участник восстанавливает идею по фрагментам группы
+   (idea_discovery.md);
+2. idea_judge — если вариантов несколько, судья выбирает или сводит их (idea_judge.md).
+
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
 того же текста один и тот же промпт.
@@ -31,9 +36,13 @@ from uuid import uuid4
 
 from .grouping import StructureOption, judged_structure, structure_options
 from .groups import letter_for
+from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .models import (
     Group,
     GroupRelation,
+    IdeaDiscovery,
+    IdeaOption,
+    IdeaProposal,
     LabeledFragment,
     ModelRun,
     Slicing,
@@ -108,6 +117,12 @@ def start_structure(participants: list[str], judge: str, slicing: Slicing) -> St
                                  (StepName.structure, StepName.structure_judge)))
 
 
+def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
+    return IdeaDiscovery(state="running", run=uuid4().hex[:8],
+                         steps=steps(participants, judge,
+                                     (StepName.idea_discovery, StepName.idea_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -126,7 +141,7 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure)]:
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -409,3 +424,52 @@ def final_structure(option: StructureOption, decisions: list[StructureDecision])
                  for r in option.relations if r.type != "independent"]
     return {"groups": groups, "relations": relations, "decisions": decisions,
             "proposal": StructureProposal(groups=groups, relations=relations)}
+
+
+class IdeaRun(CouncilRun[IdeaDiscovery]):
+    """Идея группы, которой нет в тексте: участники восстанавливают её по фрагментам группы,
+    судья выбирает, если вариантов несколько. Название группы модели не видят: это лишь
+    метка для навигации, а идея должна опираться на фрагменты."""
+
+    what = "поиск идеи"
+
+    def __init__(self, council_id: str, fragments: list[LabeledFragment], participants: list[str],
+                 judge: str, runner: Runner, report: Callable[[IdeaDiscovery], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_idea(participants, judge))
+        self.fragments = fragments
+
+    def work(self) -> dict[str, Any]:
+        known = {f.id for f in self.fragments}
+        group = as_json({"fragments": [{"id": f"F{f.id}", "type": f.label, "text": f.text}
+                                       for f in self.fragments]})
+        answers = self._ask_all(StepName.idea_discovery, render("idea_discovery", group=group),
+                                lambda data: idea_options(data, known))
+        options = merged(answers)
+        found = [as_option(option) for option in options]
+        if len(options) <= 1:
+            self._skip(StepName.idea_judge)
+            if not options:
+                proposal = IdeaProposal(idea=None, reason=declined(answers), decided_by="agreed")
+            else:
+                proposal = IdeaProposal(idea=found[0].idea, evidence=found[0].evidence,
+                                        reason=found[0].reason, decided_by="agreed", option=0)
+            return {"options": found, "proposal": proposal}
+
+        variants = shuffled([{"idea": o.idea, "evidence": as_ids(o.evidence), "reason": o.reason}
+                             for o in options])
+        numbered = [{"variant": n, **v} for n, v in enumerate(variants, 1)]
+        prompt = render("idea_judge", group=group, idea_options=as_json(numbered))
+        verdict = self._ask_judge(StepName.idea_judge, prompt,
+                                  lambda data: judged_idea(data, known))
+        chosen = None if verdict.idea is None else next(
+            (n for n, option in enumerate(options)
+             if same_idea(option.idea) == same_idea(verdict.idea)), None)
+        return {"options": found, "proposal": IdeaProposal(
+            idea=verdict.idea, evidence=list(verdict.evidence), reason=verdict.reason,
+            decided_by="judge", option=chosen)}
+
+
+def as_option(option: MergedOption) -> IdeaOption:
+    return IdeaOption(idea=option.idea, evidence=sorted(option.evidence), reason=option.reason,
+                      models=option.models)

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, isNotFound,
-  type Council, type CouncilPatch, type CouncilStatus, type Label, type Slicing,
+  api, ApiError, councilPath, isNotFound, seeking,
+  type Council, type CouncilPatch, type CouncilStatus, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
 import { useAutosave } from '../useAutosave'
@@ -16,6 +16,9 @@ import { StreamsStage } from './StreamsStage'
 
 export const STAGES = ['brief', 'slices', 'structure', 'streams', 'history'] as const
 
+/** Путь этапа под /councils/:id/. У потоков в нём ещё буква открытого потока. */
+export const stagePath = (stage: Stage) => (stage === 'streams' ? 'streams/:stream?' : stage)
+
 /** Как часто спрашивать сервер, пока идёт нарезка: ходы моделей длятся минутами. */
 export const POLL_MS = 2000
 export type Stage = (typeof STAGES)[number]
@@ -23,6 +26,19 @@ export type Stage = (typeof STAGES)[number]
 /** Этап i пройден, если статус совета ушёл дальше него. «История» пройденной не бывает. */
 const STATUS_ORDER: CouncilStatus[] = ['brief', 'slices', 'structure', 'review', 'ready']
 const isDone = (stageIndex: number, status: CouncilStatus) => stageIndex < STATUS_ORDER.indexOf(status)
+
+/**
+ * Потоки из ответа опроса. Берутся только поиски идей, что на экране ещё идут, и только если
+ * на сервере это тот же ход: запоздалый ответ не затрёт утверждённую здесь идею. На сервере
+ * потоки уже другие (группы поправили в другой вкладке) — берём их целиком.
+ */
+const followed = (mine: Stream[], fresh: Stream[] | null): Stream[] | null => {
+  const same = (stream: Stream) =>
+    fresh?.find(f => f.group === stream.group && f.discovery?.run === stream.discovery?.run)
+  const live = mine.filter(stream => stream.discovery?.state === 'running')
+  if (live.some(stream => !same(stream))) return fresh
+  return mine.map(stream => (live.includes(stream) ? same(stream) ?? stream : stream))
+}
 
 /** 404 на сам совет. 404 от настроек — обычная ошибка загрузки: совет-то есть, и повтор уместен. */
 class CouncilMissing extends Error {}
@@ -64,7 +80,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) =>
     update(([c, settings]) => [{
-      ...c, status: fresh.status, structure: fresh.structure,
+      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
     }, settings]), [update])
 
@@ -109,18 +125,20 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     schedule({ labels: { [fragmentId]: label }, slicing_run: done.run }, 0)
   }, [council?.slicing, update, schedule])
 
-  // Опрос, пока идёт нарезка или раскладка. Следующий запрос — только после ответа на
-  // предыдущий, и из ответа берётся только тот ход, что на экране ещё идёт: запоздалый ответ
-  // не затрёт готовый итог и правки типов.
+  // Опрос, пока идёт нарезка, раскладка или поиск идей. Следующий запрос — только после
+  // ответа на предыдущий, и из ответа берётся только тот ход, что на экране ещё идёт:
+  // запоздалый ответ не затрёт готовый итог, правки типов и утверждённые идеи.
   const polling = useRef(false)
   const polled = useCallback((fresh: Council) =>
     update(([c, settings]) => {
       const next = { ...c, status: fresh.status }
       if (c.slicing?.state === 'running') next.slicing = fresh.slicing
       if (c.structure?.state === 'running') next.structure = fresh.structure
+      if (c.streams && seeking(c)) next.streams = followed(c.streams, fresh.streams)
       return [next, settings]
     }), [update])
   const working = council?.slicing?.state === 'running' || council?.structure?.state === 'running'
+    || (council !== null && seeking(council))
   useInterval(() => {
     if (polling.current) return
     polling.current = true
@@ -176,7 +194,9 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
         {state.kind === 'ok' && stage === 'structure' && (
           <GroupsStage council={state.data[0]} settings={state.data[1]} onStart={adopt} />
         )}
-        {state.kind === 'ok' && stage === 'streams' && <StreamsStage council={state.data[0]} />}
+        {state.kind === 'ok' && stage === 'streams' && (
+          <StreamsStage council={state.data[0]} settings={state.data[1]} onChange={adopt} />
+        )}
         {state.kind === 'ok' && stage === 'history' && (
           <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
         )}

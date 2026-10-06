@@ -3,14 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { ApiError, type Council } from './api'
 
 /**
- * Действие с кнопки, которое сервер может отклонить: запуск хода совета или правка групп.
- * Пока идёт — busy, отказ сервера — error словами сервера, иначе — failed. act может вернуть
- * null — делать не стали (например, не сохранился текст). then — что сделать после удачи,
- * например перейти на этап. go отвечает, удалось ли. Второе действие, пока идёт первое, не
- * начинается: ответы пришли бы не по порядку, и экран показал бы промежуточный.
+ * Действие с кнопки, которое сервер может отклонить: запуск хода совета, правка групп,
+ * утверждение идеи. Пока идёт — busy, отказ сервера — error словами сервера, иначе —
+ * failed. act может вернуть null — делать не стали (например, не сохранился текст). then —
+ * что сделать после удачи, например перейти на этап. go отвечает, удалось ли. Второе
+ * действие, пока идёт первое, не начинается: ответы пришли бы не по порядку, и экран
+ * показал бы промежуточный.
  */
 export function useAction(onDone: (council: Council) => void,
-                          failed: 'start.failed' | 'groups.editFailed' = 'start.failed') {
+                          failed: 'start.failed' | 'groups.editFailed' | 'idea.approveFailed' = 'start.failed') {
   const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
