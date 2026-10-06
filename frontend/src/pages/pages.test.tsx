@@ -169,6 +169,99 @@ describe('HomePage', () => {
   })
 })
 
+describe('Подтверждение групп и потоки', () => {
+  const grouped = (status: Council['status'] = 'structure', structure: Structure = GROUPED): Council =>
+    ({ ...COUNCIL, status, slicing: DONE, structure })
+  const confirmCard = () => screen.findByRole('region', { name: ru['confirm.title'] })
+  const confirmButton = async () =>
+    within(await confirmCard()).getByRole('button', { name: ru['confirm.confirm'] }) as HTMLButtonElement
+
+  it('«Подтвердить»: группы на экране становятся потоками, экран уходит к ним', async () => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => { current = grouped('review'); return json(current) },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(await confirmButton())
+    expect(await screen.findByRole('heading', { name: 'Потоки · 2' })).toBeTruthy()
+    expect(edits).toEqual([{ action: 'confirm', body: { run: 'g1', revision: 0 } }])
+    const streams = screen.getAllByRole('listitem').map(li => li.textContent)
+    expect(streams).toEqual(['AВоркер2 фрагмента', `BХранение1 фрагмент · ${ru['groups.missingIdea']}`])
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['council.stageDone'])
+  })
+
+  it('подтверждённые — ссылка «К потокам», а не кнопка', async () => {
+    fetchMock.mockImplementation(server({ council: () => grouped('review') }))
+    renderAt('/councils/demo-1/structure')
+    const card = await confirmCard()
+    expect(within(card).getByText(ru['confirm.done'])).toBeTruthy()
+    fireEvent.click(within(card).getByRole('link', { name: ru['confirm.open'] }))
+    expect(await screen.findByRole('heading', { name: 'Потоки · 2' })).toBeTruthy()
+    expect(edits).toEqual([])
+  })
+
+  it('устаревшие после смены типов группы не подтвердить', async () => {
+    const stale = { ...GROUPED, labels: { 1: 'idea' as const, 2: 'risk' as const } }
+    fetchMock.mockImplementation(server({ council: () => grouped('structure', stale) }))
+    renderAt('/councils/demo-1/structure')
+    expect((await confirmButton()).disabled).toBe(true)
+    expect(within(await confirmCard()).getByText(ru['confirm.stale'])).toBeTruthy()
+  })
+
+  it('группы поменяли в другой вкладке (409) — ошибка у кнопки, видны нынешние, экран на месте', async () => {
+    let current = grouped()
+    fetchMock.mockImplementation(server({
+      council: () => current,
+      edit: () => {
+        current = grouped('structure', { ...GROUPED, revision: 1, groups: [
+          { ...GROUPED.groups[0], title: 'Воркер Codex' }, GROUPED.groups[1]] })
+        return json({ detail: 'Группы уже поменяли — правка была к прежним' }, 409)
+      },
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(await confirmButton())
+    const alert = await within(await confirmCard()).findByRole('alert')
+    expect(alert.textContent).toBe('Группы уже поменяли — правка была к прежним')
+    expect(await screen.findByRole('region', { name: 'Воркер Codex' })).toBeTruthy()
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.queryByRole('heading', { name: /Потоки/ })).toBeNull()
+  })
+
+  it('пока сохраняется правка группы, подтвердить нельзя', async () => {
+    let release!: () => void
+    fetchMock.mockImplementation(server({
+      council: () => grouped(),
+      edit: () => new Promise<Response>(r => { release = () => r(new Response(JSON.stringify(grouped()))) }),
+    }))
+    renderAt('/councils/demo-1/structure')
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Воркер' })).getByRole('button', { name: ru['groups.merge'] }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
+    await waitFor(async () => expect((await confirmButton()).disabled).toBe(true))
+    release()
+    await waitFor(async () => expect((await confirmButton()).disabled).toBe(false))
+    expect(edits.map(e => e.action)).toEqual(['merge'])
+  })
+
+  it.each([
+    ['группы не подтверждены', grouped()],
+    ['групп нет', { ...COUNCIL, status: 'review' as const }],
+  ])('потоки, когда %s, — дорога к группам', async (_, council) => {
+    fetchMock.mockImplementation(server({ council: () => council }))
+    renderAt('/councils/demo-1/streams')
+    const link = await screen.findByRole('link', { name: ru['streams.toGroups'] })
+    expect(link.getAttribute('href')).toBe('/councils/demo-1/structure')
+    expect(screen.queryByRole('list')).toBeNull()
+  })
+
+  it('потоки по устаревшим группам — предупреждение', async () => {
+    const stale = { ...GROUPED, labels: { 1: 'idea' as const, 2: 'risk' as const } }
+    fetchMock.mockImplementation(server({ council: () => grouped('review', stale) }))
+    renderAt('/councils/demo-1/streams')
+    expect(await screen.findByText(ru['streams.stale'], { exact: false })).toBeTruthy()
+  })
+})
+
 describe('CouncilPage', () => {
   it('показывает проект: имя в шапке, пройденные этапы', async () => {
     fetchMock.mockImplementation(server())

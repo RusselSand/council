@@ -1,4 +1,5 @@
-"""Правки готовых групп человеком: объединить, разделить, переименовать, вернуть как было."""
+"""Правки готовых групп человеком: объединить, разделить, переименовать, вернуть как было,
+подтвердить."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ from spec_council.app import app
 from spec_council.deps import get_store
 from spec_council.groups import EditRefused, arranged, letter_for, merged, renamed, restored, split
 from spec_council.models import (
+    CouncilStatus,
     Group,
     GroupRelation,
     LabeledFragment,
@@ -134,7 +136,8 @@ def test_letters_go_on_after_z():
 def council_with(structure, slicing=None):
     council_id = client.post("/api/councils").json()["id"]
     get_store().update_council(council_id, {"slicing": slicing or sliced(),
-                                            "structure": structure})
+                                            "structure": structure,
+                                            "status": CouncilStatus.structure})
     return council_id
 
 
@@ -208,3 +211,40 @@ def test_a_senseless_edit_is_422_and_changes_nothing():
 
 def test_edit_of_unknown_council_is_404():
     assert post("missing", "restore", run="g1").status_code == 404
+    assert post("missing", "confirm", run="g1").status_code == 404
+
+
+def status_of(council_id):
+    return get_store().get_council(council_id).status
+
+
+def test_confirmed_groups_become_streams_and_edits_after_that_keep_them():
+    council_id = council_with(BASE)
+    res = post(council_id, "confirm", run="g1")
+    assert res.status_code == 200
+    assert res.json()["status"] == "review"
+    assert res.json()["structure"]["revision"] == 0   # подтверждение — не правка групп
+    assert post(council_id, "confirm", run="g1").json()["status"] == "review"
+
+    assert post(council_id, "merge", run="g1", group="A", other="B").status_code == 200
+    assert status_of(council_id) == "review"
+
+
+@pytest.mark.parametrize(("run", "revision", "problem"), [
+    ("g0", 0, "разложили заново"),
+    ("g1", 1, "уже поменяли"),
+])
+def test_only_the_groups_on_screen_are_confirmed(run, revision, problem):
+    council_id = council_with(BASE)
+    res = post(council_id, "confirm", revision, run=run)
+    assert res.status_code == 409
+    assert problem in res.json()["detail"]
+    assert status_of(council_id) == "structure"
+
+
+def test_an_outdated_grouping_is_not_confirmed():
+    council_id = council_with(BASE, sliced({**LABELS, 2: "idea"}))
+    res = post(council_id, "confirm", run="g1")
+    assert res.status_code == 409
+    assert "сначала разложите заново" in res.json()["detail"]
+    assert status_of(council_id) == "structure"

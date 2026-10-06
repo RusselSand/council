@@ -12,6 +12,7 @@ import { useLoad } from '../useLoad'
 import { BriefStage } from './BriefStage'
 import { GroupsStage } from './GroupsStage'
 import { SlicesStage } from './SlicesStage'
+import { StreamsStage } from './StreamsStage'
 
 export const STAGES = ['brief', 'slices', 'structure', 'streams', 'history'] as const
 
@@ -175,7 +176,8 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
         {state.kind === 'ok' && stage === 'structure' && (
           <GroupsStage council={state.data[0]} settings={state.data[1]} onStart={adopt} />
         )}
-        {state.kind === 'ok' && (stage === 'streams' || stage === 'history') && (
+        {state.kind === 'ok' && stage === 'streams' && <StreamsStage council={state.data[0]} />}
+        {state.kind === 'ok' && stage === 'history' && (
           <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
         )}
       </main>
