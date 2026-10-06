@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from spec_council.models import StepName
-from spec_council.pipeline import GroupingRun, ModelFailed, SlicingRun
+from spec_council.models import LabeledFragment, StepName
+from spec_council.pipeline import GroupingRun, IdeaRun, ModelFailed, SlicingRun
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -306,3 +306,91 @@ def test_structure_judge_refusal_makes_a_retry_ask_the_participants_again():
         ("structure_judge", "fable"): {"status": "no_valid_option", "problem": "обе теряют смысл"}})
     assert result.state == "failed" and "обе теряют смысл" in result.error
     assert sorted(runner.forgotten) == sorted(k for k in runner.keys if "-structure" in k)
+
+
+# --- идея потока
+
+GROUP_FRAGMENTS = [
+    LabeledFragment(id=2, text="Полнотекстовый поиск по базе.", label="proposal", reason="",
+                    council_label="proposal"),
+    LabeledFragment(id=3, text="Или бот в Slack.", label="proposal", reason="",
+                    council_label="proposal"),
+    LabeledFragment(id=5, text="Бюджет — до $200.", label="constraint", reason="",
+                    council_label="constraint"),
+]
+FIND = "Команда сама находит ответы в базе знаний"
+
+
+def ideas(*options, reason=None):
+    return {"number": len(options), "options": [
+        {"idea": idea, "evidence": evidence, "reason": f"почему: {idea}"}
+        for idea, evidence in options], **({"reason": reason} if reason else {})}
+
+
+def seek(replies, participants=("sol", "fable"), judge="fable"):
+    runner, reports = FakeRunner(replies), []
+    result = IdeaRun("c1", GROUP_FRAGMENTS, list(participants), judge, runner,
+                     reports.append).run()
+    return result, runner
+
+
+def test_one_idea_from_everyone_needs_no_judge():
+    result, runner = seek({("idea_discovery", "sol"): ideas((FIND, ["F2", "F3"])),
+                           ("idea_discovery", "fable"): ideas((FIND + ".", ["F3"]))})
+    assert result.state == "done"
+    assert [(o.idea, o.evidence, o.models) for o in result.options] == [
+        (FIND, [2, 3], ["sol", "fable"])]
+    assert (result.proposal.idea, result.proposal.decided_by, result.proposal.option) == (
+        FIND, "agreed", 0)
+    assert {s.name.value: s.state for s in result.steps}["idea_judge"] == "skipped"
+    prompt = runner.asked["idea_discovery", "sol"]
+    assert '"id": "F5"' in prompt and '"type": "constraint"' in prompt
+    assert sorted(runner.forgotten) == sorted(runner.keys)
+
+
+def test_different_ideas_go_to_the_judge_without_model_names():
+    other = "Ответы на вопросы приходят без #help"
+    result, runner = seek({
+        ("idea_discovery", "sol"): ideas((FIND, ["F2"])),
+        ("idea_discovery", "fable"): ideas((other, ["F3"])),
+        ("idea_judge", "fable"): {"status": "ok", "idea": other, "evidence": ["F2", "F3"],
+                                  "reason": "шире"}})
+    assert (result.proposal.idea, result.proposal.evidence, result.proposal.decided_by) == (
+        other, [2, 3], "judge")
+    assert result.options[result.proposal.option].idea == other
+    prompt = runner.asked["idea_judge", "fable"]
+    assert FIND in prompt and other in prompt
+    assert "sol" not in prompt and "fable" not in prompt
+
+
+def test_judge_may_merge_wordings_and_may_reject_them_all():
+    two = {("idea_discovery", "sol"): ideas((FIND, ["F2"])),
+           ("idea_discovery", "fable"): ideas(("Другое", ["F3"]))}
+    result, _ = seek({**two, ("idea_judge", "fable"): {
+        "status": "ok", "idea": "Сводная", "evidence": ["F2"], "reason": "из обеих"}})
+    assert (result.proposal.idea, result.proposal.option) == ("Сводная", None)
+
+    result, runner = seek({**two, ("idea_judge", "fable"): {
+        "status": "no_valid_option", "reason": "обе додумывают цель"}})
+    assert result.state == "done"   # варианты остаются человеку
+    assert (result.proposal.idea, result.proposal.reason) == (None, "обе додумывают цель")
+    assert len(result.options) == 2
+    assert sorted(runner.forgotten) == sorted(runner.keys)
+
+
+def test_nobody_restoring_the_idea_leaves_it_to_the_person():
+    result, _ = seek({("idea_discovery", "sol"): ideas(reason="одни ограничения"),
+                      ("idea_discovery", "fable"): ideas(reason="цели нет")})
+    assert result.state == "done" and result.options == []
+    assert (result.proposal.idea, result.proposal.reason) == (None, "одни ограничения; цели нет")
+    assert {s.name.value: s.state for s in result.steps}["idea_judge"] == "skipped"
+
+
+def test_judge_leaning_on_a_fragment_outside_the_group_fails_the_search():
+    result, runner = seek({
+        ("idea_discovery", "sol"): ideas((FIND, ["F2"])),
+        ("idea_discovery", "fable"): ideas(("Другое", ["F3"])),
+        ("idea_judge", "fable"): {"status": "ok", "idea": FIND, "evidence": ["F1"]}})
+    assert result.state == "failed"
+    assert "F1 нет в группе" in result.steps[1].runs[0].error
+    assert runner.forgotten == [k for k in runner.keys if "-idea_judge-" in k]

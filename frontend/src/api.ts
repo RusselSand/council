@@ -4,6 +4,7 @@ export const LABELS = ['idea', 'question', 'proposal', 'constraint', 'risk'] as 
 export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
+  | 'idea_discovery' | 'idea_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -33,6 +34,8 @@ export interface Council {
   updated_at: string
   slicing: Slicing | null
   structure: Structure | null
+  /** Потоки подтверждённых групп; null — группы ещё не подтверждены. */
+  streams: Stream[] | null
 }
 
 /** Фрагменты вокруг одной задумки. Общий фрагмент стоит в нескольких группах тем же номером. */
@@ -56,6 +59,26 @@ export interface Structure {
   revision: number
   error: string | null
 }
+/** Формулировка идеи, как её восстановили по фрагментам группы; models — кто предложил. */
+export interface IdeaOption { idea: string; evidence: number[]; reason: string; models: string[] }
+/**
+ * Что предлагает совет. idea null — не предлагает (никто не взялся или судья не принял ни
+ * один вариант), reason — почему. option — какой из вариантов предложен как есть; null —
+ * судья свёл формулировки.
+ */
+export interface IdeaProposal {
+  idea: string | null; evidence: number[]; reason: string; decided_by: 'agreed' | 'judge'; option: number | null
+}
+/** Поиск идеи группы, в тексте которой её нет: идёт в фоне минутами, фронт опрашивает совет. */
+export interface IdeaDiscovery {
+  state: 'running' | 'done' | 'failed'; run: string; steps: Step[]
+  options: IdeaOption[]; proposal: IdeaProposal | null; error: string | null
+}
+/** Идея потока, утверждённая человеком: записана в тексте, вариант совета как есть или своя. */
+export interface StreamIdea { text: string; by: 'text' | 'council' | 'human'; evidence: number[] }
+/** Поток — подтверждённая группа под той же буквой; discovery — поиск её идеи, если её нет в тексте. */
+export interface Stream { group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null }
+
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
   /** Типы фрагментов готовой нарезки, {id: тип}: только изменённые, остальные не трогаются. */
@@ -121,8 +144,17 @@ export const api = {
   renameGroup: (id: string, at: GroupsVersion, group: string, title: string) =>
     editGroups(id, 'rename', at, { group, title }),
   restoreGroups: (id: string, at: GroupsVersion) => editGroups(id, 'restore', at),
-  /** Группы на экране становятся потоками: совет переходит к потокам. */
+  /** Группы на экране становятся потоками; у групп без идеи совет сразу её ищет. */
   confirmGroups: (id: string, at: GroupsVersion) => editGroups(id, 'confirm', at),
+  /** Искать идею потока заново: после сбоя или без подключения к моделям. */
+  seekIdea: (id: string, group: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
+  /** text null — идея записана в тексте группы, её не правят. */
+  approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/idea`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, ...(text === null ? {} : { text }) }),
+    }),
   settings: () => request<Settings>('/api/settings'),
 }
 
@@ -152,11 +184,15 @@ export const structureIsStale = (council: Council): boolean => {
 }
 
 /**
- * Группы подтверждены: каждая стала потоком. Правки групп после этого идут в потоки, новая
- * раскладка подтверждение снимает.
+ * Группы подтверждены: каждая стала потоком. Новый состав групп или новая раскладка
+ * подтверждение снимают, переименование — нет.
  */
 export const groupsConfirmed = (council: Council): boolean =>
-  council.structure?.state === 'done' && (council.status === 'review' || council.status === 'ready')
+  council.streams !== null && council.structure?.state === 'done'
+
+/** Совет ищет идею хоть одного потока. */
+export const seeking = (council: Council): boolean =>
+  council.streams?.some(stream => stream.discovery?.state === 'running') ?? false
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

@@ -4,13 +4,13 @@ import { createBrowserRouter, RouterProvider } from 'react-router'
 import { App } from './App'
 import './i18n'
 import { HomePage } from './pages/HomePage'
-import { CouncilPage, STAGES } from './pages/CouncilPage'
+import { CouncilPage, STAGES, stagePath } from './pages/CouncilPage'
 import './styles.css'
 
 const router = createBrowserRouter([{
   path: '/', element: <App />, children: [
     { index: true, element: <HomePage /> },
-    ...STAGES.map(stage => ({ path: `councils/:id/${stage}`, element: <CouncilPage stage={stage} /> })),
+    ...STAGES.map(stage => ({ path: `councils/:id/${stagePath(stage)}`, element: <CouncilPage stage={stage} /> })),
   ],
 }])
 

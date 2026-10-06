@@ -13,9 +13,11 @@ from spec_council.models import (
     GroupRelation,
     LabeledFragment,
     Slicing,
+    Stream,
     Structure,
     StructureProposal,
 )
+from spec_council.pipeline import start_idea
 
 client = TestClient(app)
 
@@ -218,16 +220,38 @@ def status_of(council_id):
     return get_store().get_council(council_id).status
 
 
-def test_confirmed_groups_become_streams_and_edits_after_that_keep_them():
+def test_confirmed_groups_become_streams():
     council_id = council_with(BASE)
     res = post(council_id, "confirm", run="g1")
     assert res.status_code == 200
     assert res.json()["status"] == "review"
     assert res.json()["structure"]["revision"] == 0   # подтверждение — не правка групп
-    assert post(council_id, "confirm", run="g1").json()["status"] == "review"
+    assert [s["group"] for s in res.json()["streams"]] == ["A", "B", "C"]
+    again = post(council_id, "confirm", run="g1").json()
+    assert again["streams"] == res.json()["streams"]
 
-    assert post(council_id, "merge", run="g1", group="A", other="B").status_code == 200
+
+def test_renaming_keeps_the_streams_and_a_new_composition_takes_the_confirmation_back():
+    council_id = council_with(BASE)
+    post(council_id, "confirm", run="g1")
+    assert post(council_id, "rename", run="g1", group="A", title="Воркер").status_code == 200
     assert status_of(council_id) == "review"
+    assert get_store().get_council(council_id).streams is not None
+
+    res = post(council_id, "merge", 1, run="g1", group="A", other="B")
+    assert res.status_code == 200
+    assert (res.json()["status"], res.json()["streams"]) == ("structure", None)
+
+
+def test_composition_does_not_change_while_the_council_seeks_ideas():
+    council_id = council_with(BASE)
+    streams = [Stream(group="A"), Stream(group="B", discovery=start_idea(["sol"], "sol")),
+               Stream(group="C")]
+    get_store().update_council(council_id, {"streams": streams, "status": CouncilStatus.review})
+    res = post(council_id, "merge", run="g1", group="A", other="B")
+    assert res.status_code == 423
+    assert get_store().get_council(council_id).structure == BASE
+    assert post(council_id, "rename", run="g1", group="A", title="Воркер").status_code == 200
 
 
 @pytest.mark.parametrize(("run", "revision", "problem"), [

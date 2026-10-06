@@ -1,7 +1,9 @@
 """Правки готовых групп человеком: объединить, разделить, переименовать, вернуть как
-предложил совет — и подтвердить их. Каждая правка привязана к раскладке (run) и версии её
-групп (revision): разложили заново или поправили в другой вкладке — прежняя правка уже не
-про эти группы."""
+предложил совет. Каждая правка привязана к раскладке (run) и версии её групп (revision):
+разложили заново или поправили в другой вкладке — прежняя правка уже не про эти группы.
+
+Группы подтверждены — правка, меняющая их состав, подтверждение снимает: потоки и их идеи
+были про прежний состав. Переименование потоки не трогает."""
 
 from collections.abc import Callable
 from typing import Any
@@ -20,7 +22,7 @@ from ..models import (
     SplitGroup,
     Structure,
 )
-from .councils import MISSING, NOT_FOUND, council_lock
+from .councils import MISSING, NOT_FOUND, council_lock, seeking
 
 router = APIRouter(prefix="/councils", tags=["groups"])
 
@@ -30,6 +32,7 @@ NOT_THESE_GROUPS = {
 EDIT_RESPONSES = {
     **NOT_FOUND, **NOT_THESE_GROUPS,
     422: {"description": "Правка без смысла: нет такой группы, делить нечего, пустое название"},
+    423: {"description": "Состав подтверждённых групп не меняется, пока совет ищет идеи потоков"},
 }
 
 
@@ -57,34 +60,31 @@ def restore_groups(council_id: str, edit: GroupsEdit, store: StoreDep) -> Counci
     return edited(council_id, store, edit, restored)
 
 
-@router.post("/{council_id}/structure/confirm", responses={**NOT_FOUND, **NOT_THESE_GROUPS})
-def confirm_groups(council_id: str, edit: GroupsEdit, store: StoreDep) -> Council:
-    """Человек подтвердил группы: каждая становится потоком, совет переходит к потокам.
-    Подтверждает то, что видел: ту же раскладку и версию групп. Подтверждённые раньше —
-    ответ тот же, совет не меняется. Поправить группы потом можно, потоки пойдут за ними;
-    новая раскладка подтверждение снимает."""
-    with council_lock:  # подтверждение и новый запуск раскладки не должны разойтись
-        council = current(council_id, store, edit)
-        if council.status == CouncilStatus.structure:
-            council = store.update_council(council_id, {"status": CouncilStatus.review})
-    if council is None:
-        raise HTTPException(404, MISSING)
-    return council
-
-
 def edited(council_id: str, store: StoreDep, edit: GroupsEdit,
            change: Callable[[Structure], dict[str, Any]]) -> Council:
     with council_lock:  # правка и новый запуск раскладки не должны разойтись
-        structure = current(council_id, store, edit).structure
+        council = current(council_id, store, edit)
+        structure = council.structure
         try:
             changes = change(structure)
         except EditRefused as exc:
             raise HTTPException(422, str(exc)) from exc
-        council = store.update_council(council_id, {"structure": structure.model_copy(
-            update={**changes, "revision": structure.revision + 1})})
+        result = structure.model_copy(update={**changes, "revision": structure.revision + 1})
+        unconfirmed = {}
+        if council.streams is not None and composition(result) != composition(structure):
+            if seeking(council):
+                raise HTTPException(
+                    423, "Совет ищет идеи потоков — дождитесь его, потом меняйте состав групп")
+            unconfirmed = {"streams": None, "status": CouncilStatus.structure}
+        council = store.update_council(council_id, {"structure": result, **unconfirmed})
     if council is None:
         raise HTTPException(404, MISSING)
     return council
+
+
+def composition(structure: Structure) -> list[tuple[str, list[int]]]:
+    """Что из групп важно потокам: буквы и составы. Названия — нет."""
+    return [(group.id, group.fragment_ids) for group in structure.groups]
 
 
 def current(council_id: str, store: StoreDep, edit: GroupsEdit) -> Council:
