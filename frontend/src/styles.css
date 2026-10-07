@@ -1,12 +1,14 @@
 :root {
   --bg: #e3e3e3; --surface: #fbfbfb; --surface-sunken: #f2f2f2; --border: #e4e4e4;
-  --fg: #1d1d1d; --fg-soft: #555; --fg-muted: #7a7a7a; --fg-faint: #a8a8a8;
+  --fg: #1d1d1d; --fg-soft: #555; --fg-muted: #636363; --fg-faint: #a8a8a8;
   /* Тёмные карточки («Общая картина», «Сейчас») и пустые сегменты на них. */
   --ink: #1f1f1f; --ink-line: #4a4a4a; --ink-muted: #9a9a9a;
   --accent: #1d1d1d; --accent-soft: #ececec;
   /* Светофор: зелёный — идёт или готово, жёлтый — ход за вами, красный — ход модели упал.
-     -bright — на тёмном, -text — текстом на светлом, -ink — текстом на жёлтом. */
-  --go: #2f9e5b; --go-bright: #4cc27c; --go-soft: #eafff1; --go-text: #1f7a45;
+     -bright — на тёмном, -text — текстом на светлом, -ink — текстом на жёлтом. Контраст
+     текста — не меньше 4.5:1 (contrast.test.ts): поэтому зелёный темнее макетного #2f9e5b,
+     на котором белый текст не читается. */
+  --go: #23804a; --go-bright: #4cc27c; --go-soft: #eafff1; --go-text: #1a6b3c;
   --wait: #e0a100; --wait-bright: #ffc940; --wait-text: #7d5a00; --wait-ink: #3a2a00;
   --stop: #d1382f; --stop-bright: #ff8c84; --stop-soft: #ffe9e7; --stop-text: #b8352d;
   --ok: var(--go-text); --ok-soft: var(--go-soft);
@@ -277,7 +279,8 @@ button.chain-step:hover { background: var(--surface-sunken) }
 @keyframes working { 50% { opacity: .55 } }
 
 /* «Сейчас»: тёмная карточка потока — где он и чей ход, цепочка сегментами. */
-.now { padding: 18px 20px 16px; border-radius: 20px; background: var(--ink); color: #fff }
+/* min-width: 0 — в сетке шага карточка ужимается, а сегменты листаются внутри неё. */
+.now { min-width: 0; padding: 18px 20px 16px; border-radius: 20px; background: var(--ink); color: #fff }
 .now-caps { margin: 0 0 6px; color: var(--ink-muted); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase }
 .now-caps.yours { color: var(--wait-bright) }
 .now-caps.failed { color: var(--stop-bright) }
@@ -288,7 +291,7 @@ button.chain-step:hover { background: var(--surface-sunken) }
 .segment.done::before, .segment.running::before { background: var(--go-bright) }
 .segment.yours::before { background: var(--wait) }
 .segment.failed::before { background: var(--stop) }
-.segment-name { display: block; color: var(--ink-muted); font-size: 12px }
+.segment-name { display: block; color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; hyphens: auto }
 .segment.done .segment-name, .segment.running .segment-name { color: #fff }
 .segment.yours .segment-name { color: var(--wait-bright) }
 .segment.failed .segment-name { color: var(--stop-bright) }
@@ -329,4 +332,6 @@ button.chain-step:hover { background: var(--surface-sunken) }
 .council-light { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--fg-soft); font-size: 12.5px; font-weight: 600 }
 @media (max-width: 600px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+  /* Пять сегментов в узкой карточке не помещаются: листаются внутри неё. */
+  .segments { grid-template-columns: repeat(5, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
 }

@@ -130,7 +130,7 @@ function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
             <li key={step} className={`segment ${state}`}>
               <span className="segment-name">
                 {t(`chain.${step}`)}
-                {state !== 'idle' && <span className="sr-only"> ({t(`light.${state}`)})</span>}
+                <span className="sr-only"> ({t(`light.${state}`)})</span>
               </span>
               {step === 'group' && <span className="segment-sub">{ideaStatus(stream, group, t)}</span>}
             </li>
@@ -237,7 +237,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
   else if (sought) idea = <p className="muted">{t('idea.seeking')} {t('run.note')}</p>
   else idea = (
     <>
-      {search?.state === 'failed' && (
+      {search?.state === 'failed' && !stream.idea && (
         <>
           <p className="error-text" role="alert">{search.error}</p>
           {retry.error && <p className="error-text" role="alert">{retry.error}</p>}

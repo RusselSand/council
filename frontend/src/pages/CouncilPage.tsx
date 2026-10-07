@@ -174,7 +174,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
                     {light === 'done' && !isActive ? '✓' : i + 1}
                   </span>
                   {t(`stage.${s}`)}
-                  {light !== 'idle' && <span className="sr-only"> ({t(`light.${light}`)})</span>}
+                  <span className="sr-only"> ({t(`light.${light}`)})</span>
                 </>
               )}
             </NavLink>

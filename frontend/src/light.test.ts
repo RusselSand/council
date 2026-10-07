@@ -54,6 +54,26 @@ describe('светофор', () => {
     expect([chainLight(approved, 'group'), chainLight(approved, 'questions')]).toEqual(['done', 'idle'])
   })
 
+  it('своя идея после упавшего поиска: поток прошёл шаг, ошибки больше нет', () => {
+    const own = { ...stream(search('failed'), true) }
+    expect(streamLight(own)).toBe('idle')
+    expect(chainLight(own, 'group')).toBe('done')
+    const council = at({ slicing: slicing('done'), structure: structure('done'), streams: [own] })
+    expect(councilLight(council)).toBe('done')
+    expect(attention(council)).toEqual([])
+  })
+
+  it('группы устарели, пока ИИ ищет идеи: разложить заново нельзя, совет — в работе', () => {
+    const stale = { slicing: slicing('done'), structure: structure('done', { 1: 'risk' }) }
+    const seeking = at({ ...stale, streams: [stream(search('running')), { ...stream(search('done')), group: 'B' }] })
+    expect(councilLight(seeking)).toBe('running')
+    expect(stageLight(seeking, 'structure')).not.toBe('yours')
+    expect(attention(seeking)).toEqual([])
+    const settled = at({ ...stale, streams: [stream(search('done')), { ...stream(search('done')), group: 'B' }] })
+    expect(councilLight(settled)).toBe('yours')
+    expect(attention(settled).map(a => a.what)).toEqual(['groupsStale'])
+  })
+
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {
     const confirmed = { slicing: slicing('done'), structure: structure('done') }
     const two = (a: IdeaDiscovery, b: IdeaDiscovery) =>

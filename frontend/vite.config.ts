@@ -14,5 +14,6 @@ export default defineConfig({
     proxy: { '/api': apiTarget },
     ...(usePolling ? { watch: { usePolling: true } } : {}),
   },
-  test: { environment: 'jsdom' },
+  // styles.css — настоящий, а не пустой: по нему тест проверяет контраст палитры.
+  test: { environment: 'jsdom', css: { include: [/styles\.css/] } },
 })

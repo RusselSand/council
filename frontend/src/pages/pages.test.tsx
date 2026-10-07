@@ -424,6 +424,8 @@ describe('Поток: группа и идея', () => {
     expect(segments.map(segment => segment.className)).toEqual([
       'segment running', 'segment idle', 'segment idle', 'segment idle', 'segment idle'])
     expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
+    expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
+      ` (${ru['light.running']})`, ...Array(4).fill(` (${ru['light.idle']})`)])
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
@@ -443,6 +445,18 @@ describe('Поток: группа и идея', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
     expect(await screen.findByText(ru['idea.seeking'], { exact: false })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'B', action: 'discovery', body: undefined }])
+  })
+
+  it('своя идея после упавшего поиска: поток прошёл шаг, повтора поиска больше нет', async () => {
+    const failed: IdeaDiscovery = { ...SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const own: StreamIdea = { text: 'Своя идея', by: 'human', evidence: [] }
+    openStream('B', () => confirmed(failed, GROUPED, { B: own }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(screen.getByText(`Сейчас · поток B · ${ru['now.idle']}`)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('button', { name: ru['run.retry'] })).toBeNull()
   })
 
   it('опрос подхватывает найденную идею и не затирает утверждённую в другом потоке', async () => {
@@ -501,7 +515,7 @@ describe('CouncilPage', () => {
     expect(tab(/Нарезка/).querySelector('.tab-num')?.textContent).toBe('✓')
     expect(tab(/Группы/).textContent).toContain(ru['light.running'])
     expect(tab(/Группы/).querySelector('.tab-num')?.className).toContain('running')
-    expect(tab(/Потоки/).textContent).not.toMatch(/\(/)       // не начат — без пометки
+    expect(tab(/Потоки/).textContent).toContain(ru['light.idle'])   // и «не начат» — словами
   })
 
   it('404 → «Проект не найден»', async () => {

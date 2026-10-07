@@ -1,4 +1,4 @@
-import { councilPath, structureIsStale, type Council, type IdeaDiscovery, type Slicing, type Stream, type Structure } from './api'
+import { councilPath, seeking, structureIsStale, type Council, type IdeaDiscovery, type Slicing, type Stream, type Structure } from './api'
 import type { Stage } from './pages/CouncilPage'
 
 /**
@@ -23,9 +23,12 @@ const ofRun = (run: Slicing | Structure | IdeaDiscovery | null): Light | null =>
   return null
 }
 
-/** Поток: ищет идею, упал, ждёт утверждения идеи или — утверждена — ждёт следующего шага. */
+/**
+ * Поток: идея утверждена — шаг пройден, и прежний поиск, даже упавший, уже не важен: поток
+ * ждёт следующего шага. Иначе — ищет идею, упал или ждёт её утверждения.
+ */
 export const streamLight = (stream: Stream): Light =>
-  ofRun(stream.discovery) ?? (stream.idea ? 'idle' : 'yours')
+  stream.idea ? 'idle' : ofRun(stream.discovery) ?? 'yours'
 
 /** Шаг цепочки потока. Дальше идеи шаги пока не готовы — белые. */
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
@@ -45,11 +48,19 @@ export function stageLight(council: Council, stage: Stage): Light {
     case 'slices':
       if (!slicing) return 'idle'
       return ofRun(slicing) ?? (structure ? 'done' : 'yours')
-    case 'structure':
+    case 'structure': {
       if (!structure) return 'idle'
-      return ofRun(structure) ?? (streams && !structureIsStale(council) ? 'done' : 'yours')
+      const run = ofRun(structure)
+      if (run) return run
+      if (!streams) return 'yours'
+      // Устарели — разложить заново. Пока ИИ ищет идеи, нельзя (сервер ответит 423): ход не ваш.
+      return structureIsStale(council) && !seeking(council) ? 'yours' : 'done'
+    }
     case 'streams':
-      return streams ? strongest(streams.map(streamLight)) : 'idle'
+      if (!streams) return 'idle'
+      // По устаревшим группам идеи не утверждают и не ищут заново: сначала разложить заново.
+      if (structureIsStale(council)) return seeking(council) ? 'running' : 'idle'
+      return strongest(streams.map(streamLight))
     case 'history':
       return 'idle'
   }
@@ -79,14 +90,17 @@ export function attention(council: Council): Attention[] {
   else if (slicing?.state === 'done' && !structure) add('yours', 'slicesDone', councilPath(id, 'slices'))
 
   if (structure?.state === 'failed') add('failed', 'groupingFailed', councilPath(id, 'structure'))
-  else if (structure?.state === 'done' && structureIsStale(council)) add('yours', 'groupsStale', councilPath(id, 'structure'))
-  else if (structure?.state === 'done' && !streams) add('yours', 'groupsReady', councilPath(id, 'structure'))
-  // Устаревшие группы идею не утвердят: сначала — разложить заново.
+  // Устаревшие группы идею не утвердят: сначала — разложить заново. А это нельзя, пока ИИ
+  // ищет идеи (сервер ответит 423): тогда ждём его и ничего не предлагаем.
+  else if (structure?.state === 'done' && structureIsStale(council)) {
+    if (!seeking(council)) add('yours', 'groupsStale', councilPath(id, 'structure'))
+  } else if (structure?.state === 'done' && !streams) add('yours', 'groupsReady', councilPath(id, 'structure'))
   else if (structure?.state === 'done') {
     for (const stream of streams ?? []) {
       const to = councilPath(id, `streams/${stream.group}`)
-      if (stream.discovery?.state === 'failed') add('failed', 'ideaFailed', to, stream.group)
-      else if (streamLight(stream) === 'yours') add('yours', 'ideaWaits', to, stream.group)
+      const light = streamLight(stream)
+      if (light === 'failed') add('failed', 'ideaFailed', to, stream.group)
+      else if (light === 'yours') add('yours', 'ideaWaits', to, stream.group)
     }
   }
   return items
