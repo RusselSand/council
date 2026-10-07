@@ -7,11 +7,18 @@ from fastapi import FastAPI
 
 from . import api
 from .agents import shutdown
+from .deps import get_store
 from .spa import mount_spa
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Советы с диска — сразу при старте: каталог проверен и прерванные ходы отмечены до
+    # запросов. Подменённое хранилище старт не трогает — ни его, ни настоящий каталог: его
+    # получает на запрос сам FastAPI, со всем жизненным циклом зависимости (async, yield),
+    # которого здесь не повторить.
+    if get_store not in app.dependency_overrides:
+        get_store()
     yield
     shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 

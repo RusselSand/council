@@ -2,15 +2,16 @@
 # Сборка в один контейнер — профиль prod (сервис app).
 name: council
 
-# Где модели совета видят свои учётные записи внутри контейнера. HOME — куда CLI пишут
+# Где внутри контейнера учётные записи моделей совета и сами советы. HOME — куда CLI пишут
 # мелочи вне своих каталогов: под произвольным UID без записи в /etc/passwd это «/», а туда
 # писать нельзя.
-x-accounts: &accounts
+x-paths: &paths
   COUNCIL_SOL_HOME: /data/accounts/sol
   COUNCIL_FABLE_HOME: /data/accounts/fable
+  COUNCIL_DATA: /data/councils
   HOME: /tmp
 
-# Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста.
+# Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста, советы — в .data.
 # - Windows и macOS: root, по умолчанию. Docker Desktop показывает каталоги учётных записей
 #   принадлежащими root и с правами «только владельцу», другой пользователь в них не войдёт.
 # - Linux: впишите в .env свои id -u и id -g как COUNCIL_UID и COUNCIL_GID. Иначе root
@@ -39,8 +40,15 @@ services:
         source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
         target: /data/accounts/fable
         bind: { create_host_path: true }
+      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
+      # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
+      # туда писать. .data есть в репозитории, свой путь создайте заранее.
+      - type: bind
+        source: ${COUNCIL_DATA:-./.data}
+        target: /data/councils
+        bind: { create_host_path: false }
     environment:
-      <<: *accounts
+      <<: *paths
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
       WATCHFILES_FORCE_POLLING: "true"
     healthcheck:
@@ -86,7 +94,14 @@ services:
         source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
         target: /data/accounts/fable
         bind: { create_host_path: true }
-    environment: *accounts
+      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
+      # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
+      # туда писать. .data есть в репозитории, свой путь создайте заранее.
+      - type: bind
+        source: ${COUNCIL_DATA:-./.data}
+        target: /data/councils
+        bind: { create_host_path: false }
+    environment: *paths
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.
 # Compose берёт AGENT_WORKERS_TOKEN из .env рядом с этим файлом (образец — .env.example).

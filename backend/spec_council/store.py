@@ -4,14 +4,23 @@
 и одна строка в deps.py; роуты и тесты остаются как есть.
 """
 
+import logging
+import os
+import tempfile
 from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from .models import Council, CouncilStatus
+from .models import Council, CouncilStatus, IdeaDiscovery, Slicing, Structure
+
+log = logging.getLogger(__name__)
+
+# Почему ход, шедший при остановке сервера, записан упавшим.
+INTERRUPTED = "прерван: сервер остановился, пока шёл ход"
 
 
 class Store(Protocol):
@@ -58,6 +67,7 @@ class InMemoryStore:
             updated_at=datetime.now(UTC),
         )
         with self._lock:
+            self._keep(council)
             self._councils[council.id] = council
         return council
 
@@ -70,35 +80,104 @@ class InMemoryStore:
             if council is None or not changes:
                 return council
             if not touch:
-                council = self._councils[council_id] = council.model_copy(update=changes)
+                council = council.model_copy(update=changes)
+                self._keep(council)
+                self._councils[council_id] = council
                 return council
             council = council.model_copy(update={**changes, "updated_at": datetime.now(UTC)})
+            self._keep(council)
             self._councils[council_id] = council
             self._councils.move_to_end(council_id)  # так он выиграет и равное время
             return council
 
+    def _keep(self, council: Council) -> None:
+        """Сохранить совет — под замком, до того как его увидят. В памяти хранить нечего."""
 
-def _demo_time(day: int, hour: int = 10) -> datetime:
-    return datetime(2026, 9, day, hour, tzinfo=UTC)
+
+class FileStore(InMemoryStore):
+    """Советы — файлы <id>.json в одном каталоге: переживают перезапуск. При старте читаются
+    все, дальше живут в памяти, а каждая правка пишется на диск раньше, чем её увидят: не
+    записалась — правки нет. Каталог — одного процесса: второй не увидел бы чужих правок."""
+
+    def __init__(self, folder: Path) -> None:
+        writable(folder)
+        self._folder = folder
+        councils = []
+        for path in sorted(folder.glob("*.json")):
+            try:
+                council = Council.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                # Файл не трогаем: его можно поправить руками, и при следующем старте он вернётся.
+                log.warning("Совет из %s не прочитан, его нет в списке: %s", path, exc)
+                continue
+            stopped = interrupted(council)
+            if stopped is not council:
+                self._keep(stopped)
+            councils.append(stopped)
+        super().__init__(sorted(councils, key=lambda council: council.updated_at))
+
+    def _keep(self, council: Council) -> None:
+        # Сначала во временный файл, потом подменой: процесс, оборванный посреди записи, совет
+        # не испортит. Временный — свой на каждую запись и только владельцу (mkstemp: 0600):
+        # в советах тексты и ответы моделей, а при umask 022 файл читали бы все на машине.
+        # Без fsync: в докере он стоит 60–120 мс на запись, а пишем под замком на каждую
+        # правку. От пропадания питания это не спасает — для локального инструмента цена
+        # того не стоит.
+        path = self._folder / f"{council.id}.json"
+        handle, part = tempfile.mkstemp(dir=self._folder, prefix=f"{council.id}.", suffix=".part")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                file.write(council.model_dump_json(indent=2))
+            os.replace(part, path)
+        except BaseException:
+            Path(part).unlink(missing_ok=True)
+            raise
 
 
-# Временные данные, чтобы интерфейс было на чём смотреть. Уедут вместе с InMemoryStore.
-DEMO_COUNCILS = [
-    Council(id="demo-4", name="Python worker для Codex CLI", status=CouncilStatus.structure,
-            brief=(
-                "Хочу отдельный Python worker для Codex CLI. Сейчас сервер не может "
-                "пользоваться Codex по моей подписке ChatGPT — только через API за деньги. "
-                "Идея: worker крутится локально, принимает задания от сервера по HTTP, "
-                "запускает codex как отдельный процесс, результат отправляет обратно на "
-                "callback_url. Состояние держать в файлах, без базы. Одно задание за раз "
-                "хватит. Главное — не потерять результат, если что-то упало: запуск дорогой "
-                "по времени и лимитам."
-            ),
-            participants=["sol", "fable"], judge="fable", updated_at=_demo_time(28, 14)),
-    Council(id="demo-1", name="Сервис уведомлений", status=CouncilStatus.review, brief="",
-            participants=["sol", "fable"], judge="fable", updated_at=_demo_time(17)),
-    Council(id="demo-2", name="Личный кабинет партнёра", status=CouncilStatus.brief, brief="",
-            participants=["sol", "fable", "astra"], judge="sol", updated_at=_demo_time(15)),
-    Council(id="demo-3", name="Импорт каталога", status=CouncilStatus.ready, brief="",
-            participants=["sol", "fable"], judge="sol", updated_at=_demo_time(2)),
-]
+def writable(folder: Path) -> None:
+    """Каталог советов есть, и в него можно писать — проверяем при старте. Иначе сервер
+    поднялся бы, показал список, а упал бы на первом же новом совете. Так бывает на Linux,
+    когда каталог создал docker от root, а бэкенд работает под COUNCIL_UID. Пробный файл —
+    свой, с новым именем: чужие файлы в каталоге проверка не тронет. Каталог, которого ещё
+    нет, создаём только владельцу."""
+    try:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handle, probe = tempfile.mkstemp(dir=folder, prefix=".write-check-")
+        os.close(handle)
+        os.unlink(probe)
+    except OSError as exc:
+        raise RuntimeError(
+            f"В каталог советов {folder} нельзя писать: {exc}. Он должен принадлежать тому, "
+            "под кем работает бэкенд, — см. README, «Где хранятся советы»") from exc
+
+
+def interrupted(council: Council) -> Council:
+    """Совет, прочитанный после перезапуска. Ходы, которые шли, уже не идут: процесс с ними
+    остановлен. Записываем их упавшими — тогда их можно запустить снова, а ответы, за которые
+    уже заплачено, повтор возьмёт из лотка даром. Ничего не шло — тот же совет."""
+    changes: dict[str, Any] = {}
+    for field in ("slicing", "structure"):
+        state = getattr(council, field)
+        if running(state):
+            changes[field] = halted(state)
+    if council.streams and any(running(stream.discovery) for stream in council.streams):
+        changes["streams"] = [
+            stream.model_copy(update={"discovery": halted(stream.discovery)})
+            if running(stream.discovery) else stream
+            for stream in council.streams
+        ]
+    return council.model_copy(update=changes) if changes else council
+
+
+def running(state: Slicing | Structure | IdeaDiscovery | None) -> bool:
+    return state is not None and state.state == "running"
+
+
+def halted[S: (Slicing, Structure, IdeaDiscovery)](state: S) -> S:
+    """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
+    steps = [step.model_copy(update={
+        "state": "failed" if step.state == "running" else step.state,
+        "runs": [run.model_copy(update={"state": "failed", "error": INTERRUPTED})
+                 if run.state == "running" else run for run in step.runs],
+    }) for step in state.steps]
+    return state.model_copy(update={"state": "failed", "error": INTERRUPTED, "steps": steps})
