@@ -61,17 +61,22 @@ def evidence_of(value: object, known: set[int], what: str) -> tuple[int, ...]:
         raise BadAnswer(f"{what}: нет evidence — на какие фрагменты опирается идея")
     ids = set()
     for item in value:
-        found = FRAGMENT_ID.fullmatch(item.strip()) if isinstance(item, str) else None
-        if isinstance(item, int) and not isinstance(item, bool):
-            ids.add(item)
-        elif found:
-            ids.add(int(found.group(1)))
-        else:
+        number = fragment_number(item)
+        if number is None:
             raise BadAnswer(f"{what}: в evidence не номер фрагмента: {item!r}"[:200])
+        ids.add(number)
     alien = sorted(ids - known)
     if alien:
         raise BadAnswer(f"{what}: фрагментов {', '.join(f'F{i}' for i in alien)} нет в группе")
     return tuple(sorted(ids))
+
+
+def fragment_number(item: object) -> int | None:
+    """Номер фрагмента из ответа модели: «F3», «f3», «3» или 3. Не номер — None."""
+    if isinstance(item, int) and not isinstance(item, bool):
+        return item
+    found = FRAGMENT_ID.fullmatch(item.strip()) if isinstance(item, str) else None
+    return int(found.group(1)) if found else None
 
 
 def reason_of(value: object) -> str:

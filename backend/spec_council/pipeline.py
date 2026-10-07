@@ -16,6 +16,12 @@
    (idea_discovery.md);
 2. idea_judge — если вариантов несколько, судья выбирает или сводит их (idea_judge.md).
 
+Вопросы потока (QuestionRun) — к утверждённой идее:
+1. question_discovery — каждый участник ищет открытые вопросы: из текста, восстановленные
+   по предложениям и недостающие (question_discovery.md);
+2. question_judge — судья сводит списки в канонический (question_judge.md); если списки
+   совпали, он не нужен.
+
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
 того же текста один и тот же промпт.
@@ -45,6 +51,7 @@ from .models import (
     IdeaProposal,
     LabeledFragment,
     ModelRun,
+    QuestionDiscovery,
     Slicing,
     Step,
     StepName,
@@ -54,6 +61,7 @@ from .models import (
     Vote,
 )
 from .prompts import PromptError, render
+from .questions import as_prompt, numbered, question_list, same_lists, with_user_questions
 from .slicing import (
     BadAnswer,
     BoundaryNote,
@@ -123,6 +131,12 @@ def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
                                      (StepName.idea_discovery, StepName.idea_judge)))
 
 
+def start_questions(participants: list[str], judge: str, idea: str) -> QuestionDiscovery:
+    return QuestionDiscovery(state="running", run=uuid4().hex[:8], idea=idea,
+                             steps=steps(participants, judge,
+                                         (StepName.question_discovery, StepName.question_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -141,7 +155,7 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure, IdeaDiscovery)]:
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -473,3 +487,38 @@ class IdeaRun(CouncilRun[IdeaDiscovery]):
 def as_option(option: MergedOption) -> IdeaOption:
     return IdeaOption(idea=option.idea, evidence=sorted(option.evidence), reason=option.reason,
                       models=option.models)
+
+
+class QuestionRun(CouncilRun[QuestionDiscovery]):
+    """Открытые вопросы к утверждённой идее потока: участники по отдельности ищут их по идее
+    и фрагментам группы, судья сводит списки в канонический. Вопросы из текста остаются
+    дословно и все — что бы ни ответили модели."""
+
+    what = "поиск вопросов"
+
+    def __init__(self, council_id: str, idea: str, fragments: list[LabeledFragment],
+                 participants: list[str], judge: str, runner: Runner,
+                 report: Callable[[QuestionDiscovery], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_questions(participants, judge, idea))
+        self.idea = idea
+        self.fragments = {fragment.id: fragment for fragment in fragments}
+
+    def work(self) -> dict[str, Any]:
+        group = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
+                         for f in self.fragments.values()])
+        prompt = render("question_discovery", idea=self.idea, fragments=group)
+        answers = self._ask_all(StepName.question_discovery, prompt,
+                                lambda data: question_list(data, self.fragments))
+        lists = list(answers.values())
+        if len(lists) > 1 and same_lists(lists):
+            self._skip(StepName.question_judge)
+            chosen = lists[0]
+        else:
+            candidates = shuffled([{"questions": as_prompt(questions)} for questions in lists])
+            numbered_lists = [{"agent": n, **c} for n, c in enumerate(candidates, 1)]
+            prompt = render("question_judge", idea=self.idea, fragments=group,
+                            question_candidates=as_json(numbered_lists))
+            chosen = self._ask_judge(StepName.question_judge, prompt,
+                                     lambda data: question_list(data, self.fragments))
+        return {"questions": numbered(with_user_questions(chosen, self.fragments))}

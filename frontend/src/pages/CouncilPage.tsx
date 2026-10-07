@@ -26,14 +26,15 @@ export type Stage = (typeof STAGES)[number]
 
 
 /**
- * Потоки из ответа опроса. Берутся только поиски идей, что на экране ещё идут, и только если
- * на сервере это тот же ход: запоздалый ответ не затрёт утверждённую здесь идею. На сервере
- * потоки уже другие (группы поправили в другой вкладке) — берём их целиком.
+ * Потоки из ответа опроса. Берутся только потоки, где на экране ещё идёт поиск идеи или
+ * вопросов, и только если на сервере это те же ходы: запоздалый ответ не затрёт утверждённые
+ * здесь идею и отбор вопросов. На сервере потоки уже другие (группы поправили в другой
+ * вкладке) — берём их целиком.
  */
 const followed = (mine: Stream[], fresh: Stream[] | null): Stream[] | null => {
-  const same = (stream: Stream) =>
-    fresh?.find(f => f.group === stream.group && f.discovery?.run === stream.discovery?.run)
-  const live = mine.filter(stream => stream.discovery?.state === 'running')
+  const same = (stream: Stream) => fresh?.find(f => f.group === stream.group
+    && f.discovery?.run === stream.discovery?.run && f.questions?.run === stream.questions?.run)
+  const live = mine.filter(stream => stream.discovery?.state === 'running' || stream.questions?.state === 'running')
   if (live.some(stream => !same(stream))) return fresh
   return mine.map(stream => (live.includes(stream) ? same(stream) ?? stream : stream))
 }
@@ -76,11 +77,15 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
 
   // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
   // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
-  const adopt = useCallback((fresh: Council, sent?: Slicing | null) =>
+  // Сколько ответов на действия экран принял: опрос, ушедший раньше последнего, устарел.
+  const acted = useRef(0)
+  const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
+    acted.current += 1
     update(([c, settings]) => [{
       ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
-    }, settings]), [update])
+    }, settings])
+  }, [update])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {
@@ -140,7 +145,11 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   useInterval(() => {
     if (polling.current) return
     polling.current = true
-    api.council(id).then(polled, () => { /* следующий опрос */ }).finally(() => { polling.current = false })
+    // Пока опрос был в пути, экран принял ответ на действие (утвердили идею, начали поиск) —
+    // ответ опроса старше него и стёр бы его. Пропускаем: следующий опрос принесёт свежее.
+    const at = acted.current
+    api.council(id).then(fresh => { if (acted.current === at) polled(fresh) }, () => { /* следующий опрос */ })
+      .finally(() => { polling.current = false })
   }, working ? POLL_MS : null)
 
   if (state.kind === 'error' && state.error instanceof CouncilMissing) return (

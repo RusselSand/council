@@ -22,7 +22,7 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
 }>) {
   const { t } = useTranslation()
   const structure = council.structure
-  const restart = () => startOrFollow(() => api.startStructure(council.id), council.id)
+  const restart = () => startOrFollow(() => api.startStructure(council.id), council, c => c.structure)
   const again = useAction(onStart)
   const edits = useGroupEdits(council.id, onStart)
   // Ответ на правку мог сменить экран: группы раскладывают заново или их стёрла новая нарезка.

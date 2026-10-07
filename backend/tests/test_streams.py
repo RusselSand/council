@@ -1,4 +1,5 @@
-"""Потоки: подтверждение групп запускает поиск идеи, повтор поиска, утверждение идеи."""
+"""Потоки: подтверждение групп запускает поиск идеи, утверждение идеи — поиск вопросов;
+повторы поисков, утверждение идеи и отбор вопросов."""
 
 import json
 
@@ -18,7 +19,7 @@ from spec_council.models import (
     Structure,
     StructureProposal,
 )
-from spec_council.pipeline import start_idea
+from spec_council.pipeline import start_idea, start_questions
 
 client = TestClient(app)
 
@@ -27,6 +28,7 @@ TEXTS = {1: "Хочу базу знаний.", 2: "Полнотекстовый 
 LABELS = {1: "idea", 2: "proposal", 3: "proposal", 4: "constraint", 5: "question"}
 IDEA_B = "Команда сама находит ответы"
 IDEA_C = "Полезные треды не теряются"
+MEASURE = "Как понять, что идея сработала?"
 
 
 def grp(gid, fragments, ideas=()):
@@ -50,6 +52,13 @@ class Agents:
 
     def ask(self, model, prompt, key):
         self.asked.append(key)
+        if "-question_discovery-" in key:
+            # Участники сходятся: недостающий вопрос и вопрос из текста, если он в группе.
+            found = [{"text": MEASURE, "source": "discovered", "proposal_ids": [],
+                      "reason": "мера"}]
+            if TEXTS[5] in prompt:
+                found.append({"text": "?", "source": "user", "source_question_id": "F5"})
+            return json.dumps({"questions": found})
         if "-structure-" in key:
             return json.dumps({"options": [{"groups": [{
                 "id": "A", "title": "Всё", "fragment_ids": [1, 2, 3, 4, 5]}], "relations": []}]})
@@ -208,3 +217,131 @@ def test_a_search_whose_stream_is_gone_does_not_write_it_back(agents):
     get_store().update_council(council_id, {"streams": None})
     report(stranger)                                      # потоков уже нет
     assert get_store().get_council(council_id).streams is None
+
+
+# --- вопросы
+
+def asks(council_id, group):
+    return client.post(f"/api/councils/{council_id}/streams/{group}/questions/discovery")
+
+
+def choose(council_id, group, keep, added=(), revision=0, questions_run=None):
+    run = questions_run or streams_of(council_id)[group].questions.run
+    return client.post(f"/api/councils/{council_id}/streams/{group}/questions",
+                       json={"run": "g1", "revision": revision, "questions_run": run,
+                             "keep": list(keep), "added": list(added)})
+
+
+def test_an_approved_idea_starts_the_search_for_questions(agents):
+    council_id = grouped()
+    confirm(council_id)
+    res = approve(council_id, "C", IDEA_C)
+    assert res.status_code == 200
+    assert res.json()["streams"][2]["questions"]["state"] == "running"
+    questions = streams_of(council_id)["C"].questions
+    assert questions.state == "done" and questions.idea == IDEA_C
+    assert [(q.id, q.text, q.source) for q in questions.questions] == [
+        ("Q1", MEASURE, "discovered"), ("Q2", TEXTS[5], "user")]
+
+
+def test_the_same_idea_keeps_its_questions_and_another_one_asks_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "B", IDEA_B)
+    first = streams_of(council_id)["B"].questions.run
+    assert choose(council_id, "B", ["Q1"]).status_code == 200
+    approve(council_id, "B", f" {IDEA_B} ")
+    assert streams_of(council_id)["B"].questions.run == first
+    assert streams_of(council_id)["B"].scope is not None
+
+    approve(council_id, "B", "Другая идея")
+    stream = streams_of(council_id)["B"]
+    assert stream.questions.run != first and stream.questions.idea == "Другая идея"
+    assert stream.scope is None
+
+
+def test_without_models_the_idea_is_approved_and_the_question_search_can_be_retried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    agents.online = set()
+    assert approve(council_id, "A").status_code == 200
+    stream = streams_of(council_id)["A"]
+    assert stream.idea is not None
+    assert stream.questions.state == "failed"
+    assert stream.questions.error.startswith("Нет подключения к моделям")
+
+    agents.online = {"sol", "fable"}
+    assert asks(council_id, "A").status_code == 202
+    assert streams_of(council_id)["A"].questions.state == "done"
+
+
+def test_the_idea_does_not_change_while_its_questions_are_sought(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "B", IDEA_B)
+    streams = [s.model_copy(update={"questions": start_questions(["sol"], "sol", IDEA_B)})
+               if s.group == "B" else s for s in get_store().get_council(council_id).streams]
+    get_store().update_council(council_id, {"streams": streams})
+    res = approve(council_id, "B", "Другая идея")
+    assert res.status_code == 423
+    assert streams_of(council_id)["B"].idea.text == IDEA_B
+    # Та же идея ничего не меняет — повтор (другая вкладка, потерянный ответ) не отказ.
+    assert approve(council_id, "B", IDEA_B).status_code == 200
+    assert streams_of(council_id)["B"].questions.state == "running"
+    assert choose(council_id, "B", ["Q1"]).status_code == 409
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
+
+
+def test_the_scope_keeps_chosen_questions_and_adds_own_ones(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    res = choose(council_id, "C", ["Q2"], ["  Кто платит за хостинг ", "кто платит за хостинг?",
+                                           TEXTS[5]])
+    assert res.status_code == 200
+    scope = streams_of(council_id)["C"].scope
+    assert [(q.id, q.text, q.source) for q in scope] == [
+        ("Q2", TEXTS[5], "user"), ("Q3", "Кто платит за хостинг", "added")]
+    assert asks(council_id, "C").status_code == 409     # отобранные заново не ищут
+
+
+@pytest.mark.parametrize(("keep", "added", "problem"), [
+    (["Q9"], [], "Нет вопросов: Q9"),
+    ([], [], "хотя бы один"),
+    ([], ["   "], "пуст"),
+    ([], ["x" * 501], "длиннее"),
+])
+def test_a_senseless_scope_is_refused(agents, keep, added, problem):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    res = choose(council_id, "C", keep, added)
+    assert res.status_code == 422
+    assert problem in res.json()["detail"]
+    assert streams_of(council_id)["C"].scope is None
+
+
+def test_own_questions_differing_by_case_folding_stay_as_the_screen_shows_them(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert choose(council_id, "C", [], ["Straße?", "STRASSE"]).status_code == 200
+    assert [q.text for q in streams_of(council_id)["C"].scope] == ["Straße?", "STRASSE"]
+
+
+def test_a_choice_made_for_an_earlier_search_is_refused(agents):
+    # Другая вкладка нашла вопросы заново: их номера снова с Q1, и «Q1» — уже другой вопрос.
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    res = choose(council_id, "C", ["Q1"], questions_run="прежний")
+    assert res.status_code == 409
+    assert "заново" in res.json()["detail"]
+    assert streams_of(council_id)["C"].scope is None
+
+
+def test_no_scope_before_the_idea(agents):
+    council_id = grouped()
+    confirm(council_id)
+    assert choose(council_id, "C", [], ["Свой"], questions_run="нет").status_code == 409
+    assert asks(council_id, "C").status_code == 409

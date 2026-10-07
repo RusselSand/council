@@ -15,6 +15,7 @@ from ..models import (
     CouncilStatus,
     IdeaDiscovery,
     Label,
+    QuestionDiscovery,
     Slicing,
     Structure,
 )
@@ -41,7 +42,7 @@ council_lock = Lock()
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
 
-RunState = Slicing | Structure | IdeaDiscovery
+RunState = Slicing | Structure | IdeaDiscovery | QuestionDiscovery
 
 
 @dataclass(frozen=True)
@@ -246,9 +247,10 @@ def running(state: RunState | None) -> bool:
 
 
 def seeking(council: Council) -> bool:
-    """Совет ищет идею хоть одного потока: новая нарезка, раскладка или другой состав групп
-    стёрли бы потоки из-под него."""
-    return any(running(stream.discovery) for stream in council.streams or [])
+    """Совет ищет идею или вопросы хоть одного потока: новая нарезка, раскладка или другой
+    состав групп стёрли бы потоки из-под него."""
+    return any(running(stream.discovery) or running(stream.questions)
+               for stream in council.streams or [])
 
 
 def lineup(council: Council) -> frozenset[str]:
