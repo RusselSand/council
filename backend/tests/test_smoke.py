@@ -2,7 +2,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from spec_council.app import app
+from spec_council.deps import get_store
 from spec_council.spa import STATIC
+from spec_council.store import InMemoryStore
 
 client = TestClient(app)
 
@@ -36,3 +38,19 @@ def test_spa_fallback_for_page_links():
     res = client.get("/councils/c1/brief")
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/html")
+
+
+def test_startup_takes_the_store_the_routes_get():
+    # Подменённое хранилище — и при старте: настоящий каталог данных тогда не нужен вовсе.
+    started = []
+
+    def replaced():
+        started.append(True)
+        return InMemoryStore()
+
+    app.dependency_overrides[get_store] = replaced
+    try:
+        with TestClient(app):
+            assert started
+    finally:
+        app.dependency_overrides.pop(get_store)
