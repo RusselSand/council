@@ -53,4 +53,9 @@ export const setLanguage = (language: Language) => i18next.changeLanguage(langua
 export const formatDate = (iso: string) =>
   new Intl.DateTimeFormat(i18next.language, { dateStyle: 'medium' }).format(new Date(iso))
 
+/** Сегодня, словами: «среда, 7 октября 2026 г.». */
+export const formatToday = () =>
+  new Intl.DateTimeFormat(i18next.language, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    .format(new Date())
+
 export default i18next

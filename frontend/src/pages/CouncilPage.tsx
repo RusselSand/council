@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
   api, ApiError, councilPath, isNotFound, seeking,
-  type Council, type CouncilPatch, type CouncilStatus, type Label, type Slicing, type Stream,
+  type Council, type CouncilPatch, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
+import { stageLight } from '../light'
 import { useAutosave } from '../useAutosave'
 import { useInterval } from '../useInterval'
 import { useLoad } from '../useLoad'
@@ -23,9 +24,6 @@ export const stagePath = (stage: Stage) => (stage === 'streams' ? 'streams/:stre
 export const POLL_MS = 2000
 export type Stage = (typeof STAGES)[number]
 
-/** Этап i пройден, если статус совета ушёл дальше него. «История» пройденной не бывает. */
-const STATUS_ORDER: CouncilStatus[] = ['brief', 'slices', 'structure', 'review', 'ready']
-const isDone = (stageIndex: number, status: CouncilStatus) => stageIndex < STATUS_ORDER.indexOf(status)
 
 /**
  * Потоки из ответа опроса. Берутся только поиски идей, что на экране ещё идут, и только если
@@ -165,15 +163,18 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   return (
     <>
       <nav className="stage-bar" aria-label={t('council.stages')}>
+        {/* Номер этапа — в цвете светофора; словами то же — для скринридера. */}
         {STAGES.map((s, i) => {
-          const done = council !== null && isDone(i, council.status)
+          const light = council === null ? 'idle' : stageLight(council, s)
           return (
-            <NavLink key={s} to={councilPath(id, s)} className={done ? 'tab done' : 'tab'}>
+            <NavLink key={s} to={councilPath(id, s)} className="tab">
               {({ isActive }) => (
                 <>
-                  <span className="tab-num" aria-hidden="true">{done && !isActive ? '✓' : i + 1}</span>
+                  <span className={`tab-num ${light}`} aria-hidden="true">
+                    {light === 'done' && !isActive ? '✓' : i + 1}
+                  </span>
                   {t(`stage.${s}`)}
-                  {done && <span className="sr-only"> ({t('council.stageDone')})</span>}
+                  <span className="sr-only"> ({t(`light.${light}`)})</span>
                 </>
               )}
             </NavLink>
