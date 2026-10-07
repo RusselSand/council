@@ -7,11 +7,13 @@ from fastapi import FastAPI
 
 from . import api
 from .agents import shutdown
+from .deps import get_store
 from .spa import mount_spa
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    get_store()  # советы с диска — сразу при старте: прерванные ходы отмечаются до запросов
     yield
     shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 

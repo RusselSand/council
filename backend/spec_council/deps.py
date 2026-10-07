@@ -1,24 +1,36 @@
 """Единственное место, где приложение выбирает реализации.
 
-Роуты просят StoreDep/ConfigDep и не знают, что за ними: память, БД или мок
+Роуты просят StoreDep/ConfigDep и не знают, что за ними: файлы, БД или мок
 из теста (app.dependency_overrides[get_store] = ...).
 """
 
 from collections.abc import Callable
 from functools import cache
+from pathlib import Path
 from typing import Annotated
 
+from agent_workers import Settings
 from fastapi import Depends
 
 from .agents import AgentRunner, launch
 from .config import DEFAULT_CONFIG, AppConfig
-from .store import DEMO_COUNCILS, InMemoryStore, Store
-
-_store: Store = InMemoryStore(DEMO_COUNCILS)
+from .store import FileStore, Store
 
 
+@cache
 def get_store() -> Store:
-    return _store
+    """Советы — файлами в каталоге данных: переживают перезапуск. Один на процесс."""
+    return FileStore(data_folder())
+
+
+def data_folder() -> Path:
+    """COUNCIL_DATA из окружения или .env; без него — .data в корне репозитория (рядом с
+    .env или, без него, над каталогом backend). Не в текущем каталоге: бэкенд запускают из
+    backend с --reload, и каждая запись совета перезапускала бы сервер. Относительный путь
+    из .env считается от его каталога, как у каталогов учётных записей моделей."""
+    settings = Settings.load()
+    root = settings.path.parent if settings.path else Path(__file__).resolve().parents[2]
+    return settings.path_of("COUNCIL_DATA") or (root / ".data").resolve()
 
 
 def get_config() -> AppConfig:
