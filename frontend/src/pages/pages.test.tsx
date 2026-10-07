@@ -592,6 +592,33 @@ describe('Поток: группа и идея', () => {
     expect(streamCalls).toEqual([{ group: 'A', action: 'questions/discovery', body: undefined }])
   })
 
+  it('повтор поиска, которому сервер отказал не потому, что он уже идёт, — отказ виден', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: failed } }),
+               () => json({ detail: 'Вопросы потока уже утверждены' }, 409))
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText('Вопросы потока уже утверждены')).toBeTruthy()
+    expect(screen.queryByText(ru['questions.seeking'], { exact: false })).toBeNull()
+  })
+
+  it('по устаревшим группам вопросы заново не ищут', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const stale = { ...GROUPED, labels: { 1: 'idea' as const, 2: 'risk' as const } }
+    openStream('A', () => confirmed(FOUND, stale, { A: TEXT_IDEA }, { A: { questions: failed } }))
+    expect((await screen.findByRole('button', { name: ru['run.retry'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('свои вопросы, разные для экрана, — разные и для сервера: Straße и STRASSE', async () => {
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }))
+    const own = await screen.findByRole('textbox', { name: ru['questions.own'] })
+    for (const text of ['Straße?', 'STRASSE']) {
+      fireEvent.change(own, { target: { value: text } })
+      fireEvent.click(screen.getByRole('button', { name: ru['questions.add'] }))
+    }
+    expect(screen.getByText('Решать 4 из 4')).toBeTruthy()
+    expect(screen.queryByText(ru['questions.twice'])).toBeNull()
+  })
+
   it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
     let current = confirmed()
     openStream('B', () => current, () => {

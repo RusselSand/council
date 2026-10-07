@@ -2,8 +2,9 @@
 
 Вопрос — что неизвестно, ответов в нём нет. Предложения группы связаны с вопросом через
 proposal_ids, и только фрагменты-предложения этой группы: чужой или не тот номер просто
-отбрасывается. Вопросы пользователя — фрагменты типа question — сохраняются дословно: текст
-берётся из фрагмента, а не у модели, и судья их не потеряет — пропущенные код вернёт сам.
+отбрасывается, а inferred-вопрос, у которого не осталось ни одной связи, — уже discovered.
+Вопросы пользователя — фрагменты типа question — сохраняются дословно: текст берётся из
+фрагмента, а не у модели, и судья их не потеряет — пропущенные код вернёт сам.
 """
 
 from collections.abc import Iterable, Mapping
@@ -19,8 +20,9 @@ SOURCES = ("user", "inferred", "discovered")
 
 def same_question(text: str) -> str:
     """Что сравнивать: вопросы, разные только пробелами, регистром или знаком в конце, —
-    один и тот же вопрос."""
-    return " ".join(text.split()).rstrip(".?!").casefold()
+    один и тот же вопрос. lower, не casefold: экран сравнивает через toLowerCase — то же
+    стандартное приведение, — и отбор после сервера совпадает с тем, что человек видел."""
+    return " ".join(text.split()).rstrip(".?!").lower()
 
 
 @dataclass(frozen=True)
@@ -71,8 +73,10 @@ def candidate_of(item: object, fragments: Mapping[int, LabeledFragment], what: s
         # Текст — из фрагмента: вопрос пользователя дословен, что бы ни написала модель.
         return Candidate(fragment.text, "user", number, proposals, reason)
     text = question_text(item.get("text"), what)
+    # Ссылки вторичны: все оказались чужими — вопрос остаётся, но восстановлен он уже не по
+    # предложениям группы, а просто недостающий.
     if source == "inferred" and not proposals:
-        raise BadAnswer(f"{what}: inferred-вопрос без предложений группы, на которые он отвечает")
+        source = "discovered"
     return Candidate(text, source, None, proposals, reason)
 
 

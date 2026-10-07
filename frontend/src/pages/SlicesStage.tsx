@@ -40,7 +40,7 @@ export function SlicesStage({ council, settings, onStart, onRelabel, saver }: Re
         {slicing.state === 'done'
           ? <Result slicing={slicing} models={settings.models} onRelabel={onRelabel} saver={saver} />
           : <RunStatus run={slicing} kind="slices" onStart={onStart}
-                       restart={() => startOrFollow(() => api.startSlicing(council.id), council.id)} />}
+                       restart={() => startOrFollow(() => api.startSlicing(council.id), council.id, c => c.slicing)} />}
       </div>
       <aside className="slices-side">
         {slicing.state === 'done' && <NextStep council={council} onStart={onStart} saver={saver} />}
@@ -68,7 +68,7 @@ function NextStep({ council, onStart, saver }: Readonly<{
   const propose = () => {
     sent.current = council.slicing
     void go(
-      async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id) : null,
+      async () => (await saver.flush()) ? startOrFollow(() => api.startStructure(council.id), council.id, c => c.structure) : null,
       () => nav(councilPath(council.id, 'structure')),
     )
   }

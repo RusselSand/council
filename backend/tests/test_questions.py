@@ -3,7 +3,14 @@
 import pytest
 
 from spec_council.models import LabeledFragment
-from spec_council.questions import Candidate, merged, numbered, question_list, with_user_questions
+from spec_council.questions import (
+    Candidate,
+    merged,
+    numbered,
+    question_list,
+    same_question,
+    with_user_questions,
+)
 from spec_council.slicing import BadAnswer
 
 GROUP = {fragment.id: fragment for fragment in [
@@ -42,8 +49,23 @@ def test_links_go_only_to_proposals_of_the_group():
     assert found[0].proposal_ids == (1, 2)
 
 
+def test_an_inferred_question_whose_links_all_go_astray_stays_as_discovered():
+    # Ссылки вторичны: чужие отброшены, а сам вопрос остаётся. Без них он уже не «восстановлен
+    # по предложениям», а просто недостающий.
+    found = question_list({"questions": [ask(proposals=("F3", "F9", "первый"))]}, GROUP)
+    assert found == [Candidate("Как должен выполняться поиск?", "discovered", None, (),
+                               "общая неопределённость")]
+
+
+def test_questions_compare_like_the_screen_does():
+    # Экран сравнивает через toLowerCase(): то же стандартное приведение, что lower(). casefold
+    # склеил бы «Straße» и «STRASSE», которые экран считает разными, — и отбор после сервера
+    # разошёлся бы с тем, что человек видел.
+    assert same_question("  Как  искать? ") == same_question("как искать.")
+    assert same_question("Straße?") != same_question("STRASSE")
+
+
 @pytest.mark.parametrize(("bad", "problem"), [
-    (ask(proposals=("F3",)), "inferred-вопрос без предложений"),
     (ask(source="user", question="F1"), "не вопрос этой группы"),
     (ask(source="guess"), "source не из"),
     (ask(text="  "), "нет текста"),

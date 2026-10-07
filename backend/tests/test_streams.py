@@ -318,6 +318,14 @@ def test_a_senseless_scope_is_refused(agents, keep, added, problem):
     assert streams_of(council_id)["C"].scope is None
 
 
+def test_own_questions_differing_by_case_folding_stay_as_the_screen_shows_them(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert choose(council_id, "C", [], ["Straße?", "STRASSE"]).status_code == 200
+    assert [q.text for q in streams_of(council_id)["C"].scope] == ["Straße?", "STRASSE"]
+
+
 def test_a_choice_made_for_an_earlier_search_is_refused(agents):
     # Другая вкладка нашла вопросы заново: их номера снова с Q1, и «Q1» — уже другой вопрос.
     council_id = grouped()

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, startOrFollow, structureIsStale,
+  api, ApiError, councilPath, groupsConfirmed, startOrFollow, streamOf, structureIsStale,
   type Council, type Group, type IdeaDiscovery, type LabeledFragment, type Model, type OpenQuestion,
   type Settings, type Stream, type Structure,
 } from '../api'
@@ -266,7 +266,9 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
       throw e
     }
   }, onApproved)
-  const seekAgain = () => void retry.go(() => startOrFollow(() => api.seekIdea(council.id, group.id), council.id))
+  const seekAgain = () => void retry.go(() => startOrFollow(
+    () => api.seekIdea(council.id, group.id), council.id, c => streamOf(c, group.id)?.discovery))
+  // Устаревшие группы заново не ищут: сервер откажет, пока их не разложат заново.
 
   let idea
   if (!group.missing_idea) idea = <TextIdea group={group} fragments={fragments} />
@@ -279,7 +281,9 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
           {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
           <p className="fragment-note">
             {t('idea.failedNote')}{' '}
-            <button className="btn-link" disabled={busy} onClick={seekAgain}>{t('run.retry')}</button>
+            <button className="btn-link" disabled={busy || structureIsStale(council)} onClick={seekAgain}>
+              {t('run.retry')}
+            </button>
           </p>
         </>
       )}
@@ -459,7 +463,10 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
       setDraft('')
     }
   }
-  const seek = () => void retry.go(() => startOrFollow(() => api.seekQuestions(council.id, group.id), council.id))
+  const seek = () => void retry.go(() => startOrFollow(
+    () => api.seekQuestions(council.id, group.id), council.id, c => streamOf(c, group.id)?.questions))
+  // Устаревшие группы заново не ищут: сервер откажет, пока их не разложат заново.
+  const stale = structureIsStale(council)
   const submit = () => void approve.go(async () => {
     try {
       return await api.approveScope(council.id, { run: structure.run, revision: structure.revision },
@@ -475,7 +482,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
   if (!search) list = (
     <p className="muted">
       {t('questions.notSought')}{' '}
-      <button className="btn-link" disabled={busy} onClick={seek}>{t('questions.seek')}</button>
+      <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('questions.seek')}</button>
     </p>
   )
   else if (sought) list = <p className="muted">{t('questions.seeking')} {t('run.note')}</p>
@@ -487,7 +494,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
           {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
           <p className="fragment-note">
             {t('questions.failedNote')}{' '}
-            <button className="btn-link" disabled={busy} onClick={seek}>{t('run.retry')}</button>
+            <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('run.retry')}</button>
           </p>
         </>
       )}
