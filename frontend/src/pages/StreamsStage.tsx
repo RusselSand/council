@@ -10,11 +10,9 @@ import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { Progress } from '../components/Progress'
+import { CHAIN, chainLight, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
-/** Шаги цепочки потока. Работает пока первый — группа и её идея; дальше следующие этапы. */
-const CHAIN = ['group', 'questions', 'options', 'decisions', 'outcomes'] as const
-type ChainStep = (typeof CHAIN)[number]
 type T = ReturnType<typeof useTranslation>['t']
 
 /**
@@ -58,6 +56,7 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         <Chain stream={stream} group={group} view={view} onView={setView} />
       </aside>
       <div className="streams-main">
+        <Now stream={stream} group={group} />
         {structureIsStale(council) && (
           <p className="fragment-note">
             {t('streams.stale')}{' '}
@@ -96,7 +95,9 @@ function StreamList({ council, structure, open }: Readonly<{
                 <span className="stream-title">
                   {structure.groups.find(g => g.id === stream.group)?.title ?? stream.group}
                 </span>
-                <span className="stream-meta">{whereIs(stream, t)}</span>
+                <span className="stream-meta">
+                  <span className={`light-dot ${streamLight(stream)}`} aria-hidden="true" />{whereIs(stream, t)}
+                </span>
               </span>
             </Link>
           </li>
@@ -110,7 +111,34 @@ function StreamList({ council, structure, open }: Readonly<{
 function whereIs(stream: Stream, t: T): string {
   if (stream.idea) return t('streams.atQuestions')
   if (stream.discovery?.state === 'running') return t('streams.seeking')
+  if (stream.discovery?.state === 'failed') return t('streams.failed')
   return t('streams.yourMove')
+}
+
+/** «Сейчас»: где поток и чей ход — и вся его цепочка сегментами в цветах светофора. */
+function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
+  const { t } = useTranslation()
+  const light = streamLight(stream)
+  return (
+    <section className="now" aria-labelledby="now-title">
+      <p className={`now-caps ${light}`}>{t('now.caps', { group: stream.group, state: t(`now.${light}`) })}</p>
+      <h2 id="now-title" className="now-title">{group.title}</h2>
+      <ol className="segments">
+        {CHAIN.map(step => {
+          const state = chainLight(stream, step)
+          return (
+            <li key={step} className={`segment ${state}`}>
+              <span className="segment-name">
+                {t(`chain.${step}`)}
+                {state !== 'idle' && <span className="sr-only"> ({t(`light.${state}`)})</span>}
+              </span>
+              {step === 'group' && <span className="segment-sub">{ideaStatus(stream, group, t)}</span>}
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
 }
 
 /** Цепочка шагов потока: пройденные и текущий открываются, дальше — что будет. */
@@ -126,15 +154,14 @@ function Chain({ stream, group, view, onView }: Readonly<{
       </h2>
       <ol className="chain-steps">
         {CHAIN.map((step, i) => {
-          let state = 'later'
-          if (i < reached) state = 'done'
-          else if (i === reached) state = 'current'
+          const light = chainLight(stream, step)
+          const state = i === reached ? 'current' : 'later'
           const body = (
             <>
-              <span className="chain-num" aria-hidden="true">{state === 'done' ? '✓' : i + 1}</span>
+              <span className={`chain-num ${light}`} aria-hidden="true">{light === 'done' ? '✓' : i + 1}</span>
               <span className="chain-body">
                 <span className="chain-name">{t(`chain.${step}`)}</span>
-                <span className="chain-status">
+                <span className={`chain-status ${light}`}>
                   {step === 'group' ? groupStatus(stream, group, t) : t(i === reached ? 'chain.soon' : 'chain.notStarted')}
                 </span>
                 <span className="chain-role"><span className="role-tag ai">{t('chain.ai')}</span>{t(`chain.${step}.ai`)}</span>
@@ -144,7 +171,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
               </span>
             </>
           )
-          const className = `chain-step ${state}${view === step ? ' open' : ''}`
+          const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}`
           return (
             <li key={step}>
               {i <= reached
@@ -160,15 +187,18 @@ function Chain({ stream, group, view, onView }: Readonly<{
 }
 
 function groupStatus(stream: Stream, group: Group, t: T): string {
-  const fragments = t('chain.fragments', { count: group.fragment_ids.length })
+  return `${t('chain.fragments', { count: group.fragment_ids.length })} · ${ideaStatus(stream, group, t)}`
+}
+
+/** Что с идеей потока: утверждена, записана в тексте, ищется, упала, найдена или за вами. */
+function ideaStatus(stream: Stream, group: Group, t: T): string {
   const search = stream.discovery
-  let idea = t('chain.ideaNone')
-  if (stream.idea) idea = t('chain.ideaApproved')
-  else if (!group.missing_idea) idea = t('chain.ideaText')
-  else if (search?.state === 'running') idea = t('chain.ideaSeeking')
-  else if (search?.state === 'failed') idea = t('chain.ideaFailed')
-  else if (search?.proposal?.idea) idea = t('chain.ideaFound')
-  return `${fragments} · ${idea}`
+  if (stream.idea) return t('chain.ideaApproved')
+  if (!group.missing_idea) return t('chain.ideaText')
+  if (search?.state === 'running') return t('chain.ideaSeeking')
+  if (search?.state === 'failed') return t('chain.ideaFailed')
+  if (search?.proposal?.idea) return t('chain.ideaFound')
+  return t('chain.ideaNone')
 }
 
 /**

@@ -187,6 +187,37 @@ describe('HomePage', () => {
     expect(screen.queryByText(ru['home.empty'])).toBeNull()
   })
 
+  it('сводка: советы светофором, что требует внимания и куда идти', async () => {
+    const councils: Council[] = [
+      { ...COUNCIL, id: 'c1', name: 'Черновик' },
+      { ...COUNCIL, id: 'c2', name: 'Нарезан', slicing: DONE },
+      { ...COUNCIL, id: 'c3', name: 'Раскладывают', slicing: DONE, structure: GROUPING },
+      { ...confirmed(FOUND), id: 'c4', name: 'С потоками' },
+      { ...COUNCIL, id: 'c5', name: 'Упал', slicing: { ...RUNNING, state: 'failed', error: 'нет входа' } },
+    ]
+    fetchMock.mockImplementation((url: string) => (url === '/api/councils' ? json(councils) : server()(url)))
+    renderAt('/')
+    const overview = await screen.findByRole('region', { name: ru['home.overview'] })
+    expect(within(overview).getAllByRole('listitem').map(li => li.textContent)).toEqual([
+      '5советов', '2потока',
+      `1${ru['home.tile.go']}`, `1${ru['home.tile.idle']}`, `2${ru['home.tile.yours']}`, `1${ru['home.tile.failed']}`,
+    ])
+
+    const pending = screen.getByRole('region', { name: 'Требует внимания (4)' })
+    const cards = within(pending).getAllByRole('link')
+    expect(cards.map(card => [card.getAttribute('href'), card.querySelector('.corner')?.textContent])).toEqual([
+      ['/councils/c2/slices', '?'],
+      ['/councils/c4/streams/A', '?'], ['/councils/c4/streams/B', '?'],
+      ['/councils/c5/slices', '!'],
+    ])
+    expect(within(cards[2]).getByText('Поток B · идея')).toBeTruthy()
+    expect(within(cards[3]).getByText(ru['attention.slicingFailed'])).toBeTruthy()
+
+    const all = screen.getByRole('region', { name: ru['home.all'] })
+    expect(within(within(all).getByRole('link', { name: /Раскладывают/ })).getByText(ru['home.light.running'])).toBeTruthy()
+    expect(within(within(all).getByRole('link', { name: /Черновик/ })).getByText(ru['home.light.idle'])).toBeTruthy()
+  })
+
   it('показывает «Нет проектов» только после успешного пустого ответа', async () => {
     fetchMock.mockReturnValue(json([]))
     renderAt('/')
@@ -231,7 +262,7 @@ describe('Подтверждение групп и потоки', () => {
       `AВоркер${ru['streams.yourMove']}`, `BХранение${ru['streams.seeking']}`])
     expect(links[0].getAttribute('aria-current')).toBe('page')
     expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['council.stageDone'])
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.done'])
   })
 
   it('подтверждённые — ссылка «К потокам», а не кнопка', async () => {
@@ -301,7 +332,7 @@ describe('Подтверждение групп и потоки', () => {
     fireEvent.click(within(await screen.findByRole('region', { name: 'Воркер' })).getByRole('button', { name: ru['groups.merge'] }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
     expect((await confirmButton()).disabled).toBe(false)
-    expect(screen.getByRole('link', { name: /Группы/ }).textContent).not.toContain(ru['council.stageDone'])
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).not.toContain(ru['light.done'])
   })
 
   it.each([
@@ -385,6 +416,16 @@ describe('Поток: группа и идея', () => {
     expect(approveButton().disabled).toBe(false)
   })
 
+  it('«Сейчас»: где поток и чей ход, цепочка сегментами', async () => {
+    openStream('B', () => confirmed(SEEKING))
+    const now = await screen.findByRole('region', { name: 'Хранение' })
+    expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
+    const segments = within(now).getAllByRole('listitem')
+    expect(segments.map(segment => segment.className)).toEqual([
+      'segment running', 'segment idle', 'segment idle', 'segment idle', 'segment idle'])
+    expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
+  })
+
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
     openStream('B', () => confirmed(SEEKING))
     expect(await screen.findByText(ru['idea.seeking'], { exact: false })).toBeTruthy()
@@ -449,14 +490,18 @@ describe('Поток: группа и идея', () => {
 
 
 describe('CouncilPage', () => {
-  it('показывает проект: имя в шапке, пройденные этапы', async () => {
-    fetchMock.mockImplementation(server())
+  it('показывает проект: имя в шапке, этапы светофором', async () => {
+    fetchMock.mockImplementation(server({ council: () => ({ ...COUNCIL, slicing: DONE, structure: GROUPING }) }))
     renderAt('/councils/demo-1/brief')
     expect(await screen.findByRole('heading', { name: COUNCIL.name })).toBeTruthy()
     // Имя в шапку ставит эффект страницы — он может отработать чуть позже заголовка.
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain(COUNCIL.name))
-    expect(screen.getByRole('link', { name: /Нарезка/ }).textContent).toContain(ru['council.stageDone'])
-    expect(screen.getByRole('link', { name: /Группы/ }).textContent).not.toContain(ru['council.stageDone'])
+    const tab = (name: RegExp) => screen.getByRole('link', { name })
+    expect(tab(/Нарезка/).textContent).toContain(ru['light.done'])
+    expect(tab(/Нарезка/).querySelector('.tab-num')?.textContent).toBe('✓')
+    expect(tab(/Группы/).textContent).toContain(ru['light.running'])
+    expect(tab(/Группы/).querySelector('.tab-num')?.className).toContain('running')
+    expect(tab(/Потоки/).textContent).not.toMatch(/\(/)       // не начат — без пометки
   })
 
   it('404 → «Проект не найден»', async () => {

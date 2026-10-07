@@ -1,12 +1,19 @@
 :root {
-  --bg: #f5f5f6; --surface: #fff; --surface-sunken: #f7f7f8; --border: #e6e6ea;
-  --fg: #18181b; --fg-soft: #52525b; --fg-muted: #71717a; --fg-faint: #a1a1aa;
-  --accent: #4a5ad6; --accent-soft: #eef0fc;
-  --ok: #1f7a4d; --ok-soft: #e9f6ef;
-  --danger: #c9553f;
-  --font: "IBM Plex Sans", system-ui, sans-serif;
+  --bg: #e3e3e3; --surface: #fbfbfb; --surface-sunken: #f2f2f2; --border: #e4e4e4;
+  --fg: #1d1d1d; --fg-soft: #555; --fg-muted: #7a7a7a; --fg-faint: #a8a8a8;
+  /* Тёмные карточки («Общая картина», «Сейчас») и пустые сегменты на них. */
+  --ink: #1f1f1f; --ink-line: #4a4a4a; --ink-muted: #9a9a9a;
+  --accent: #1d1d1d; --accent-soft: #ececec;
+  /* Светофор: зелёный — идёт или готово, жёлтый — ход за вами, красный — ход модели упал.
+     -bright — на тёмном, -text — текстом на светлом, -ink — текстом на жёлтом. */
+  --go: #2f9e5b; --go-bright: #4cc27c; --go-soft: #eafff1; --go-text: #1f7a45;
+  --wait: #e0a100; --wait-bright: #ffc940; --wait-text: #7d5a00; --wait-ink: #3a2a00;
+  --stop: #d1382f; --stop-bright: #ff8c84; --stop-soft: #ffe9e7; --stop-text: #b8352d;
+  --ok: var(--go-text); --ok-soft: var(--go-soft);
+  --danger: var(--stop-text);
+  --font: "Manrope", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
-  --radius: 12px;
+  --radius: 18px;
 }
 * { box-sizing: border-box }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font) }
@@ -17,53 +24,56 @@ button { cursor: pointer }
 
 .header { height: 54px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; background: var(--surface); border-bottom: 1px solid var(--border) }
 .header-title { display: flex; align-items: center; min-width: 0 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; white-space: nowrap }
-.brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent) }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; white-space: nowrap }
+.brand-mark { width: 20px; height: 20px; border: 4px solid var(--ink); border-radius: 50%; border-right-color: transparent; transform: rotate(-45deg) }
 .crumb-sep { margin: 0 16px; color: var(--fg-faint) }
 .crumb { color: var(--fg-soft); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
 .header-actions { display: flex; align-items: center; gap: 12px }
 .main { max-width: 1320px; margin: 0 auto; padding: 24px }
 
-.btn-primary { border: 0; border-radius: 8px; padding: 7px 12px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 500 }
-.btn-primary.large { padding: 10px 16px; font-size: 14px }
-.btn-primary:disabled { opacity: .6; cursor: default }
-.btn-lang { border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: none; color: var(--fg-muted); font-size: 12px; font-weight: 600 }
-.btn-lang:hover { color: var(--fg); border-color: var(--accent) }
-.btn-link { border: 0; padding: 0; background: none; color: var(--accent); text-decoration: underline }
+.btn-primary { border: 0; border-radius: 99px; padding: 8px 16px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600 }
+.btn-primary.large { padding: 11px 22px; font-size: 14px }
+.btn-primary:disabled { opacity: .45; cursor: default }
+.btn-lang { border: 1px solid var(--border); border-radius: 99px; padding: 6px 10px; background: none; color: var(--fg-muted); font-size: 12px; font-weight: 700 }
+.btn-lang:hover { color: var(--fg); border-color: var(--fg) }
+.btn-link { border: 0; padding: 0; background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px }
 .btn-dashed { width: 100%; margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--fg-soft); text-align: left; font-size: 13px }
 .btn-dashed:disabled { cursor: default; color: var(--fg-muted) }
 .error-text { color: var(--danger); font-size: 13px }
 
-.page-title { margin: 0 0 4px; font-size: 18px; font-weight: 600 }
+.page-title { margin: 0 0 4px; font-size: 28px; font-weight: 700; letter-spacing: -.01em }
 .page-sub, .muted { margin: 0; color: var(--fg-muted); font-size: 13px }
 
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 18px }
-.card { display: block; padding: 16px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius) }
-a.card:hover { border-color: var(--accent) }
+.card { display: block; padding: 16px 18px; background: var(--surface); border-radius: var(--radius) }
+a.card:hover { box-shadow: 0 0 0 1.5px var(--fg) }
 .card-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px }
 .card-name { flex: 1; font-weight: 600 }
-.placeholder { padding: 48px; text-align: center; color: var(--fg-muted); border-style: dashed }
+.placeholder { padding: 48px; text-align: center; color: var(--fg-muted); background: none; border: 1.5px dashed var(--fg-faint) }
 
-.pill { padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 500; white-space: nowrap; background: var(--accent-soft); color: var(--accent) }
-.pill.ready { background: var(--ok-soft); color: var(--ok) }
+.pill { padding: 2px 10px; border-radius: 99px; font-size: 11.5px; font-weight: 600; white-space: nowrap; background: var(--accent-soft); color: var(--fg-soft) }
+.pill.ready { background: var(--go-soft); color: var(--go-text) }
 
 /* Раздел на карточке: Panel. */
-.panel { padding: 20px 22px; border-radius: 16px }
-.panel-title { margin: 0 0 4px; font-size: 14px; font-weight: 600 }
-.panel-title.large { font-size: 17px }
+.panel { padding: 20px 22px; border-radius: 20px }
+.panel-title { margin: 0 0 4px; font-size: 14px; font-weight: 700 }
+.panel-title.large { font-size: 18px }
 .panel-hint { margin: 0 0 16px; color: var(--fg-muted); font-size: 13px }
 
 .text-field, .brief-text { width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-sunken) }
 .text-field { padding: 10px 12px; font-weight: 600 }
-.text-field:focus, .brief-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent) }
+.text-field:focus, .brief-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--fg) }
 
 /* Полоса этапов под шапкой, во всю ширину. */
 .stage-bar { display: flex; gap: 4px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto }
 .tab { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--fg-muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
-.tab-num { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: #ececef; color: var(--fg-soft); font-size: 11px; font-weight: 600 }
-.tab.done .tab-num { background: var(--ok-soft); color: var(--ok) }
-.tab.active { color: var(--fg); font-weight: 600; border-bottom-color: var(--accent) }
-.tab.active .tab-num { background: var(--accent); color: #fff }
+/* Номер этапа — в цвете светофора: белый — не начат, зелёный — идёт или готов, жёлтый — ваш
+   ход, красный — ошибка. */
+.tab-num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--border); color: var(--fg-muted); font-size: 11px; font-weight: 700 }
+.tab-num.done, .tab-num.running { background: var(--go); box-shadow: none; color: #fff }
+.tab-num.yours { background: var(--wait); box-shadow: none; color: var(--wait-ink) }
+.tab-num.failed { background: var(--stop); box-shadow: none; color: #fff }
+.tab.active { color: var(--fg); font-weight: 700; border-bottom-color: var(--fg) }
 
 /* Модель: ModelBadge и ModelCheckbox. */
 .model-list { display: grid; gap: 8px }
@@ -108,9 +118,8 @@ a.card:hover { border-color: var(--accent) }
 .step-note { margin: 0; color: var(--fg-muted); font-size: 12.5px }
 .step-name { min-width: 0; font-weight: 600; font-size: 13.5px }
 .step-state, .run-state { font-size: 12.5px; color: var(--fg-muted); white-space: nowrap }
-.step-state.running, .run-state.running { color: var(--accent) }
-.step-state.done, .run-state.done { color: var(--ok) }
-.step-state.failed, .run-state.failed { color: var(--danger) }
+.step-state.running, .run-state.running, .step-state.done, .run-state.done { color: var(--go-text) }
+.step-state.failed, .run-state.failed { color: var(--stop-text) }
 .run { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px }
 .run + .run { margin-top: 6px }
 .run-error { flex-basis: 100%; margin: 2px 0 0; color: var(--danger); font-size: 12.5px; overflow-wrap: anywhere }
@@ -149,7 +158,7 @@ a.card:hover { border-color: var(--accent) }
 .fragment-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 4px 12px; align-items: start; padding: 12px 0; border-top: 1px solid var(--border) }
 .fragment-row:first-child { border-top: 0; padding-top: 4px }
 .fragment-id { padding-top: 1px; color: var(--fg-muted); font-size: 12px; font-variant-numeric: tabular-nums }
-.fragment-note { margin: 4px 0 0; color: #8a5a00; font-size: 12px }
+.fragment-note { margin: 4px 0 0; color: var(--wait-text); font-size: 12px }
 @media (max-width: 900px) {
   .slices-layout { grid-template-columns: 1fr }
   .slices-side, .slices-main { grid-column: 1; grid-row: auto }
@@ -158,11 +167,10 @@ a.card:hover { border-color: var(--accent) }
 }
 
 /* Карточка «Дальше» на нарезке: следующий шаг. */
-.next-step { border-color: #d6dbf7 }
-.next-caps { margin: 0 0 6px; color: var(--accent); font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase }
+.next-caps { margin: 0 0 6px; color: var(--wait-text); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase }
 .btn-primary.block { display: block; width: 100%; margin-top: 4px; text-align: center }
-.btn-secondary { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; background: var(--surface); color: var(--fg-soft); font-size: 13px }
-.btn-secondary:disabled { cursor: default; color: var(--fg-muted) }
+.btn-secondary { border: 1.5px solid var(--fg); border-radius: 99px; padding: 6px 14px; background: var(--surface); color: var(--fg); font-size: 13px; font-weight: 600 }
+.btn-secondary:disabled { cursor: default; border-color: var(--fg-faint); color: var(--fg-muted) }
 
 /* Тип фрагмента меткой — там, где его не меняют. */
 .label-pill { flex: none; padding: 1px 8px; border-radius: 99px; background: var(--label-bg); color: var(--label-fg); font-size: 12px; white-space: nowrap }
@@ -210,7 +218,7 @@ a.card:hover { border-color: var(--accent) }
 .stream-link .group-letter { flex: none }
 .stream-text { display: flex; flex-direction: column; min-width: 0 }
 .stream-title { font-weight: 600 }
-.stream-meta { color: var(--fg-muted); font-size: 12.5px }
+.stream-meta { display: flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 12.5px }
 
 .chain { padding: 16px 14px }
 .chain-of { margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0 }
@@ -218,25 +226,28 @@ a.card:hover { border-color: var(--accent) }
 .chain-step { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: 10px; background: none; text-align: left }
 button.chain-step:hover { background: var(--surface-sunken) }
 .chain-step.open, button.chain-step.open:hover { background: var(--accent-soft) }
-.chain-num { display: grid; place-items: center; width: 24px; height: 24px; border: 1.5px solid var(--border); border-radius: 50%; color: var(--fg-muted); font-size: 12px; font-weight: 600 }
-.chain-step.current .chain-num { border-color: var(--accent); background: var(--accent); color: #fff }
-.chain-step.done .chain-num { border-color: transparent; background: var(--ok-soft); color: var(--ok) }
+.chain-num { display: grid; place-items: center; width: 24px; height: 24px; border: 1.5px solid var(--border); border-radius: 50%; background: var(--surface); color: var(--fg-muted); font-size: 12px; font-weight: 700 }
+.chain-num.done, .chain-num.running { border-color: transparent; background: var(--go); color: #fff }
+.chain-num.yours { border-color: transparent; background: var(--wait); color: var(--wait-ink) }
+.chain-num.failed { border-color: transparent; background: var(--stop); color: #fff }
 .chain-body { display: flex; flex-direction: column; gap: 1px; min-width: 0 }
 .chain-name { font-weight: 600 }
 .chain-step.later .chain-name { color: var(--fg-muted) }
 .chain-status { margin-bottom: 4px; color: var(--fg-muted); font-size: 12.5px }
-.chain-step.current .chain-status { color: var(--accent) }
+.chain-status.yours { color: var(--wait-text) }
+.chain-status.failed { color: var(--stop-text) }
+.chain-status.running, .chain-status.done { color: var(--go-text) }
 .chain-role { color: var(--fg-soft); font-size: 12px }
 .chain-step.later .chain-role { color: var(--fg-muted) }
 .role-tag { display: inline-block; min-width: 24px; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: #ececef; color: var(--fg-soft); font-size: 11px; font-weight: 600; text-align: center }
-.role-tag.ai, .source-tag.ai { background: #f3ebfb; color: #7a3fb8 }
+.role-tag.ai, .source-tag.ai { background: var(--ink); color: #fff }
 
 .section-gap { margin-top: 20px }
-.idea-box { display: grid; gap: 10px; padding: 12px 14px; border: 1.5px dashed #b4b9ec; border-radius: 12px; background: #f8f8fe }
+.idea-box { display: grid; gap: 10px; padding: 12px 14px; border: 1.5px dashed var(--fg-faint); border-radius: 14px; background: var(--surface-sunken) }
 .idea-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
 .source-tag { padding: 1px 7px; border-radius: 5px; background: #ececef; color: var(--fg-soft); font-size: 11.5px; font-weight: 600 }
 .idea-text { display: block; width: 100%; min-height: 64px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 15px; font-weight: 600; line-height: 1.5; resize: vertical }
-.idea-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent) }
+.idea-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--fg) }
 .idea-fixed { margin: 0; font-size: 15px; font-weight: 600 }
 .idea-why { margin: 0; color: var(--fg-muted); font-size: 12.5px }
 .idea-options { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none }
@@ -253,4 +264,69 @@ button.chain-step:hover { background: var(--surface-sunken) }
 @media (max-width: 900px) {
   .streams-layout { grid-template-columns: 1fr }
   .streams-side { grid-column: auto }
+}
+
+/* Светофор точкой: в списках, легенде, на карточках советов. */
+.light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }
+.light-dot.done, .light-dot.running { background: var(--go); box-shadow: none }
+.light-dot.yours { background: var(--wait); box-shadow: none }
+.light-dot.failed { background: var(--stop); box-shadow: none }
+@media (prefers-reduced-motion: no-preference) {
+  .tab-num.running, .light-dot.running, .chain-num.running { animation: working 1.6s ease-in-out infinite }
+}
+@keyframes working { 50% { opacity: .55 } }
+
+/* «Сейчас»: тёмная карточка потока — где он и чей ход, цепочка сегментами. */
+.now { padding: 18px 20px 16px; border-radius: 20px; background: var(--ink); color: #fff }
+.now-caps { margin: 0 0 6px; color: var(--ink-muted); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase }
+.now-caps.yours { color: var(--wait-bright) }
+.now-caps.failed { color: var(--stop-bright) }
+.now-caps.running, .now-caps.done { color: var(--go-bright) }
+.now-title { margin: 0 0 14px; font-size: 17px; font-weight: 600 }
+.segments { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
+.segment::before { content: ""; display: block; height: 4px; margin-bottom: 8px; border-radius: 99px; background: var(--ink-line) }
+.segment.done::before, .segment.running::before { background: var(--go-bright) }
+.segment.yours::before { background: var(--wait) }
+.segment.failed::before { background: var(--stop) }
+.segment-name { display: block; color: var(--ink-muted); font-size: 12px }
+.segment.done .segment-name, .segment.running .segment-name { color: #fff }
+.segment.yours .segment-name { color: var(--wait-bright) }
+.segment.failed .segment-name { color: var(--stop-bright) }
+.segment-sub { display: block; color: #8a8a8a; font-size: 11.5px; overflow-wrap: anywhere }
+
+/* Главная: «Сводка». */
+.summary-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px }
+.overview { max-width: 580px; margin-top: 20px; padding: 22px 24px 24px; border-radius: 26px; background: var(--ink); color: #fff }
+.overview-title { margin: 0 0 14px; font-size: 16px; font-weight: 600 }
+.totals { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; margin: 0 0 18px; padding: 0; list-style: none }
+.total { display: flex; align-items: center; gap: 10px }
+.total + .total { padding-left: 22px; border-left: 1px solid #3a3a3a }
+.total-num { font-size: 40px; font-weight: 700; line-height: 1 }
+.total-label { max-width: 9ch; color: #bdbdbd; font-size: 12.5px; line-height: 1.2 }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none }
+.tile { display: grid; justify-items: center; gap: 2px; padding: 12px 6px; border-radius: 14px; text-align: center }
+.tile-num { font-size: 24px; font-weight: 700; line-height: 1.2 }
+.tile-label { font-size: 12px }
+.tile.running { background: var(--go); color: #fff }
+.tile.idle { background: var(--surface); color: var(--fg) }
+.tile.yours { background: var(--wait); color: var(--wait-ink) }
+.tile.failed { background: var(--stop); color: #fff }
+.section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin: 30px 0 12px }
+.section-title { margin: 0; font-size: 20px; font-weight: 700 }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; color: var(--fg-muted); font-size: 12.5px }
+.legend li { display: flex; align-items: center; gap: 6px }
+.attention-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none }
+.attention-card { position: relative; display: block; height: 100%; min-height: 136px; padding: 16px 18px 18px; overflow: hidden; border-radius: var(--radius); background: var(--surface) }
+.attention-card:hover { box-shadow: 0 0 0 1.5px var(--fg) }
+.attention-caps { margin: 0 0 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase }
+.attention-card.yours .attention-caps { color: var(--wait-text) }
+.attention-card.failed .attention-caps { color: var(--stop-text) }
+.attention-title { margin: 0 0 10px; font-size: 16px; font-weight: 600; line-height: 1.35 }
+.attention-meta { margin: 0; padding-right: 44px; color: var(--fg-muted); font-size: 12.5px }
+.corner { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 14px 0 0; font-weight: 700 }
+.attention-card.yours .corner { background: var(--wait); color: var(--wait-ink) }
+.attention-card.failed .corner { background: var(--stop); color: #fff }
+.council-light { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--fg-soft); font-size: 12.5px; font-weight: 600 }
+@media (max-width: 600px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
 }
