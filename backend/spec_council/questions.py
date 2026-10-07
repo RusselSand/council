@@ -98,16 +98,19 @@ def question_list(data: dict, fragments: Mapping[int, LabeledFragment]) -> list[
 
 
 def merged(candidates: Iterable[Candidate]) -> list[Candidate]:
-    """Одинаковые вопросы — один, со всеми предложениями; формулировка и пояснение первого."""
+    """Одинаковые вопросы — один, со всеми предложениями; формулировка первого. Если одна
+    модель сочла вопрос недостающим, а другая — восстановленным по предложениям, он inferred,
+    с её пояснением: на него уже отвечают предложения группы. От порядка это не зависит."""
     found: dict[tuple, Candidate] = {}
     for candidate in candidates:
         known = found.get(candidate.key())
         if known is None:
             found[candidate.key()] = candidate
-        else:
-            found[candidate.key()] = Candidate(
-                known.text, known.source, known.source_question_id,
-                tuple(sorted({*known.proposal_ids, *candidate.proposal_ids})), known.reason)
+            continue
+        wins = candidate if candidate.source == "inferred" and known.source != "inferred" else known
+        found[candidate.key()] = Candidate(
+            known.text, wins.source, known.source_question_id,
+            tuple(sorted({*known.proposal_ids, *candidate.proposal_ids})), wins.reason)
     return list(found.values())
 
 
@@ -120,11 +123,29 @@ def same_lists(lists: list[list[Candidate]]) -> bool:
 
 def with_user_questions(candidates: list[Candidate],
                         fragments: Mapping[int, LabeledFragment]) -> list[Candidate]:
-    """Каждый вопрос из текста — в списке. Пропущенные возвращаются в конец, по порядку."""
-    present = {c.source_question_id for c in candidates if c.source == "user"}
-    missing = [Candidate(f.text, "user", f.id, (), None) for f in fragments.values()
-               if f.label == "question" and f.id not in present]
-    return [*candidates, *missing]
+    """Каждый вопрос из текста — в списке, и один раз. Сгенерированный вопрос с тем же текстом
+    и есть он: на его месте — вопрос из текста, со связями обоих. Пропущенные возвращаются в
+    конец, по порядку."""
+    asked = [f for f in fragments.values() if f.label == "question"]
+    by_text = {same_question(f.text): f for f in asked}
+    result: list[Candidate] = []
+    placed: dict[int, int] = {}  # вопрос из текста → его место в result
+    for candidate in candidates:
+        fragment = (fragments.get(candidate.source_question_id) if candidate.source == "user"
+                    else by_text.get(same_question(candidate.text)))
+        if fragment is None:
+            result.append(candidate)
+        elif fragment.id in placed:
+            known = result[placed[fragment.id]]
+            result[placed[fragment.id]] = Candidate(
+                known.text, "user", fragment.id,
+                tuple(sorted({*known.proposal_ids, *candidate.proposal_ids})), known.reason)
+        else:
+            placed[fragment.id] = len(result)
+            result.append(Candidate(fragment.text, "user", fragment.id, candidate.proposal_ids,
+                                    candidate.reason))
+    return [*result, *(Candidate(f.text, "user", f.id, (), None)
+                       for f in asked if f.id not in placed)]
 
 
 def numbered(candidates: list[Candidate]) -> list[OpenQuestion]:

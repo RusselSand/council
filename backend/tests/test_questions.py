@@ -91,6 +91,25 @@ def test_the_same_question_twice_is_one_with_all_its_proposals():
     assert found == [Candidate("Как искать?", "inferred", None, (1, 2), "a")]
 
 
+@pytest.mark.parametrize("order", [1, -1])
+def test_a_question_answered_by_proposals_stays_inferred_whichever_came_first(order):
+    pair = [Candidate("Как искать?", "discovered", None, (), "не хватает"),
+            Candidate("как искать", "inferred", None, (1, 2), "F1 и F2 отвечают")][::order]
+    [found] = merged(pair)
+    assert (found.source, found.proposal_ids, found.reason) == (
+        "inferred", (1, 2), "F1 и F2 отвечают")
+
+
+def test_a_generated_question_that_is_the_text_question_is_it_and_not_a_second_one():
+    # Судья опустил вопрос из текста, но вернул ту же неопределённость как inferred.
+    judged = [Candidate("Как искать?", "inferred", None, (1, 2), "a"),
+              Candidate("кто решает, что тред полезный", "inferred", None, (1,), "b")]
+    questions = numbered(with_user_questions(judged, GROUP))
+    assert [(q.id, q.text, q.source, q.source_question_id, q.proposal_ids) for q in questions] == [
+        ("Q1", "Как искать?", "inferred", None, [1, 2]),
+        ("Q2", "Кто решает, что тред полезный?", "user", 4, [1])]
+
+
 def test_questions_from_the_text_are_never_lost_and_are_numbered_in_order():
     judged = [Candidate("Как искать?", "inferred", None, (1, 2), "a")]
     questions = numbered(with_user_questions(judged, GROUP))
