@@ -13,9 +13,12 @@ from .spa import mount_spa
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Советы с диска — сразу при старте: прерванные ходы отмечаются до запросов. Хранилище то
-    # же, что получат ручки: подменённое через dependency_overrides — значит, оно.
-    app.dependency_overrides.get(get_store, get_store)()
+    # Советы с диска — сразу при старте: каталог проверен и прерванные ходы отмечены до
+    # запросов. Подменённое хранилище старт не трогает — ни его, ни настоящий каталог: его
+    # получает на запрос сам FastAPI, со всем жизненным циклом зависимости (async, yield),
+    # которого здесь не повторить.
+    if get_store not in app.dependency_overrides:
+        get_store()
     yield
     shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 

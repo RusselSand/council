@@ -1,7 +1,7 @@
 """Советы в файлах: переживают перезапуск, прерванные ходы после него — упавшие."""
 
 import json
-from pathlib import Path
+import os
 
 import pytest
 
@@ -126,9 +126,33 @@ def test_a_custom_folder_inside_the_repository_is_refused(tmp_path, monkeypatch)
 
 def test_a_folder_that_cannot_be_written_stops_the_start_with_a_reason(tmp_path, monkeypatch):
     # Каталог, созданный docker от root, а бэкенд под COUNCIL_UID: прочитать можно, писать нет.
-    def refused(path, *_, **__):
-        raise PermissionError(13, "Permission denied", str(path))
+    def refused(*_, dir=None, **__):
+        raise PermissionError(13, "Permission denied", str(dir))
 
-    monkeypatch.setattr(Path, "write_text", refused)
+    monkeypatch.setattr(store_module.tempfile, "mkstemp", refused)
     with pytest.raises(RuntimeError, match="нельзя писать"):
         FileStore(tmp_path)
+
+
+def test_the_write_check_leaves_other_files_alone(tmp_path):
+    other = tmp_path / ".write-check"
+    other.write_text("чужое", encoding="utf-8")
+    FileStore(tmp_path)
+    assert other.read_text(encoding="utf-8") == "чужое"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".write-check"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="права файлов — только на Unix")
+def test_council_files_are_for_the_owner_only(tmp_path):
+    # Обычный umask на общей машине: без особой заботы файл открыт всем на чтение.
+    before = os.umask(0o022)
+    try:
+        files = FileStore(tmp_path)
+        council = files.create_council(participants=["sol", "fable"], judge="fable")
+        path = tmp_path / f"{council.id}.json"
+        assert path.stat().st_mode & 0o777 == 0o600
+        files.update_council(council.id, {"brief": "текст"})
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]   # временных нет
+    finally:
+        os.umask(before)

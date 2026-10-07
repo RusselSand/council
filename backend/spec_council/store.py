@@ -6,6 +6,7 @@
 
 import logging
 import os
+import tempfile
 from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -117,24 +118,33 @@ class FileStore(InMemoryStore):
 
     def _keep(self, council: Council) -> None:
         # Сначала во временный файл, потом подменой: процесс, оборванный посреди записи, совет
-        # не испортит. Без fsync: в докере он стоит 60–120 мс на запись, а пишем под замком
-        # на каждую правку. От пропадания питания это не спасает — для локального
-        # инструмента цена того не стоит.
+        # не испортит. Временный — свой на каждую запись и только владельцу (mkstemp: 0600):
+        # в советах тексты и ответы моделей, а при umask 022 файл читали бы все на машине.
+        # Без fsync: в докере он стоит 60–120 мс на запись, а пишем под замком на каждую
+        # правку. От пропадания питания это не спасает — для локального инструмента цена
+        # того не стоит.
         path = self._folder / f"{council.id}.json"
-        part = path.with_name(f"{path.name}.part")
-        part.write_text(council.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(part, path)
+        handle, part = tempfile.mkstemp(dir=self._folder, prefix=f"{council.id}.", suffix=".part")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as file:
+                file.write(council.model_dump_json(indent=2))
+            os.replace(part, path)
+        except BaseException:
+            Path(part).unlink(missing_ok=True)
+            raise
 
 
 def writable(folder: Path) -> None:
     """Каталог советов есть, и в него можно писать — проверяем при старте. Иначе сервер
     поднялся бы, показал список, а упал бы на первом же новом совете. Так бывает на Linux,
-    когда каталог создал docker от root, а бэкенд работает под COUNCIL_UID."""
-    probe = folder / ".write-check"
+    когда каталог создал docker от root, а бэкенд работает под COUNCIL_UID. Пробный файл —
+    свой, с новым именем: чужие файлы в каталоге проверка не тронет. Каталог, которого ещё
+    нет, создаём только владельцу."""
     try:
-        folder.mkdir(parents=True, exist_ok=True)
-        probe.write_text("", encoding="utf-8")
-        probe.unlink()
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handle, probe = tempfile.mkstemp(dir=folder, prefix=".write-check-")
+        os.close(handle)
+        os.unlink(probe)
     except OSError as exc:
         raise RuntimeError(
             f"В каталог советов {folder} нельзя писать: {exc}. Он должен принадлежать тому, "

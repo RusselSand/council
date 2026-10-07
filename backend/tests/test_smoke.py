@@ -1,3 +1,6 @@
+import gc
+import warnings
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -40,17 +43,23 @@ def test_spa_fallback_for_page_links():
     assert res.headers["content-type"].startswith("text/html")
 
 
-def test_startup_takes_the_store_the_routes_get():
-    # Подменённое хранилище — и при старте: настоящий каталог данных тогда не нужен вовсе.
-    started = []
+def test_a_replaced_store_is_left_to_the_requests():
+    # Подменённое хранилище старт не трогает — ни его, ни настоящий каталог данных. FastAPI
+    # получает его на запрос сам, какой бы ни была зависимость: здесь — асинхронная.
+    calls = []
 
-    def replaced():
-        started.append(True)
+    async def replaced():
+        calls.append(True)
         return InMemoryStore()
 
     app.dependency_overrides[get_store] = replaced
     try:
-        with TestClient(app):
-            assert started
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with TestClient(app) as started:
+                assert started.get("/api/councils").json() == []
+            gc.collect()
     finally:
         app.dependency_overrides.pop(get_store)
+    assert calls == [True]   # только запрос
+    assert not [w for w in caught if "never awaited" in str(w.message)]
