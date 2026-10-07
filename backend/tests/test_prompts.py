@@ -16,6 +16,8 @@ GIVEN = {
     "structure_judge": {"input", "fragments", "structure_options"},
     "idea_discovery": {"group"},
     "idea_judge": {"group", "idea_options"},
+    "question_discovery": {"idea", "fragments"},
+    "question_judge": {"idea", "fragments", "question_candidates"},
 }
 
 

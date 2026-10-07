@@ -28,6 +28,8 @@ class StepName(StrEnum):
     structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись
     idea_discovery = "idea_discovery"    # участники восстанавливают идею группы без неё
     idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
+    question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
+    question_judge = "question_judge"          # судья сводит их в один канонический список
 
 
 class ModelRun(BaseModel):
@@ -193,13 +195,46 @@ class StreamIdea(BaseModel):
     evidence: list[int] = []
 
 
+class OpenQuestion(BaseModel):
+    """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
+    нет: предложения из текста связаны с ним через proposal_ids."""
+
+    id: str
+    text: str
+    # user — вопрос из текста, дословно; inferred — незаписанный вопрос, на который отвечают
+    # предложения группы; discovered — недостающий; added — добавил человек при отборе.
+    source: Literal["user", "inferred", "discovered", "added"]
+    # Фрагмент-вопрос, если вопрос из текста.
+    source_question_id: int | None = None
+    # Фрагменты-предложения группы, которые отвечают на этот вопрос.
+    proposal_ids: list[int] = []
+    reason: str | None = None
+
+
+class QuestionDiscovery(BaseModel):
+    """Поиск открытых вопросов к утверждённой идее: участники по отдельности, судья сводит
+    их списки в канонический. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # Идея, к которой ищут: утвердили другую — вопросы ищутся заново.
+    idea: str = ""
+    steps: list[Step]
+    questions: list[OpenQuestion] = []
+    error: str | None = None
+
+
 class Stream(BaseModel):
-    """Поток — подтверждённая группа под той же буквой. Первый шаг его цепочки — идея: у
-    группы без неё идею ищет совет (discovery), утверждает человек (idea)."""
+    """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
+    её ищет совет (discovery), утверждает человек (idea); потом вопросы — их ищет совет
+    (questions), а человек отбирает, какие решать (scope)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
     idea: StreamIdea | None = None
+    questions: QuestionDiscovery | None = None
+    # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
+    scope: list[OpenQuestion] | None = None
 
 
 class Council(BaseModel):
@@ -272,6 +307,14 @@ class ApproveIdea(GroupsEdit):
     в тексте, её не правят, и text нет."""
 
     text: str | None = None
+
+
+class ApproveScope(GroupsEdit):
+    """Человек утверждает, какие вопросы потоку решать: оставленные из найденных (их id) и
+    свои, добавленные при отборе (тексты)."""
+
+    keep: list[str]
+    added: list[str] = []
 
 
 class Model(BaseModel):

@@ -17,7 +17,7 @@ from spec_council.models import (
     Stream,
     Structure,
 )
-from spec_council.pipeline import start, start_idea
+from spec_council.pipeline import start, start_idea, start_questions
 from spec_council.store import INTERRUPTED, FileStore
 
 
@@ -52,7 +52,8 @@ def test_runs_that_were_going_on_come_back_failed_and_can_be_started_again(tmp_p
     slicing.steps[0].state = "running"
     slicing.steps[0].runs = [ModelRun(model="sol", state="running"),
                              ModelRun(model="fable", state="done")]
-    streams = [Stream(group="A", discovery=start_idea(["sol"], "sol")), Stream(group="B")]
+    streams = [Stream(group="A", discovery=start_idea(["sol"], "sol")),
+               Stream(group="B", questions=start_questions(["sol"], "sol", "Идея"))]
     before.update_council(council.id, {"slicing": slicing, "streams": streams})
 
     after = FileStore(tmp_path).get_council(council.id)
@@ -63,7 +64,8 @@ def test_runs_that_were_going_on_come_back_failed_and_can_be_started_again(tmp_p
         ("sol", "failed", INTERRUPTED), ("fable", "done", None)]
     assert second.state == "waiting"
     assert after.streams[0].discovery.state == "failed"
-    assert after.streams[1] == Stream(group="B")
+    assert (after.streams[1].questions.state, after.streams[1].questions.error) == (
+        "failed", INTERRUPTED)
     # Отметка записана: следующий старт читает уже упавшие.
     saved = json.loads((tmp_path / f"{council.id}.json").read_text(encoding="utf-8"))
     assert saved["slicing"]["state"] == "failed"

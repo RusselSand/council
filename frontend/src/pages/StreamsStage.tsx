@@ -1,16 +1,16 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
   api, ApiError, councilPath, groupsConfirmed, startOrFollow, structureIsStale,
-  type Council, type Group, type IdeaDiscovery, type LabeledFragment, type Model, type Settings,
-  type Stream, type Structure,
+  type Council, type Group, type IdeaDiscovery, type LabeledFragment, type Model, type OpenQuestion,
+  type Settings, type Stream, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { Progress } from '../components/Progress'
-import { CHAIN, chainLight, streamLight, type ChainStep } from '../light'
+import { CHAIN, chainLight, currentStep, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
 type T = ReturnType<typeof useTranslation>['t']
@@ -44,10 +44,13 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
-  const [view, setView] = useState<ChainStep>(stream.idea ? 'questions' : 'group')
+  const [chosen, setView] = useState<ChainStep>(currentStep(stream))
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
+  // Открыть можно пройденный шаг и текущий: дальше — нечего.
+  const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(currentStep(stream)) ? chosen : currentStep(stream)
   const search = stream.discovery
+  const run = view === 'group' ? search : stream.questions
 
   return (
     <div className="streams-layout">
@@ -63,15 +66,22 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
             <Link className="btn-link" to={councilPath(council.id, 'structure')}>{t('streams.toGroups')}</Link>
           </p>
         )}
-        {view === 'questions' && stream.idea
-          ? <QuestionsStep stream={stream} onBack={() => setView('group')} />
+        {view === 'group' && (
           // Поиск закончился — черновик заново, из предложения совета.
-          : <GroupStep key={`${search?.run}:${search?.state}`} council={council} structure={structure}
-                       stream={stream} group={group} models={models} onChange={onChange}
-                       onApproved={() => setView('questions')} />}
+          <GroupStep key={`${search?.run}:${search?.state}`} council={council} structure={structure}
+                     stream={stream} group={group} models={models} onChange={onChange}
+                     onApproved={() => setView('questions')} />
+        )}
+        {view === 'questions' && (
+          // Новый поиск вопросов — и отбор заново, к его вопросам.
+          <QuestionsStep key={stream.questions?.run ?? ''} council={council} structure={structure}
+                         stream={stream} group={group} onChange={onChange}
+                         onBack={() => setView('group')} onApproved={() => setView('options')} />
+        )}
+        {view === 'options' && <OptionsStep stream={stream} onBack={() => setView('questions')} />}
       </div>
       <aside className="streams-side">
-        {search && <Progress steps={search.steps} models={models} />}
+        {run && <Progress steps={run.steps} models={models} />}
       </aside>
     </div>
   )
@@ -109,10 +119,13 @@ function StreamList({ council, structure, open }: Readonly<{
 
 /** Где поток и чей ход. */
 function whereIs(stream: Stream, t: T): string {
-  if (stream.idea) return t('streams.atQuestions')
-  if (stream.discovery?.state === 'running') return t('streams.seeking')
-  if (stream.discovery?.state === 'failed') return t('streams.failed')
-  return t('streams.yourMove')
+  const step = currentStep(stream)
+  if (step === 'options') return t('streams.atOptions')
+  const run = step === 'group' ? stream.discovery : stream.questions
+  const where = step === 'group' ? 'group' : 'questions'
+  if (run?.state === 'running') return t(`streams.${where}.seeking`)
+  if (run?.state === 'failed') return t(`streams.${where}.failed`)
+  return t(`streams.${where}.yours`)
 }
 
 /** «Сейчас»: где поток и чей ход — и вся его цепочка сегментами в цветах светофора. */
@@ -133,6 +146,9 @@ function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
                 <span className="sr-only"> ({t(`light.${state}`)})</span>
               </span>
               {step === 'group' && <span className="segment-sub">{ideaStatus(stream, group, t)}</span>}
+              {step === 'questions' && stream.idea && (
+                <span className="segment-sub">{questionsStatus(stream, t)}</span>
+              )}
             </li>
           )
         })}
@@ -146,7 +162,12 @@ function Chain({ stream, group, view, onView }: Readonly<{
   stream: Stream; group: Group; view: ChainStep; onView: (step: ChainStep) => void
 }>) {
   const { t } = useTranslation()
-  const reached = stream.idea ? 1 : 0
+  const reached = CHAIN.indexOf(currentStep(stream))
+  const status = (step: ChainStep, i: number) => {
+    if (step === 'group') return groupStatus(stream, group, t)
+    if (step === 'questions' && stream.idea) return questionsStatus(stream, t)
+    return t(i === reached ? 'chain.soon' : 'chain.notStarted')
+  }
   return (
     <section className="card panel chain" aria-labelledby="chain-title">
       <h2 id="chain-title" className="panel-title caps">
@@ -162,7 +183,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
               <span className="chain-body">
                 <span className="chain-name">{t(`chain.${step}`)}</span>
                 <span className={`chain-status ${light}`}>
-                  {step === 'group' ? groupStatus(stream, group, t) : t(i === reached ? 'chain.soon' : 'chain.notStarted')}
+                  {status(step, i)}
                 </span>
                 <span className="chain-role"><span className="role-tag ai">{t('chain.ai')}</span>{t(`chain.${step}.ai`)}</span>
                 {step !== 'outcomes' && (
@@ -188,6 +209,16 @@ function Chain({ stream, group, view, onView }: Readonly<{
 
 function groupStatus(stream: Stream, group: Group, t: T): string {
   return `${t('chain.fragments', { count: group.fragment_ids.length })} · ${ideaStatus(stream, group, t)}`
+}
+
+/** Что с вопросами потока: ищутся, упали, найдены, отобраны или ещё не искались. */
+function questionsStatus(stream: Stream, t: T): string {
+  const search = stream.questions
+  if (stream.scope) return t('chain.questionsChosen', { count: stream.scope.length })
+  if (search?.state === 'running') return t('chain.questionsSeeking')
+  if (search?.state === 'failed') return t('chain.questionsFailed')
+  if (search) return t('chain.questionsFound', { count: search.questions.length })
+  return t('chain.questionsNone')
 }
 
 /** Что с идеей потока: утверждена, записана в тексте, ищется, упала, найдена или за вами. */
@@ -374,23 +405,195 @@ function IdeaOptions({ search, draft, models, busy, onTake }: Readonly<{
   )
 }
 
-/** Шаг «Вопросы» пока не готов: здесь утверждённая идея и дорога назад, к её правке. */
-function QuestionsStep({ stream, onBack }: Readonly<{ stream: Stream; onBack: () => void }>) {
+/**
+ * Шаг «Вопросы»: совет ищет открытые вопросы к утверждённой идее, а человек оставляет нужные,
+ * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
+ * выбирают. Черновик отбора — к нынешнему поиску; утверждённый отбор — его начало.
+ */
+function QuestionsStep({ council, structure, stream, group, onChange, onBack, onApproved }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; group: Group
+  onChange: (council: Council) => void; onBack: () => void; onApproved: () => void
+}>) {
   const { t } = useTranslation()
+  const search = stream.questions
+  const found = search?.questions ?? []
+  const scope = stream.scope
+  const [removed, setRemoved] = useState<ReadonlySet<string>>(
+    () => new Set(scope ? found.filter(q => !scope.some(s => s.id === q.id)).map(q => q.id) : []))
+  const [added, setAdded] = useState<string[]>(
+    () => scope?.filter(q => q.source === 'added').map(q => q.text) ?? [])
+  const [draft, setDraft] = useState('')
+  const approve = useAction(onChange, 'questions.approveFailed')
+  const retry = useAction(onChange)
+  const busy = approve.busy || retry.busy
+  const sought = search?.state === 'running'
+  const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
+  const kept = found.filter(q => !removed.has(q.id))
+  const chosen = kept.length + added.length
+  const locked = busy || sought
+  const canApprove = !locked && search !== null && chosen > 0 && !structureIsStale(council)
   const idea = stream.idea
   if (!idea) return null
+
+  const toggle = (id: string) => setRemoved(before => {
+    const next = new Set(before)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
+  const add = (event: FormEvent) => {
+    event.preventDefault()
+    const text = squash(draft)
+    if (!text) return
+    if (!added.some(own => squash(own).toLowerCase() === text.toLowerCase())) setAdded([...added, text])
+    setDraft('')
+  }
+  const seek = () => void retry.go(() => startOrFollow(() => api.seekQuestions(council.id, group.id), council.id))
+  const submit = () => void approve.go(async () => {
+    try {
+      return await api.approveScope(council.id, { run: structure.run, revision: structure.revision },
+                                    group.id, kept.map(q => q.id), added)
+    } catch (e) {
+      // Группы уже другие (поправили в другой вкладке) — показываем нынешние.
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  }, onApproved)
+
+  let list
+  if (!search) list = (
+    <p className="muted">
+      {t('questions.notSought')}{' '}
+      <button className="btn-link" disabled={busy} onClick={seek}>{t('questions.seek')}</button>
+    </p>
+  )
+  else if (sought) list = <p className="muted">{t('questions.seeking')} {t('run.note')}</p>
+  else list = (
+    <>
+      {search.state === 'failed' && (
+        <>
+          <p className="error-text" role="alert">{search.error}</p>
+          {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+          <p className="fragment-note">
+            {t('questions.failedNote')}{' '}
+            <button className="btn-link" disabled={busy} onClick={seek}>{t('run.retry')}</button>
+          </p>
+        </>
+      )}
+      {search.state === 'done' && found.length === 0 && <p className="muted">{t('questions.none')}</p>}
+      <ol className="questions" aria-label={t('questions.found')}>
+        {found.map(question => (
+          <QuestionItem key={question.id} question={question} fragments={fragments}
+                        removed={removed.has(question.id)} busy={locked} onToggle={() => toggle(question.id)} />
+        ))}
+        {added.map(text => (
+          <li key={text} className="question">
+            <div className="question-head">
+              <span className="source-tag">{t('questions.source.added')}</span>
+              <span className="question-text">{text}</span>
+              <button className="btn-secondary" disabled={locked}
+                      onClick={() => setAdded(added.filter(own => own !== text))}>
+                {t('questions.remove')}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <form className="question-add" onSubmit={add}>
+        <input className="text-field" aria-label={t('questions.own')} placeholder={t('questions.own')}
+               value={draft} maxLength={500} readOnly={locked} onChange={e => setDraft(e.target.value)} />
+        <button type="submit" className="btn-secondary" disabled={locked || squash(draft) === ''}>
+          {t('questions.add')}
+        </button>
+      </form>
+    </>
+  )
+
   return (
     <>
       <section className="card panel" aria-labelledby="step-title">
-        <p className="next-caps">{t('questions.caps')}</p>
+        <p className="next-caps">{t(sought ? 'questions.capsAi' : 'questions.caps')}</p>
         <h2 id="step-title" className="panel-title large">{t('questions.title')}</h2>
         <p className="panel-hint">{t('questions.hint')}</p>
       </section>
-      <Panel title={t('questions.idea')} caps aside={<span className="source-tag">{t(`questions.by.${idea.by}`)}</span>}>
-        <p className="idea-fixed">{idea.text}</p>
-        <button className="btn-link" onClick={onBack}>{t('questions.change')}</button>
+      <section className="card panel" aria-label={t('questions.title')}>
+        <div className="idea-box">
+          <div className="idea-head">
+            <span className="fragment-id">I1</span>
+            <LabelPill label="idea" />
+            <span className={idea.by === 'human' ? 'source-tag' : 'source-tag ai'}>{t(`questions.by.${idea.by}`)}</span>
+            <button className="btn-link idea-change" onClick={onBack}>{t('questions.change')}</button>
+          </div>
+          <p className="idea-fixed">{idea.text}</p>
+        </div>
+        {list}
+        {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
+        <div className="stream-actions spread">
+          <span className="muted">{t('questions.count', { count: chosen, total: found.length + added.length })}</span>
+          <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('questions.approve')}</button>
+        </div>
+      </section>
+    </>
+  )
+}
+
+/** Найденный вопрос: откуда он, почему и на него какие предложения группы отвечают. */
+function QuestionItem({ question, fragments, removed, busy, onToggle }: Readonly<{
+  question: OpenQuestion; fragments: Map<number, LabeledFragment>; removed: boolean; busy: boolean
+  onToggle: () => void
+}>) {
+  const { t } = useTranslation()
+  const fromModels = question.source === 'inferred' || question.source === 'discovered'
+  return (
+    <li className={removed ? 'question removed' : 'question'}>
+      <div className="question-head">
+        <span className="fragment-id">{question.id}</span>
+        <span className={fromModels ? 'source-tag ai' : 'source-tag'}>{t(`questions.source.${question.source}`)}</span>
+        <span className="question-text">{question.text}</span>
+        {removed && <span className="group-tag">{t('questions.removedTag')}</span>}
+        <button className="btn-secondary" disabled={busy} onClick={onToggle}>
+          {t(removed ? 'questions.restore' : 'questions.remove')}
+        </button>
+      </div>
+      {question.reason && <p className="question-why">{t('questions.why', { reason: question.reason })}</p>}
+      {question.proposal_ids.length > 0 && (
+        <details className="question-proposals">
+          <summary>{t('questions.proposals', { count: question.proposal_ids.length })}</summary>
+          <ul>
+            {question.proposal_ids.map(id => (
+              <li key={id}><span className="fragment-id">F{id}</span> {fragments.get(id)?.text ?? '—'}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </li>
+  )
+}
+
+/** Шаг «Варианты» пока не готов: здесь отобранные вопросы и дорога назад, к отбору. */
+function OptionsStep({ stream, onBack }: Readonly<{ stream: Stream; onBack: () => void }>) {
+  const { t } = useTranslation()
+  const scope = stream.scope
+  if (!scope) return null
+  return (
+    <>
+      <section className="card panel" aria-labelledby="step-title">
+        <p className="next-caps">{t('options.caps')}</p>
+        <h2 id="step-title" className="panel-title large">{t('options.title')}</h2>
+        <p className="panel-hint">{t('options.hint')}</p>
+      </section>
+      <Panel title={t('options.scope')} caps aside={<button className="btn-link" onClick={onBack}>{t('options.change')}</button>}>
+        <ol className="questions">
+          {scope.map(question => (
+            <li key={question.id} className="question">
+              <div className="question-head">
+                <span className="fragment-id">{question.id}</span>
+                <span className="question-text">{question.text}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
       </Panel>
-      <div className="card placeholder">{t('questions.stub')}</div>
+      <div className="card placeholder">{t('options.stub')}</div>
     </>
   )
 }

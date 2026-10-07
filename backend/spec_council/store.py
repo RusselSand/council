@@ -15,7 +15,7 @@ from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from .models import Council, CouncilStatus, IdeaDiscovery, Slicing, Structure
+from .models import Council, CouncilStatus, IdeaDiscovery, QuestionDiscovery, Slicing, Structure
 
 log = logging.getLogger(__name__)
 
@@ -160,20 +160,20 @@ def interrupted(council: Council) -> Council:
         state = getattr(council, field)
         if running(state):
             changes[field] = halted(state)
-    if council.streams and any(running(stream.discovery) for stream in council.streams):
-        changes["streams"] = [
-            stream.model_copy(update={"discovery": halted(stream.discovery)})
-            if running(stream.discovery) else stream
-            for stream in council.streams
-        ]
+    streams = [stream.model_copy(update={
+        field: halted(getattr(stream, field))
+        for field in ("discovery", "questions") if running(getattr(stream, field))
+    }) for stream in council.streams or []]
+    if streams != (council.streams or []):
+        changes["streams"] = streams
     return council.model_copy(update=changes) if changes else council
 
 
-def running(state: Slicing | Structure | IdeaDiscovery | None) -> bool:
+def running(state: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | None) -> bool:
     return state is not None and state.state == "running"
 
 
-def halted[S: (Slicing, Structure, IdeaDiscovery)](state: S) -> S:
+def halted[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Council, CouncilPatch, IdeaDiscovery, Label, Settings, Slicing, Stream, StreamIdea, Structure } from '../api'
+import type {
+  Council, CouncilPatch, IdeaDiscovery, Label, QuestionDiscovery, Settings, Slicing, Stream, StreamIdea, Structure,
+} from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
 import { en } from '../i18n/en'
@@ -100,12 +102,36 @@ const FOUND: IdeaDiscovery = {
 }
 /** Идея группы A — из текста: F1. */
 const TEXT_IDEA: StreamIdea = { text: 'Хочу воркер.', by: 'text', evidence: [1] }
-/** Совет с подтверждёнными группами: у A идея записана в тексте, у B её ищет совет. */
+const QUESTIONS_SEEKING: QuestionDiscovery = {
+  state: 'running', run: 'q1', idea: 'Хочу воркер.', questions: [], error: null, steps: [
+    { name: 'question_discovery', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
+    { name: 'question_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
+  ],
+}
+const QUESTIONS_FOUND: QuestionDiscovery = {
+  ...QUESTIONS_SEEKING, state: 'done',
+  steps: [
+    { name: 'question_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+    { name: 'question_judge', state: 'done', runs: [run('fable', 'done')] },
+  ],
+  questions: [
+    { id: 'Q1', text: 'Где хранить состояние?', source: 'inferred', source_question_id: null, proposal_ids: [2],
+      reason: 'F2 отвечает на незаписанный вопрос' },
+    { id: 'Q2', text: 'Как понять, что воркер не теряет результат?', source: 'discovered', source_question_id: null,
+      proposal_ids: [], reason: 'без меры идею не проверить' },
+  ],
+}
+/**
+ * Совет с подтверждёнными группами: у A идея записана в тексте, у B её ищет совет. more —
+ * что ещё у потоков: вопросы, отбор.
+ */
 const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED,
-                   ideas: Partial<Record<'A' | 'B', StreamIdea>> = {}): Council => ({
+                   ideas: Partial<Record<'A' | 'B', StreamIdea>> = {},
+                   more: Partial<Record<'A' | 'B', Partial<Stream>>> = {}): Council => ({
   ...COUNCIL, status: 'review', slicing: DONE, structure,
-  streams: [{ group: 'A', discovery: null, idea: ideas.A ?? null },
-            { group: 'B', discovery: search, idea: ideas.B ?? null }] satisfies Stream[],
+  streams: [{ group: 'A', discovery: null, idea: ideas.A ?? null, questions: null, scope: null, ...more.A },
+            { group: 'B', discovery: search, idea: ideas.B ?? null, questions: null, scope: null, ...more.B },
+  ] satisfies Stream[],
 })
 
 /** Совет с другими типами фрагментов — как их сохранил бы сервер. */
@@ -154,7 +180,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|questions(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -259,7 +285,7 @@ describe('Подтверждение групп и потоки', () => {
     expect(within(nav).getByText('Потоки · 2')).toBeTruthy()
     const links = within(nav).getAllByRole('link')
     expect(links.map(link => link.textContent)).toEqual([
-      `AВоркер${ru['streams.yourMove']}`, `BХранение${ru['streams.seeking']}`])
+      `AВоркер${ru['streams.group.yours']}`, `BХранение${ru['streams.group.seeking']}`])
     expect(links[0].getAttribute('aria-current')).toBe('page')
     expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()
     expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.done'])
@@ -364,15 +390,18 @@ describe('Поток: группа и идея', () => {
     renderAt(`/councils/demo-1/streams/${group}`)
   }
 
-  it('идея из текста: её только утверждают, и поток уходит к вопросам', async () => {
-    openStream('A', () => confirmed(), () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA })))
+  it('идея из текста: её только утверждают, и поток уходит к вопросам — их ищет ИИ', async () => {
+    openStream('A', () => confirmed(),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } })))
     expect(await screen.findByText(ru['idea.textNote'])).toBeTruthy()
     expect(screen.queryByRole('textbox')).toBeNull()
     fireEvent.click(approveButton())
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } }])
     expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
-    expect(screen.getByText(ru['questions.stub'])).toBeTruthy()
+    expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(ru['step.question_discovery'])).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
     expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
@@ -452,7 +481,8 @@ describe('Поток: группа и идея', () => {
     const own: StreamIdea = { text: 'Своя идея', by: 'human', evidence: [] }
     openStream('B', () => confirmed(failed, GROUPED, { B: own }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(screen.getByText(`Сейчас · поток B · ${ru['now.idle']}`)).toBeTruthy()
+    expect(screen.getByText(`Сейчас · поток B · ${ru['now.yours']}`)).toBeTruthy()
+    expect(screen.getByText(ru['questions.notSought'], { exact: false })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
     expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
@@ -480,12 +510,62 @@ describe('Поток: группа и идея', () => {
 
       pending[0](confirmed(FOUND))                  // в нём A ещё не утверждена, а B уже нашла идею
       const link = (name: RegExp) => within(nav).getByRole('link', { name })
-      await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.yourMove']))
-      expect(link(/Воркер/).textContent).toContain(ru['streams.atQuestions'])
+      await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.group.yours']))
+      expect(link(/Воркер/).textContent).toContain(ru['streams.questions.yours'])
       expect(screen.getByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('вопросы: происхождение, причина, предложения; убрать, вернуть, свой — и отбор уходит на сервер', async () => {
+    const chosen = { questions: QUESTIONS_FOUND, scope: [QUESTIONS_FOUND.questions[0],
+      { id: 'Q3', text: 'Кто платит за хостинг?', source: 'added' as const, source_question_id: null, proposal_ids: [], reason: null }] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: chosen })))
+    const list = await screen.findByRole('list', { name: ru['questions.found'] })
+    const item = (n: number) => list.children[n] as HTMLElement   // вопросы, без вложенных предложений
+    const first = item(0)
+    expect(within(first).getByText('Где хранить состояние?')).toBeTruthy()
+    expect(within(first).getByText('почему: F2 отвечает на незаписанный вопрос')).toBeTruthy()
+    expect(within(first).getByText('Состояние держать в файлах, без базы.', { exact: false })).toBeTruthy()
+    expect(screen.getByText('Решать 2 из 2')).toBeTruthy()
+
+    const second = item(1)
+    fireEvent.click(within(second).getByRole('button', { name: ru['questions.remove'] }))
+    expect(within(second).getByText(ru['questions.removedTag'])).toBeTruthy()
+    expect(screen.getByText('Решать 1 из 2')).toBeTruthy()
+    fireEvent.click(within(second).getByRole('button', { name: ru['questions.restore'] }))
+    fireEvent.click(within(second).getByRole('button', { name: ru['questions.remove'] }))
+
+    const own = screen.getByRole('textbox', { name: ru['questions.own'] })
+    fireEvent.change(own, { target: { value: '  Кто платит за хостинг? ' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.add'] }))
+    expect(within(list).getByText('Кто платит за хостинг?')).toBeTruthy()
+    expect(screen.getByText('Решать 2 из 3')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.approve'] }))
+    expect(await screen.findByRole('heading', { name: ru['options.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'questions',
+                                   body: { run: 'g1', revision: 0, keep: ['Q1'], added: ['Кто платит за хостинг?'] } }])
+    expect(screen.getByText(ru['options.stub'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['options.change'] }))
+    expect(await screen.findByText('Решать 2 из 3')).toBeTruthy()      // черновик — от утверждённого отбора
+  })
+
+  it('поиск вопросов упал — причина, повтор; своими вопросами отбор всё равно возможен', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: failed } }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }), 202))
+    expect((await screen.findByRole('alert')).textContent).toBe('Нет подключения к моделям: GPT-5.6 Sol')
+    const approve = screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement
+    expect(approve.disabled).toBe(true)
+    fireEvent.change(screen.getByRole('textbox', { name: ru['questions.own'] }), { target: { value: 'Свой' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.add'] }))
+    expect(approve.disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'questions/discovery', body: undefined }])
   })
 
   it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {

@@ -268,6 +268,27 @@ button.chain-step:hover { background: var(--surface-sunken) }
   .streams-side { grid-column: auto }
 }
 
+/* Шаг «Вопросы»: вопросы — под идеей, с отступом, как ответы к ней. */
+.idea-change { margin-left: auto; font-size: 12.5px }
+.questions { display: grid; gap: 8px; margin: 14px 0 0 18px; padding: 0; list-style: none }
+.question { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface) }
+.question-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px }
+.question-text { flex: 1; min-width: 12ch; font-weight: 600 }
+.question-head .btn-secondary { margin-left: auto; padding: 3px 12px; font-size: 12.5px }
+/* Убранный — приглушён цветом, а не прозрачностью: так текст не теряет контраста. */
+.question.removed { border-style: dashed; background: var(--surface-sunken) }
+.question.removed .question-text { color: var(--fg-muted); font-weight: 500; text-decoration: line-through }
+.question-why { margin: 4px 0 0; color: var(--fg-muted); font-size: 12.5px }
+.question-proposals { margin-top: 6px; font-size: 12.5px }
+.question-proposals summary { cursor: pointer; color: var(--go-text); font-weight: 600 }
+.question-proposals ul { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 4px; list-style: none }
+.question-add { display: flex; gap: 8px; margin: 10px 0 0 18px }
+.question-add .text-field { flex: 1; min-width: 0; padding: 8px 12px; font-weight: 400 }
+.stream-actions.spread { flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px }
+@media (max-width: 600px) {
+  .questions, .question-add { margin-left: 0 }
+}
+
 /* Светофор точкой: в списках, легенде, на карточках советов. */
 .light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }
 .light-dot.done, .light-dot.running { background: var(--go); box-shadow: none }

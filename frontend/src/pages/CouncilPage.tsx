@@ -26,14 +26,15 @@ export type Stage = (typeof STAGES)[number]
 
 
 /**
- * Потоки из ответа опроса. Берутся только поиски идей, что на экране ещё идут, и только если
- * на сервере это тот же ход: запоздалый ответ не затрёт утверждённую здесь идею. На сервере
- * потоки уже другие (группы поправили в другой вкладке) — берём их целиком.
+ * Потоки из ответа опроса. Берутся только потоки, где на экране ещё идёт поиск идеи или
+ * вопросов, и только если на сервере это те же ходы: запоздалый ответ не затрёт утверждённые
+ * здесь идею и отбор вопросов. На сервере потоки уже другие (группы поправили в другой
+ * вкладке) — берём их целиком.
  */
 const followed = (mine: Stream[], fresh: Stream[] | null): Stream[] | null => {
-  const same = (stream: Stream) =>
-    fresh?.find(f => f.group === stream.group && f.discovery?.run === stream.discovery?.run)
-  const live = mine.filter(stream => stream.discovery?.state === 'running')
+  const same = (stream: Stream) => fresh?.find(f => f.group === stream.group
+    && f.discovery?.run === stream.discovery?.run && f.questions?.run === stream.questions?.run)
+  const live = mine.filter(stream => stream.discovery?.state === 'running' || stream.questions?.state === 'running')
   if (live.some(stream => !same(stream))) return fresh
   return mine.map(stream => (live.includes(stream) ? same(stream) ?? stream : stream))
 }

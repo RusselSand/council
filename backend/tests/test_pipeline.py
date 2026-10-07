@@ -5,7 +5,7 @@ import json
 import pytest
 
 from spec_council.models import LabeledFragment, StepName
-from spec_council.pipeline import GroupingRun, IdeaRun, ModelFailed, SlicingRun
+from spec_council.pipeline import GroupingRun, IdeaRun, ModelFailed, QuestionRun, SlicingRun
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -394,3 +394,60 @@ def test_judge_leaning_on_a_fragment_outside_the_group_fails_the_search():
     assert result.state == "failed"
     assert "F1 нет в группе" in result.steps[1].runs[0].error
     assert runner.forgotten == [k for k in runner.keys if "-idea_judge-" in k]
+
+
+# --- вопросы потока
+
+QUESTION_FRAGMENTS = [*GROUP_FRAGMENTS,
+                      LabeledFragment(id=6, text="Кто платит за хостинг?", label="question",
+                                      reason="", council_label="question")]
+HOW = "Как должен выполняться поиск?"
+
+
+def asked(*questions):
+    return {"questions": [{"text": text, "source": source, "source_question_id": question,
+                           "proposal_ids": proposals, "reason": f"почему: {text}"}
+                          for text, source, question, proposals in questions]}
+
+
+def question_it(replies):
+    runner = FakeRunner(replies)
+    result = QuestionRun("c1", FIND, QUESTION_FRAGMENTS, ["sol", "fable"], "fable", runner,
+                         lambda _: None).run()
+    return result, runner
+
+
+def test_same_questions_from_everyone_need_no_judge_and_text_questions_stay_word_for_word():
+    same = asked((HOW, "inferred", None, ["F2", "F3"]), ("Кто платит?", "user", "F6", []))
+    result, runner = question_it({("question_discovery", "sol"): same,
+                                  ("question_discovery", "fable"): same})
+    assert result.state == "done"
+    assert [(q.id, q.text, q.source, q.proposal_ids) for q in result.questions] == [
+        ("Q1", HOW, "inferred", [2, 3]), ("Q2", "Кто платит за хостинг?", "user", [])]
+    assert {s.name.value: s.state for s in result.steps}["question_judge"] == "skipped"
+    prompt = runner.asked["question_discovery", "sol"]
+    assert FIND in prompt and '"id": "F6"' in prompt
+    assert result.idea == FIND
+
+
+def test_different_lists_go_to_the_judge_and_a_dropped_text_question_comes_back():
+    result, runner = question_it({
+        ("question_discovery", "sol"): asked((HOW, "inferred", None, ["F2", "F3"])),
+        ("question_discovery", "fable"): asked(("Где искать?", "inferred", None, ["F2"]),
+                                               ("Кто платит?", "user", "F6", [])),
+        ("question_judge", "fable"): asked(("Где человек ищет ответ?", "inferred", None,
+                                            ["F2", "F3"]))})
+    assert [(q.id, q.text, q.source) for q in result.questions] == [
+        ("Q1", "Где человек ищет ответ?", "inferred"), ("Q2", "Кто платит за хостинг?", "user")]
+    prompt = runner.asked["question_judge", "fable"]
+    assert HOW in prompt and "Где искать?" in prompt
+    assert "sol" not in prompt and "fable" not in prompt
+
+
+def test_a_judge_answer_without_a_list_fails_the_search():
+    result, _ = question_it({
+        ("question_discovery", "sol"): asked((HOW, "inferred", None, ["F2"])),
+        ("question_discovery", "fable"): asked(("Где искать?", "discovered", None, [])),
+        ("question_judge", "fable"): {"status": "ok"}})
+    assert result.state == "failed"
+    assert "questions" in result.steps[1].runs[0].error
