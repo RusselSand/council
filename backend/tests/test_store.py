@@ -1,6 +1,7 @@
 """Советы в файлах: переживают перезапуск, прерванные ходы после него — упавшие."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -109,3 +110,12 @@ def test_data_folder_comes_from_the_environment_or_next_to_env(tmp_path, monkeyp
     (tmp_path / ".env").write_text("AGENT_WORKERS_TOKEN=x\n", encoding="utf-8")
     assert data_folder() == (tmp_path / ".data").resolve()
 
+
+def test_a_folder_that_cannot_be_written_stops_the_start_with_a_reason(tmp_path, monkeypatch):
+    # Каталог, созданный docker от root, а бэкенд под COUNCIL_UID: прочитать можно, писать нет.
+    def refused(path, *_, **__):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(Path, "write_text", refused)
+    with pytest.raises(RuntimeError, match="нельзя писать"):
+        FileStore(tmp_path)

@@ -40,11 +40,13 @@ services:
         source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
         target: /data/accounts/fable
         bind: { create_host_path: true }
-      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку.
+      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
+      # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
+      # туда писать. .data есть в репозитории, свой путь создайте заранее.
       - type: bind
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
-        bind: { create_host_path: true }
+        bind: { create_host_path: false }
     environment:
       <<: *paths
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
@@ -92,11 +94,13 @@ services:
         source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
         target: /data/accounts/fable
         bind: { create_host_path: true }
-      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку.
+      # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
+      # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
+      # туда писать. .data есть в репозитории, свой путь создайте заранее.
       - type: bind
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
-        bind: { create_host_path: true }
+        bind: { create_host_path: false }
     environment: *paths
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.

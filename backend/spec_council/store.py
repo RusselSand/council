@@ -99,7 +99,7 @@ class FileStore(InMemoryStore):
     записалась — правки нет. Каталог — одного процесса: второй не увидел бы чужих правок."""
 
     def __init__(self, folder: Path) -> None:
-        folder.mkdir(parents=True, exist_ok=True)
+        writable(folder)
         self._folder = folder
         councils = []
         for path in sorted(folder.glob("*.json")):
@@ -124,6 +124,21 @@ class FileStore(InMemoryStore):
         part = path.with_name(f"{path.name}.part")
         part.write_text(council.model_dump_json(indent=2), encoding="utf-8")
         os.replace(part, path)
+
+
+def writable(folder: Path) -> None:
+    """Каталог советов есть, и в него можно писать — проверяем при старте. Иначе сервер
+    поднялся бы, показал список, а упал бы на первом же новом совете. Так бывает на Linux,
+    когда каталог создал docker от root, а бэкенд работает под COUNCIL_UID."""
+    probe = folder / ".write-check"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise RuntimeError(
+            f"В каталог советов {folder} нельзя писать: {exc}. Он должен принадлежать тому, "
+            "под кем работает бэкенд, — см. README, «Где хранятся советы»") from exc
 
 
 def interrupted(council: Council) -> Council:
