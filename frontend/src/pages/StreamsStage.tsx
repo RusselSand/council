@@ -267,7 +267,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
     }
   }, onApproved)
   const seekAgain = () => void retry.go(() => startOrFollow(
-    () => api.seekIdea(council.id, group.id), council.id, c => streamOf(c, group.id)?.discovery))
+    () => api.seekIdea(council.id, group.id), council, c => streamOf(c, group.id)?.discovery))
   // Устаревшие группы заново не ищут: сервер откажет, пока их не разложат заново.
 
   let idea
@@ -464,7 +464,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
     }
   }
   const seek = () => void retry.go(() => startOrFollow(
-    () => api.seekQuestions(council.id, group.id), council.id, c => streamOf(c, group.id)?.questions))
+    () => api.seekQuestions(council.id, group.id), council, c => streamOf(c, group.id)?.questions))
   // Устаревшие группы заново не ищут: сервер откажет, пока их не разложат заново.
   const stale = structureIsStale(council)
   const submit = () => void approve.go(async () => {

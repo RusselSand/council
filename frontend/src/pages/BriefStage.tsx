@@ -41,7 +41,7 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
 
   // Нарезают сохранённый текст, поэтому сначала сохранить, потом запускать.
   const slice = () => go(
-    async () => (await saver.flush()) ? startOrFollow(() => api.startSlicing(council.id), council.id, c => c.slicing) : null,
+    async () => (await saver.flush()) ? startOrFollow(() => api.startSlicing(council.id), council, c => c.slicing) : null,
     () => nav(councilPath(council.id, 'slices')),
   )
 

@@ -601,6 +601,18 @@ describe('Поток: группа и идея', () => {
     expect(screen.queryByText(ru['questions.seeking'], { exact: false })).toBeNull()
   })
 
+  it('повтор, который другая вкладка уже запустила и даже довела до конца, — показан её итог', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    let current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: failed } })
+    openStream('A', () => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: { ...QUESTIONS_FOUND, run: 'q2' } } })
+      return json({ detail: 'Этот ход уже запустили' }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText('Где хранить состояние?')).toBeTruthy()
+    expect(screen.queryByText('Этот ход уже запустили')).toBeNull()
+  })
+
   it('по устаревшим группам вопросы заново не ищут', async () => {
     const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     const stale = { ...GROUPED, labels: { 1: 'idea' as const, 2: 'risk' as const } }

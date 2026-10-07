@@ -285,6 +285,9 @@ def test_the_idea_does_not_change_while_its_questions_are_sought(agents):
     res = approve(council_id, "B", "Другая идея")
     assert res.status_code == 423
     assert streams_of(council_id)["B"].idea.text == IDEA_B
+    # Та же идея ничего не меняет — повтор (другая вкладка, потерянный ответ) не отказ.
+    assert approve(council_id, "B", IDEA_B).status_code == 200
+    assert streams_of(council_id)["B"].questions.state == "running"
     assert choose(council_id, "B", ["Q1"]).status_code == 409
     assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
 

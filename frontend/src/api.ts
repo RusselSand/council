@@ -190,21 +190,24 @@ export const api = {
 }
 
 /**
- * Запустить ход совета (нарезку, группы, поиск идеи или вопросов). Если он уже идёт (409:
- * вторая вкладка, повторный клик, потерянный ответ на прошлый запуск) — вернуть совет с
- * идущим, чтобы экран за ним следил. run — где этот ход в совете. 409 бывает и не про это:
- * группы устарели, идея уже утверждена, — тогда ход не идёт, и это отказ словами сервера,
- * как и временный (503, 423).
+ * Запустить ход совета (нарезку, группы, поиск идеи или вопросов). Если его уже запустили
+ * (409: вторая вкладка, повторный клик, потерянный ответ на прошлый запуск) — вернуть совет с
+ * ним, чтобы экран за ним следил: он идёт или на месте уже не тот ход, что был на экране, —
+ * пусть даже успел закончиться. run — где этот ход в совете, onScreen — совет на экране.
+ * 409 бывает и не про это: группы устарели, идея уже утверждена, — тогда ход на месте прежний
+ * и не идёт, и это отказ словами сервера, как и временный (503, 423).
  */
-export const startOrFollow = async (start: () => Promise<Council>, id: string,
-                                    run: (council: Council) => { state: string } | null | undefined,
+export const startOrFollow = async (start: () => Promise<Council>, onScreen: Council,
+                                    run: (council: Council) => { state: string; run: string } | null | undefined,
 ): Promise<Council> => {
+  const shown = run(onScreen)?.run
   try {
     return await start()
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
-      const council = await api.council(id)
-      if (run(council)?.state === 'running') return council
+      const council = await api.council(onScreen.id)
+      const now = run(council)
+      if (now && (now.state === 'running' || now.run !== shown)) return council
     }
     throw e
   }

@@ -128,7 +128,9 @@ def approve_idea(council_id: str, group: str, edit: ApproveIdea, store: StoreDep
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         idea = idea_for(council, stream, group, edit.text)
-        if running(stream.questions):
+        # Другую идею, пока к нынешней ищут вопросы, не утвердить: их поиск пришлось бы бросить.
+        # Ту же — можно: ничего не меняется, это повтор (другая вкладка, потерянный ответ).
+        if running(stream.questions) and asks_anew(stream, idea):
             raise HTTPException(423, "Совет ещё ищет вопросы к прежней идее — дождитесь его")
         return council, asks_anew(stream, idea)
 
