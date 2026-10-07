@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from spec_council import deps
 from spec_council import store as store_module
 from spec_council.deps import data_folder
 from spec_council.models import (
@@ -109,6 +110,18 @@ def test_data_folder_comes_from_the_environment_or_next_to_env(tmp_path, monkeyp
 
     (tmp_path / ".env").write_text("AGENT_WORKERS_TOKEN=x\n", encoding="utf-8")
     assert data_folder() == (tmp_path / ".data").resolve()
+
+
+def test_a_custom_folder_inside_the_repository_is_refused(tmp_path, monkeypatch):
+    # Внутри репозитория прикрыт только .data: другой каталог попал бы в git и в сборку докера.
+    monkeypatch.setattr(deps, "repository", lambda: tmp_path)
+    monkeypatch.setenv("COUNCIL_DATA", str(tmp_path / "councils"))
+    with pytest.raises(RuntimeError, match="внутри репозитория"):
+        data_folder()
+    monkeypatch.setenv("COUNCIL_DATA", str(tmp_path / ".data"))
+    assert data_folder() == tmp_path / ".data"
+    monkeypatch.setenv("COUNCIL_DATA", str(tmp_path.parent / "elsewhere"))
+    assert data_folder() == tmp_path.parent / "elsewhere"
 
 
 def test_a_folder_that_cannot_be_written_stops_the_start_with_a_reason(tmp_path, monkeypatch):

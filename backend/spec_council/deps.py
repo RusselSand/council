@@ -27,10 +27,27 @@ def data_folder() -> Path:
     """COUNCIL_DATA из окружения или .env; без него — .data в корне репозитория (рядом с
     .env или, без него, над каталогом backend). Не в текущем каталоге: бэкенд запускают из
     backend с --reload, и каждая запись совета перезапускала бы сервер. Относительный путь
-    из .env считается от его каталога, как у каталогов учётных записей моделей."""
+    из .env считается от его каталога, как у каталогов учётных записей моделей.
+
+    Свой каталог — только вне репозитория: внутри от git и сборки докера прикрыт лишь .data,
+    а другой каталог попал бы в коммит или в контекст сборки вместе с советами."""
     settings = Settings.load()
     root = settings.path.parent if settings.path else Path(__file__).resolve().parents[2]
-    return settings.path_of("COUNCIL_DATA") or (root / ".data").resolve()
+    folder = settings.path_of("COUNCIL_DATA") or (root / ".data").resolve()
+    repo = repository()
+    if repo is not None and folder.is_relative_to(repo) and folder != repo / ".data":
+        raise RuntimeError(
+            f"Каталог советов {folder} внутри репозитория: оттуда советы попали бы в git и в "
+            "сборку докера. Укажите в COUNCIL_DATA каталог вне репозитория или уберите его — "
+            "тогда советы лягут в .data")
+    return folder
+
+
+def repository() -> Path | None:
+    """Корень репозитория, из которого запущен бэкенд. None — запущен не из него: в докере
+    код смонтирован без .git, и каталог советов там свой, /data/councils."""
+    here = Path(__file__).resolve()
+    return next((folder for folder in here.parents if (folder / ".git").exists()), None)
 
 
 def get_config() -> AppConfig:
