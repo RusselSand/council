@@ -243,6 +243,7 @@ export const ru = {
   'idea.fragments': 'Фрагменты группы',
   'idea.approve': 'Утвердить идею → искать вопросы',
   'idea.approveFailed': 'Не удалось утвердить идею: сервер недоступен или ответил ошибкой.',
+  'idea.questionsRunning': 'ИИ ищет вопросы к этой идее — поменять её можно, когда он закончит.',
 
   'questions.caps': 'Вопросы · вы',
   'questions.title': 'Отбор вопросов',
@@ -270,6 +271,7 @@ export const ru = {
   'questions.removedTag': 'убран',
   'questions.own': 'Свой вопрос…',
   'questions.add': 'Добавить',
+  'questions.twice': 'Такой вопрос уже есть в отборе.',
   'questions.count': 'Решать {{count}} из {{total}}',
   'questions.approve': 'Утвердить вопросы → подобрать варианты',
   'questions.approveFailed': 'Не удалось утвердить вопросы: сервер недоступен или ответил ошибкой.',

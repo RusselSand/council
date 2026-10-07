@@ -225,10 +225,11 @@ def asks(council_id, group):
     return client.post(f"/api/councils/{council_id}/streams/{group}/questions/discovery")
 
 
-def choose(council_id, group, keep, added=(), revision=0):
+def choose(council_id, group, keep, added=(), revision=0, questions_run=None):
+    run = questions_run or streams_of(council_id)[group].questions.run
     return client.post(f"/api/councils/{council_id}/streams/{group}/questions",
-                       json={"run": "g1", "revision": revision, "keep": list(keep),
-                             "added": list(added)})
+                       json={"run": "g1", "revision": revision, "questions_run": run,
+                             "keep": list(keep), "added": list(added)})
 
 
 def test_an_approved_idea_starts_the_search_for_questions(agents):
@@ -317,8 +318,19 @@ def test_a_senseless_scope_is_refused(agents, keep, added, problem):
     assert streams_of(council_id)["C"].scope is None
 
 
+def test_a_choice_made_for_an_earlier_search_is_refused(agents):
+    # Другая вкладка нашла вопросы заново: их номера снова с Q1, и «Q1» — уже другой вопрос.
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    res = choose(council_id, "C", ["Q1"], questions_run="прежний")
+    assert res.status_code == 409
+    assert "заново" in res.json()["detail"]
+    assert streams_of(council_id)["C"].scope is None
+
+
 def test_no_scope_before_the_idea(agents):
     council_id = grouped()
     confirm(council_id)
-    assert choose(council_id, "C", [], ["Свой"]).status_code == 409
+    assert choose(council_id, "C", [], ["Свой"], questions_run="нет").status_code == 409
     assert asks(council_id, "C").status_code == 409

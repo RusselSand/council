@@ -45,6 +45,9 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
 }>) {
   const { t } = useTranslation()
   const [chosen, setView] = useState<ChainStep>(currentStep(stream))
+  // Утверждение отбора — здесь, а не в шаге: отказ (409) приносит новый поиск, шаг рисуется
+  // заново, а ошибка должна остаться видна.
+  const choosing = useAction(onChange, 'questions.approveFailed')
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
@@ -75,7 +78,7 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         {view === 'questions' && (
           // Новый поиск вопросов — и отбор заново, к его вопросам.
           <QuestionsStep key={stream.questions?.run ?? ''} council={council} structure={structure}
-                         stream={stream} group={group} onChange={onChange}
+                         stream={stream} group={group} onChange={onChange} approve={choosing}
                          onBack={() => setView('group')} onApproved={() => setView('options')} />
         )}
         {view === 'options' && <OptionsStep stream={stream} onBack={() => setView('questions')} />}
@@ -250,7 +253,9 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
   const sought = search?.state === 'running'
   const text = group.missing_idea ? squash(draft) : null
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
-  const canApprove = !busy && !sought && text !== '' && !structureIsStale(council)
+  // Пока ИИ ищет вопросы к идее, её не поменять: сервер ответит 423.
+  const asking = stream.questions?.state === 'running'
+  const canApprove = !busy && !sought && !asking && text !== '' && !structureIsStale(council)
 
   const submit = () => void approve.go(async () => {
     try {
@@ -309,6 +314,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
           })}
         </ol>
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
+        {asking && <p className="fragment-note">{t('idea.questionsRunning')}</p>}
         <div className="stream-actions">
           <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('idea.approve')}</button>
         </div>
@@ -410,9 +416,10 @@ function IdeaOptions({ search, draft, models, busy, onTake }: Readonly<{
  * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
  * выбирают. Черновик отбора — к нынешнему поиску; утверждённый отбор — его начало.
  */
-function QuestionsStep({ council, structure, stream, group, onChange, onBack, onApproved }: Readonly<{
+function QuestionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
-  onChange: (council: Council) => void; onBack: () => void; onApproved: () => void
+  onChange: (council: Council) => void; approve: ReturnType<typeof useAction>
+  onBack: () => void; onApproved: () => void
 }>) {
   const { t } = useTranslation()
   const search = stream.questions
@@ -423,7 +430,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, onBack, on
   const [added, setAdded] = useState<string[]>(
     () => scope?.filter(q => q.source === 'added').map(q => q.text) ?? [])
   const [draft, setDraft] = useState('')
-  const approve = useAction(onChange, 'questions.approveFailed')
+  const [twice, setTwice] = useState(false)   // свой вопрос совпал с тем, что уже в отборе
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = search?.state === 'running'
@@ -444,14 +451,19 @@ function QuestionsStep({ council, structure, stream, group, onChange, onBack, on
     event.preventDefault()
     const text = squash(draft)
     if (!text) return
-    if (!added.some(own => squash(own).toLowerCase() === text.toLowerCase())) setAdded([...added, text])
-    setDraft('')
+    // Сравнение — как на сервере: совпавший с оставленным или своим вопрос он всё равно бы выкинул.
+    const there = [...kept.map(q => q.text), ...added].some(own => sameQuestion(own) === sameQuestion(text))
+    setTwice(there)
+    if (!there) {
+      setAdded([...added, text])
+      setDraft('')
+    }
   }
   const seek = () => void retry.go(() => startOrFollow(() => api.seekQuestions(council.id, group.id), council.id))
   const submit = () => void approve.go(async () => {
     try {
       return await api.approveScope(council.id, { run: structure.run, revision: structure.revision },
-                                    group.id, kept.map(q => q.id), added)
+                                    group.id, search?.run ?? '', kept.map(q => q.id), added)
     } catch (e) {
       // Группы уже другие (поправили в другой вкладке) — показываем нынешние.
       if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
@@ -500,11 +512,13 @@ function QuestionsStep({ council, structure, stream, group, onChange, onBack, on
       </ol>
       <form className="question-add" onSubmit={add}>
         <input className="text-field" aria-label={t('questions.own')} placeholder={t('questions.own')}
-               value={draft} maxLength={500} readOnly={locked} onChange={e => setDraft(e.target.value)} />
+               value={draft} maxLength={500} readOnly={locked}
+               onChange={e => { setDraft(e.target.value); setTwice(false) }} />
         <button type="submit" className="btn-secondary" disabled={locked || squash(draft) === ''}>
           {t('questions.add')}
         </button>
       </form>
+      {twice && <p className="fragment-note question-twice">{t('questions.twice')}</p>}
     </>
   )
 
@@ -607,6 +621,9 @@ function offeredBy(search: IdeaDiscovery | null): { idea: string; evidence: numb
 
 /** Текст идеи без лишних пробелов — так его сравнивает и сервер. */
 const squash = (text: string) => text.trim().split(/\s+/).join(' ')
+
+/** Один и тот же вопрос — как считает сервер: без лишних пробелов, регистра и знака в конце. */
+const sameQuestion = (text: string) => squash(text).replace(/[.?!]+$/, '').toLowerCase()
 
 /** Номера фрагментов коротко: F1–F3, F5. */
 export function fragmentRange(ids: number[]): string {

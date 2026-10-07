@@ -311,8 +311,10 @@ class ApproveIdea(GroupsEdit):
 
 class ApproveScope(GroupsEdit):
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных (их id) и
-    свои, добавленные при отборе (тексты)."""
+    свои, добавленные при отборе (тексты). questions_run — к какому поиску (QuestionDiscovery
+    .run): каждый поиск нумерует вопросы с Q1, и отбор к прежнему лёг бы на чужие вопросы."""
 
+    questions_run: str
     keep: list[str]
     added: list[str] = []
 

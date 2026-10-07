@@ -171,11 +171,14 @@ export const api = {
   /** Искать вопросы к идее потока заново: после сбоя или без подключения к моделям. */
   seekQuestions: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/questions/discovery`, { method: 'POST' }),
-  /** Какие вопросы потоку решать: оставленные из найденных (их id) и свои (тексты). */
-  approveScope: (id: string, at: GroupsVersion, group: string, keep: string[], added: string[]) =>
+  /**
+   * Какие вопросы потоку решать: оставленные из найденных (их id) и свои (тексты). questionsRun —
+   * к какому поиску отбор: каждый нумерует вопросы с Q1, и отбор к прежнему сервер отклонит (409).
+   */
+  approveScope: (id: string, at: GroupsVersion, group: string, questionsRun: string, keep: string[], added: string[]) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/questions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, keep, added }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, questions_run: questionsRun, keep, added }),
     }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>

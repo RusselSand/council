@@ -247,6 +247,7 @@ export const en: Dict = {
   'idea.fragments': 'Group fragments',
   'idea.approve': 'Approve the idea → find questions',
   'idea.approveFailed': 'Could not approve the idea: the server is unreachable or returned an error.',
+  'idea.questionsRunning': 'The AI is looking for questions to this idea — it can be changed once the search ends.',
 
   'questions.caps': 'Questions · you',
   'questions.title': 'Choosing questions',
@@ -274,6 +275,7 @@ export const en: Dict = {
   'questions.removedTag': 'dropped',
   'questions.own': 'Your question…',
   'questions.add': 'Add',
+  'questions.twice': 'This question is already chosen.',
   'questions.count': 'Deciding {{count}} of {{total}}',
   'questions.approve': 'Approve the questions → find options',
   'questions.approveFailed': 'Could not approve the questions: the server is unreachable or returned an error.',

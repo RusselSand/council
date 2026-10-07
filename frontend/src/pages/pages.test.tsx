@@ -489,7 +489,7 @@ describe('Поток: группа и идея', () => {
     expect(screen.queryByRole('button', { name: ru['run.retry'] })).toBeNull()
   })
 
-  it('опрос подхватывает найденную идею и не затирает утверждённую в другом потоке', async () => {
+  it('опрос, ушедший до утверждения идеи, его не стирает; следующий подхватывает найденное', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     try {
       const pending: ((council: Council) => void)[] = []
@@ -499,23 +499,38 @@ describe('Поток: группа и идея', () => {
           if (first) { first = false; return json(confirmed(SEEKING)) }
           return new Promise<Response>(r => pending.push(c => r(new Response(JSON.stringify(c)))))
         }
-        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA })) })(url, init)
+        // Утвердили идею A — и совет сразу ищет к ней вопросы.
+        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA },
+                                                      { A: { questions: QUESTIONS_SEEKING } })) })(url, init)
       })
       renderAt('/councils/demo-1/streams/A')
       const nav = await streamNav()
+      const link = (name: RegExp) => within(nav).getByRole('link', { name })
       vi.advanceTimersByTime(POLL_MS)               // опрос ушёл до утверждения, ответа пока нет
       expect(pending).toHaveLength(1)
       fireEvent.click(approveButton())
-      expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+      expect(await screen.findByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
 
-      pending[0](confirmed(FOUND))                  // в нём A ещё не утверждена, а B уже нашла идею
-      const link = (name: RegExp) => within(nav).getByRole('link', { name })
+      pending[0](confirmed(FOUND))                  // в нём A ещё без идеи и без поиска вопросов
+      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
+      expect(link(/Хранение/).textContent).toContain(ru['streams.group.seeking'])   // и B — как было
+
+      vi.advanceTimersByTime(POLL_MS)               // следующий опрос — уже после утверждения
+      await waitFor(() => expect(pending).toHaveLength(2))
+      pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }))
       await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.group.yours']))
       expect(link(/Воркер/).textContent).toContain(ru['streams.questions.yours'])
-      expect(screen.getByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+      expect(await screen.findByText('Где хранить состояние?')).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByText(ru['idea.questionsRunning'])).toBeTruthy()
+    expect(approveButton().disabled).toBe(true)
   })
 
   it('вопросы: происхождение, причина, предложения; убрать, вернуть, свой — и отбор уходит на сервер', async () => {
@@ -543,11 +558,20 @@ describe('Поток: группа и идея', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['questions.add'] }))
     expect(within(list).getByText('Кто платит за хостинг?')).toBeTruthy()
     expect(screen.getByText('Решать 2 из 3')).toBeTruthy()
+    // Тот же вопрос, что оставленный, — иначе только знак в конце и регистр: не добавляется.
+    for (const twice of ['где хранить состояние', 'кто платит за хостинг!']) {
+      fireEvent.change(own, { target: { value: twice } })
+      fireEvent.click(screen.getByRole('button', { name: ru['questions.add'] }))
+      expect(screen.getByText(ru['questions.twice'])).toBeTruthy()
+      expect(screen.getByText('Решать 2 из 3')).toBeTruthy()
+    }
+    fireEvent.change(own, { target: { value: '' } })
 
     fireEvent.click(screen.getByRole('button', { name: ru['questions.approve'] }))
     expect(await screen.findByRole('heading', { name: ru['options.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'questions',
-                                   body: { run: 'g1', revision: 0, keep: ['Q1'], added: ['Кто платит за хостинг?'] } }])
+                                   body: { run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1'],
+                                           added: ['Кто платит за хостинг?'] } }])
     expect(screen.getByText(ru['options.stub'])).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['options.change'] }))
     expect(await screen.findByText('Решать 2 из 3')).toBeTruthy()      // черновик — от утверждённого отбора

@@ -221,7 +221,8 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
 def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreDep) -> Council:
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных и свои.
     Ответы он здесь не выбирает. Утвердить заново — поменять отбор. Если поиск упал, можно
-    утвердить и одни свои вопросы."""
+    утвердить и одни свои вопросы. Отбор — к тому поиску, что был на экране: нашли заново —
+    409, экран покажет новые вопросы."""
     with council_lock:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -230,6 +231,8 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
             raise HTTPException(409, "Вопросов ещё нет: сначала утвердите идею потока")
         if running(search):
             raise HTTPException(409, "Совет ещё ищет вопросы — дождитесь его")
+        if search.run != edit.questions_run:
+            raise HTTPException(409, "Вопросы уже нашли заново — отбор был к прежним")
         scope = scoped(search, edit.keep, edit.added)
         council = store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update={"scope": scope}))})
