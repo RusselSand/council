@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, isNotFound, seeking,
+  api, ApiError, councilPath, isNotFound, searchesOf, seeking,
   type Council, type CouncilPatch, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
@@ -26,15 +26,15 @@ export type Stage = (typeof STAGES)[number]
 
 
 /**
- * Потоки из ответа опроса. Берутся только потоки, где на экране ещё идёт поиск идеи или
- * вопросов, и только если на сервере это те же ходы: запоздалый ответ не затрёт утверждённые
- * здесь идею и отбор вопросов. На сервере потоки уже другие (группы поправили в другой
- * вкладке) — берём их целиком.
+ * Потоки из ответа опроса. Берутся только потоки, где на экране ещё идёт поиск идеи, вопросов
+ * или вариантов, и только если на сервере это те же ходы: запоздалый ответ не затрёт
+ * утверждённое здесь. На сервере потоки уже другие (группы поправили в другой вкладке) —
+ * берём их целиком.
  */
 const followed = (mine: Stream[], fresh: Stream[] | null): Stream[] | null => {
-  const same = (stream: Stream) => fresh?.find(f => f.group === stream.group
-    && f.discovery?.run === stream.discovery?.run && f.questions?.run === stream.questions?.run)
-  const live = mine.filter(stream => stream.discovery?.state === 'running' || stream.questions?.state === 'running')
+  const runs = (stream: Stream) => searchesOf(stream).map(run => run?.run).join()
+  const same = (stream: Stream) => fresh?.find(f => f.group === stream.group && runs(f) === runs(stream))
+  const live = mine.filter(stream => searchesOf(stream).some(run => run?.state === 'running'))
   if (live.some(stream => !same(stream))) return fresh
   return mine.map(stream => (live.includes(stream) ? same(stream) ?? stream : stream))
 }

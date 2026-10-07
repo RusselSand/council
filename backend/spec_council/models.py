@@ -30,6 +30,8 @@ class StepName(StrEnum):
     idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
     question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
     question_judge = "question_judge"          # судья сводит их в один канонический список
+    proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
+    proposal_judge = "proposal_judge"          # судья решает, какие из них показать
 
 
 class ModelRun(BaseModel):
@@ -224,10 +226,63 @@ class QuestionDiscovery(BaseModel):
     error: str | None = None
 
 
+class Proposal(BaseModel):
+    """Новый вариант ответа на открытый вопрос, найденный советом. Варианты из текста группы —
+    её фрагменты-предложения, они связаны с вопросом в OpenQuestion.proposal_ids."""
+
+    # P1, P2… — сквозь все вопросы потока.
+    id: str
+    text: str
+    reason: str
+    # Ограничения и риски группы, которые вариант учитывает.
+    constraint_ids: list[int] = []
+    risk_ids: list[int] = []
+    # Другие открытые вопросы потока, от решения которых он зависит.
+    depends_on: list[str] = []
+    # Судья счёл его обоснованно предпочтительным.
+    recommended: bool = False
+
+
+class QuestionOptions(BaseModel):
+    """Что совет нашёл к одному вопросу: новые варианты и что о них сказал судья."""
+
+    question_id: str
+    proposals: list[Proposal] = []
+    # recommended — один предпочтительный; alternatives — равноправные, выбор за человеком;
+    # none — новых обоснованных вариантов нет.
+    verdict: Literal["recommended", "alternatives", "none"]
+    # Почему так: чем различаются альтернативы или почему вариантов нет.
+    reason: str | None = None
+
+
+class ProposalDiscovery(BaseModel):
+    """Поиск новых вариантов ответа на отобранные вопросы потока: по вопросу за раз,
+    участники по отдельности, судья решает, что показать. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К какому отбору вопросов искали (id и формулировки): отобрали другие — ищут заново.
+    scope: list[str] = []
+    steps: list[Step]
+    # По вопросу, по мере готовности.
+    options: list[QuestionOptions] = []
+    error: str | None = None
+
+
+class Choice(BaseModel):
+    """Выбор человека по вопросу: вариант (Fn — из текста группы, Pn — найденный советом)
+    или None — пока не решает, вопрос уходит как unresolved."""
+
+    question_id: str
+    proposal: str | None = None
+
+
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
     её ищет совет (discovery), утверждает человек (idea); потом вопросы — их ищет совет
-    (questions), а человек отбирает, какие решать (scope)."""
+    (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
+    совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
+    (choices)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
@@ -235,6 +290,8 @@ class Stream(BaseModel):
     questions: QuestionDiscovery | None = None
     # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
     scope: list[OpenQuestion] | None = None
+    proposals: ProposalDiscovery | None = None
+    choices: list[Choice] | None = None
 
 
 class Council(BaseModel):
@@ -317,6 +374,14 @@ class ApproveScope(GroupsEdit):
     questions_run: str
     keep: list[str]
     added: list[str] = []
+
+
+class ApproveChoices(GroupsEdit):
+    """Человек утверждает выбор: по каждому отобранному вопросу — вариант или None
+    (unresolved). proposals_run — к какому поиску вариантов: их номера у каждого свои."""
+
+    proposals_run: str
+    choices: list[Choice]
 
 
 class Model(BaseModel):

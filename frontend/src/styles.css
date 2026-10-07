@@ -289,6 +289,24 @@ button.chain-step:hover { background: var(--surface-sunken) }
   .questions, .question-add { margin-left: 0 }
 }
 
+/* Шаг «Варианты»: по вопросу — карточка, варианты — переключатели, выбранный обведён. */
+.options-idea { margin: 0; color: var(--fg-soft); font-size: 13px; font-weight: 600 }
+.option-list { display: grid; gap: 8px; margin: 12px 0 0 18px; padding: 0; list-style: none }
+.option { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer }
+.option:has(input:checked) { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg) }
+.option:has(input:disabled) { cursor: default }
+.option.unresolved { border-style: dashed; background: none; color: var(--fg-soft) }
+.option input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--fg) }
+.option-body { display: grid; gap: 3px; min-width: 0 }
+.option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px }
+.option-text { flex: 1; min-width: 12ch; font-weight: 600 }
+.option-note { margin: 0; color: var(--fg-muted); font-size: 12.5px }
+section > .option-note { margin: 8px 0 0 18px }
+.question-head h3.question-text { margin: 0; font-size: inherit }
+@media (max-width: 600px) {
+  .option-list, section > .option-note { margin-left: 0 }
+}
+
 /* Светофор точкой: в списках, легенде, на карточках советов. */
 .light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }
 .light-dot.done, .light-dot.running { background: var(--go); box-shadow: none }
