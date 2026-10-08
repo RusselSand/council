@@ -13,6 +13,7 @@ from spec_council.repository import (
     judged_map,
     located,
     map_of,
+    working_copy,
 )
 from spec_council.slicing import BadAnswer
 
@@ -39,7 +40,8 @@ def test_the_inventory_is_the_working_copy_files_and_its_commit(repo):
     found = inventory(repo / "api")                                  # из подкаталога — корень
     assert found.root == repo.resolve()
     assert found.files == (".gitignore", "api/deps.py", "new.py")
-    assert len(found.commit_sha) == 40 and found.dirty
+    assert len(found.commit_sha) == 40
+    assert found.dirty
 
 
 def test_a_clean_working_copy_is_not_dirty_and_a_big_one_is_cut(repo, monkeypatch):
@@ -95,7 +97,7 @@ def test_links_go_only_to_known_findings():
                      {"area": "Auth", "status": "half"}],
         "unknowns": [{"question": "Есть ли прокси?", "investigate": ["Caddyfile", ""]}],
         "documentation_conflicts": [{"doc": "README", "code": "иначе"}, "строкой", 3]}, CONTEXT)
-    assert result.flows[0].steps[0].finding_ids == ["R1"] and len(result.flows[0].steps) == 1
+    assert [step.finding_ids for step in result.flows[0].steps] == [["R1"]]   # пустой шаг выпал
     assert [(c.area, c.status, c.evidence_ids) for c in result.coverage] == [
         ("API", "covered", ["R1"]), ("Auth", "not_investigated", [])]
     assert result.unknowns[0].investigate == ["Caddyfile"]
@@ -117,7 +119,8 @@ def test_the_judge_finishes_or_sends_concrete_follow_ups():
     assert [(f.objective, f.targets, f.related_finding_ids) for f in more.follow_up] == [
         ("Проверить прокси", ["Caddyfile"], ["R1"])]
     done = judged_map({"status": "complete", "findings": [], "follow_up": follow}, CONTEXT)
-    assert done.complete and done.follow_up == ()
+    assert done.complete
+    assert done.follow_up == ()
     # Доисследовать нечего — это тоже конец.
     assert judged_map({"status": "needs_investigation", "findings": []}, CONTEXT).complete
     with pytest.raises(BadAnswer, match="status"):
@@ -127,4 +130,43 @@ def test_the_judge_finishes_or_sends_concrete_follow_ups():
 def test_the_next_steps_get_the_map_or_an_honest_no_scan():
     assert "не исследовался" in context_prompt(None)
     text = context_prompt(map_of({"findings": [finding()]}, CONTEXT), "abc")
-    assert '"commit_sha": "abc"' in text and "get_context" in text
+    assert '"commit_sha": "abc"' in text
+    assert "get_context" in text
+
+
+def test_a_working_copy_whose_root_is_outside_the_repositories_folder_is_refused(repo):
+    """Каталог репозиториев внутри большего репозитория: корень git — выше него, и модели
+    увидели бы то, что каталог отрезает."""
+    with pytest.raises(RepositoryError, match="вне каталога"):
+        working_copy(".", repo / "api")
+    assert working_copy("project", repo.parent).root == repo.resolve()
+
+
+def test_file_names_come_as_they_are_and_deleted_ones_are_not_files(repo):
+    (repo / "файл.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ещё")
+    (repo / "api" / "deps.py").unlink()                               # удалён, но отслеживается
+    assert inventory(repo).files == (".gitignore", "файл.py")
+
+
+def test_the_fingerprint_follows_the_working_copy_state(repo, tmp_path):
+    deps = repo / "api" / "deps.py"
+    clean = inventory(repo).fingerprint
+    assert inventory(repo).fingerprint == clean                       # то же состояние — тот же
+    deps.write_text("def get_context(): return 1\n", encoding="utf-8")
+    edited = inventory(repo).fingerprint
+    assert edited != clean
+    deps.write_text("def get_context(): return 2\n", encoding="utf-8")
+    assert inventory(repo).fingerprint != edited                      # правка поверх правки
+    (repo / "new.py").write_text("a\n", encoding="utf-8")
+    with_new = inventory(repo).fingerprint
+    (repo / "new.py").write_text("b\n", encoding="utf-8")
+    assert inventory(repo).fingerprint != with_new                    # новый файл — по содержимому
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
+    assert inventory(clone).commit_sha == inventory(repo).commit_sha
+    deps.write_text("def get_context(): ...\n", encoding="utf-8")
+    (repo / "new.py").unlink()
+    assert inventory(repo).fingerprint == clean                       # вернули как было
+    assert inventory(clone).fingerprint != clean                      # другой клон — другой ключ

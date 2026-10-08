@@ -1,8 +1,11 @@
 """Репозиторий потока: inventory рабочей копии и разбор ответов участников и судьи.
 
 Inventory — обычный список файлов, его даёт git при запуске скана: отслеживаемые и новые,
-не игнорируемые, — то, что модели и будут читать. Git зовётся только на чтение: каталог
-может быть смонтирован read-only, а владелец — не тот, кто запускает (safe.directory).
+не игнорируемые, и только те, что на диске есть, — то, что модели и будут читать. Git зовётся
+только на чтение: каталог может быть смонтирован read-only, а владелец — не тот, кто запускает
+(safe.directory). Корень рабочей копии — внутри каталога репозиториев, иначе модели увидели
+бы то, что он отрезает. Отпечаток рабочей копии — путь, коммит и её правки: оплаченный ответ
+к другому коду повтор не возьмёт.
 
 Факт verified держится на evidence, и evidence — на файлах, которые в репозитории есть: путь
 не из inventory отбрасывается, verified без единого подтверждения становится inferred. Ссылки
@@ -10,6 +13,7 @@ Inventory — обычный список файлов, его даёт git пр
 устроена сейчас: это вход для следующих шагов, а не решения.
 """
 
+import hashlib
 import json
 import re
 import subprocess
@@ -48,19 +52,30 @@ class Inventory:
     commit_sha: str
     dirty: bool
     files: tuple[str, ...]
+    # Какая это рабочая копия и в каком состоянии: путь, коммит, правки и новые файлы.
+    fingerprint: str = ""
 
 
-def git(root: Path, *args: str) -> str:
+def git_bytes(root: Path, *args: str) -> bytes:
     # --no-optional-locks: status не пытается обновить индекс — каталог может быть read-only.
     command = ["git", "-c", "safe.directory=*", "--no-optional-locks", "-C", str(root), *args]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=60)
+        result = subprocess.run(command, capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
         raise RepositoryError(f"git не запускается: {exc}") from exc
     if result.returncode != 0:
-        raise RepositoryError(result.stderr.strip() or f"git {args[0]} не удался")
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RepositoryError(detail or f"git {args[0]} не удался")
     return result.stdout
+
+
+def git(root: Path, *args: str) -> str:
+    return git_bytes(root, *args).decode("utf-8", errors="replace")
+
+
+def names(output: bytes) -> list[str]:
+    """Пути из вывода с -z: через NUL, без кавычек и восьмеричных escape-кодов."""
+    return [name.decode("utf-8", errors="replace") for name in output.split(b"\0") if name]
 
 
 def located(text: str, base: Path | None) -> Path:
@@ -82,14 +97,39 @@ def located(text: str, base: Path | None) -> Path:
     return path.resolve()
 
 
+def working_copy(text: str, base: Path | None) -> Inventory:
+    """Рабочая копия по тексту человека — целиком внутри каталога репозиториев: корень git
+    может оказаться выше выбранной папки."""
+    found = inventory(located(text, base))
+    if base is not None and not found.root.is_relative_to(base.resolve()):
+        raise RepositoryError(f"Корень рабочей копии {found.root} вне каталога репозиториев {base}")
+    return found
+
+
 def inventory(path: Path) -> Inventory:
-    """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, и список файлов."""
-    root = Path(git(path, "rev-parse", "--show-toplevel").strip())
+    """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, список файлов — тех,
+    что на диске есть (удалённый, но отслеживаемый, и вне sparse checkout — не файлы), — и
+    отпечаток её состояния."""
+    root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
     sha = git(root, "rev-parse", "HEAD").strip()
     dirty = bool(git(root, "status", "--porcelain").strip())
-    listed = git(root, "ls-files", "--cached", "--others", "--exclude-standard")
-    files = tuple(sorted({line for line in listed.splitlines() if line.strip()}))
-    return Inventory(root, sha, dirty, files)
+    listed = names(git_bytes(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"))
+    files = tuple(sorted({name for name in listed if (root / name).exists()}))
+    return Inventory(root, sha, dirty, files, fingerprint(root, sha))
+
+
+def fingerprint(root: Path, sha: str) -> str:
+    """Состояние рабочей копии: путь, коммит, правки отслеживаемых файлов и содержимое новых.
+    Одинаковый у одного и того же кода в одной и той же копии."""
+    digest = hashlib.sha256(f"{root}\0{sha}\0".encode())
+    digest.update(git_bytes(root, "diff", "HEAD", "--binary", "--no-ext-diff"))
+    for name in sorted(names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))):
+        digest.update(name.encode() + b"\0")
+        try:
+            digest.update(hashlib.sha256((root / name).read_bytes()).digest())
+        except OSError:
+            digest.update(b"-")   # не прочитать — это тоже состояние
+    return digest.hexdigest()
 
 
 def inventory_prompt(found: Inventory) -> str:
@@ -163,8 +203,9 @@ def findings_of(value: object, context: Context) -> list[RepositoryFinding]:
 
 
 def ids_in(value: object, known: set[str]) -> list[str]:
-    names = (finding_id(item) for item in value) if isinstance(value, list) else ()
-    return list(dict.fromkeys(name for name in names if name in known))
+    items = value if isinstance(value, list) else []
+    found = (finding_id(item) for item in items)
+    return list(dict.fromkeys(name for name in found if name in known))
 
 
 def flows_of(value: object, known: set[str]) -> list[RepositoryFlow]:

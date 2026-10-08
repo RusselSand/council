@@ -15,6 +15,7 @@ from spec_council.models import (
     ModelRun,
     Slicing,
     Stream,
+    StreamIdea,
     Structure,
 )
 from spec_council.pipeline import (
@@ -176,3 +177,19 @@ def test_council_files_are_for_the_owner_only(tmp_path):
         assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]   # временных нет
     finally:
         os.umask(before)
+
+
+def test_streams_saved_before_the_repository_step_passed_it_by_skipping(tmp_path):
+    """Совет, сохранённый до шага «Репозиторий»: у потока с вопросами шаг считается
+    пропущенным — иначе «Пропустить» пересчитало бы всё, что ниже, и стёрло бы работу."""
+    before = FileStore(tmp_path)
+    council = before.create_council(participants=["sol", "fable"], judge="fable")
+    questions = start_questions(["sol"], "sol", "Идея").model_copy(update={"state": "done",
+                                                                            "repository": ""})
+    before.update_council(council.id, {"streams": [
+        Stream(group="A", idea=StreamIdea(text="Идея", by="human"), questions=questions),
+        Stream(group="B", idea=StreamIdea(text="Другая", by="human"))]})
+    after = FileStore(tmp_path).get_council(council.id)
+    first, second = after.streams
+    assert (first.repository.by, first.questions.repository) == ("skipped", "skipped")
+    assert second.repository is None                    # вопросов не было — шаг впереди

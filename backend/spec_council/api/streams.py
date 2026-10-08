@@ -18,6 +18,7 @@ from ..decisions import RATIONALE_MAX
 from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, RepositoriesDep, Store, StoreDep
 from ..ideas import IDEA_MAX
 from ..models import (
+    SKIPPED,
     STREAM_RUNS,
     ApproveChoices,
     ApproveDecisions,
@@ -45,7 +46,6 @@ from ..models import (
     StreamIdea,
 )
 from ..pipeline import (
-    SKIPPED,
     CouncilRun,
     DecisionRun,
     IdeaRun,
@@ -65,7 +65,7 @@ from ..pipeline import (
     start_scan,
 )
 from ..questions import QUESTION_MAX, same_question
-from ..repository import RepositoryError, context_prompt, inventory, located
+from ..repository import RepositoryError, context_prompt, working_copy
 from .councils import (
     CANNOT_START,
     MISSING,
@@ -216,7 +216,7 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     утверждённая карта, вопросы и всё ниже сбрасываются. Повтор после сбоя берёт уже
     оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной."""
     try:
-        found = inventory(located(edit.path, repositories))
+        found = working_copy(edit.path, repositories)
     except RepositoryError as exc:
         raise HTTPException(422, str(exc)) from None
 

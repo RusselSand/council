@@ -76,6 +76,7 @@ from .grouping import StructureOption, judged_structure, structure_options
 from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .models import (
+    SKIPPED,
     Choice,
     Decision,
     DecisionAnalysis,
@@ -192,8 +193,6 @@ def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
                                      (StepName.idea_discovery, StepName.idea_judge)))
 
 
-# Шаг «Репозиторий» пропущен: так его помнят вопросы.
-SKIPPED = "skipped"
 # Сколько проходов участников и судьи у скана: первый и до двух доисследований.
 SCAN_ROUNDS = 3
 
@@ -276,6 +275,8 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
     what = "ход"
     # Каталог, который модели читают в этом ходе; None — ход без файлов, только текст.
     workspace: Path | None = None
+    # Состояние этого каталога: оно входит в ключ ответа — к другому коду ответ не годится.
+    fingerprint: str = ""
 
     def __init__(self, council_id: str, participants: list[str], judge: str,
                  runner: Runner, report: Callable[[S], None], state: S) -> None:
@@ -334,7 +335,8 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
                 parse: Callable[[dict], T]) -> T | None:
         # Повтор с тем же ключом берёт оплаченный ответ даром — только если отвечает та же
         # модель: провайдер и модель за alias тоже в ключе.
-        key = f"{self.council_id}-{step}-{model}-{digest(self.runner.identity(model) + prompt)}"
+        state = self.runner.identity(model) + self.fingerprint
+        key = f"{self.council_id}-{step}-{model}-{digest(state + prompt)}"
         self._set_run(step, model, "running")
         try:
             reply = self.runner.ask(model, prompt, key, workspace=self.workspace)
@@ -973,6 +975,7 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
         self.found = found
         self.fragments = fragments
         self.workspace = found.root
+        self.fingerprint = found.fingerprint
 
     def work(self) -> dict[str, Any]:
         context = RepositoryContext(frozenset(self.found.files))

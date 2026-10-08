@@ -296,6 +296,10 @@ class RepositoryScan(BaseModel):
     error: str | None = None
 
 
+# Шаг «Репозиторий» пропущен: так его помнят вопросы.
+SKIPPED = "skipped"
+
+
 class RepositoryStep(BaseModel):
     """Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана."""
 

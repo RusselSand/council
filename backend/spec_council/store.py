@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .models import (
+    SKIPPED,
     STREAM_RUNS,
     Council,
     CouncilStatus,
@@ -25,6 +26,7 @@ from .models import (
     ProposalDiscovery,
     QuestionDiscovery,
     RepositoryScan,
+    RepositoryStep,
     Slicing,
     Structure,
 )
@@ -122,7 +124,7 @@ class FileStore(InMemoryStore):
                 # Файл не трогаем: его можно поправить руками, и при следующем старте он вернётся.
                 log.warning("Совет из %s не прочитан, его нет в списке: %s", path, exc)
                 continue
-            stopped = interrupted(council)
+            stopped = interrupted(migrated(council))
             if stopped is not council:
                 self._keep(stopped)
             councils.append(stopped)
@@ -161,6 +163,20 @@ def writable(folder: Path) -> None:
         raise RuntimeError(
             f"В каталог советов {folder} нельзя писать: {exc}. Он должен принадлежать тому, "
             "под кем работает бэкенд, — см. README, «Где хранятся советы»") from exc
+
+
+def migrated(council: Council) -> Council:
+    """Совет, сохранённый до шага «Репозиторий»: у потока, где вопросы уже искали, шаг
+    считается пропущенным, и вопросы — найденными без карты. Иначе он вернулся бы на этот шаг,
+    а «Пропустить» пересчитало бы всё, что ниже. Менять нечего — тот же совет."""
+    streams = [stream.model_copy(update={
+        "repository": RepositoryStep(by="skipped"),
+        "questions": stream.questions.model_copy(update={"repository": SKIPPED})})
+        if stream.questions is not None and stream.repository is None else stream
+        for stream in council.streams or []]
+    if streams == (council.streams or []):
+        return council
+    return council.model_copy(update={"streams": streams})
 
 
 def interrupted(council: Council) -> Council:

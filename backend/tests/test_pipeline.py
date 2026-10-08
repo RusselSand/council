@@ -796,7 +796,7 @@ def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
 # --- скан репозитория
 
 FOUND_REPO = Inventory(root=Path("/repos/project"), commit_sha="abc123", dirty=False,
-                       files=("api/deps.py", "api/routes.py"))
+                       files=("api/deps.py", "api/routes.py"), fingerprint="состояние-1")
 FACT = {"id": "R1", "statement": "Контекст запроса — из зависимостей.", "status": "verified",
         "evidence": [{"path": "api/deps.py", "symbol": "get_context"}], "relevance": "вход"}
 CHECK_PROXY = {"objective": "Проверить авторизацию в прокси", "targets": ["Caddyfile"]}
@@ -873,3 +873,18 @@ def question_it_with(replies):
                          lambda _: None, repository="r1",
                          repository_map="КАРТА РЕПОЗИТОРИЯ").run()
     return result, runner
+
+
+def test_another_working_copy_state_is_a_new_call_not_a_free_retry():
+    """Промпт тот же (коммит, inventory), а код в рабочей копии другой — оплаченный ответ к
+    прежнему коду не годится."""
+    found = {"findings": [FACT]}
+    replies = {("repository_discovery", "sol"): found, ("repository_discovery", "fable"): found,
+               ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
+    _, first, _ = scan(replies)
+    runner = FakeRunner(replies)
+    edited = Inventory(root=FOUND_REPO.root, commit_sha="abc123", dirty=True,
+                       files=FOUND_REPO.files, fingerprint="состояние-2")
+    RepositoryRun("c1", FIND, "project", edited, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
+                  lambda _: None).run()
+    assert set(first.keys).isdisjoint(runner.keys)
