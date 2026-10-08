@@ -1,23 +1,19 @@
 """Репозиторий: inventory рабочей копии, путь к ней, разбор находок и вердикта судьи."""
 
-import os
-import stat
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from spec_council import repository
 from spec_council.repository import (
     Context,
     RepositoryError,
     context_prompt,
-    file_state,
     inventory,
     inventory_prompt,
     judged_map,
     located,
     map_of,
+    snapshot,
     working_copy,
 )
 from spec_council.slicing import BadAnswer
@@ -155,39 +151,59 @@ def test_file_names_come_as_they_are_and_deleted_ones_are_not_files(repo):
     assert inventory(repo).files == (".gitignore", "файл.py")
 
 
-def test_the_fingerprint_follows_the_working_copy_state(repo, tmp_path):
-    deps = repo / "api" / "deps.py"
-    clean = inventory(repo).fingerprint
-    assert inventory(repo).fingerprint == clean                       # то же состояние — тот же
-    deps.write_text("def get_context(): return 1\n", encoding="utf-8")
-    edited = inventory(repo).fingerprint
-    assert edited != clean
-    deps.write_text("def get_context(): return 2\n", encoding="utf-8")
-    assert inventory(repo).fingerprint != edited                      # правка поверх правки
-    (repo / "new.py").write_text("a\n", encoding="utf-8")
-    with_new = inventory(repo).fingerprint
-    (repo / "new.py").write_text("b\n", encoding="utf-8")
-    assert inventory(repo).fingerprint != with_new                    # новый файл — по содержимому
+def copy(found, tmp_path, name="snap"):
+    """Снимок рабочей копии в свой каталог: (каталог, отпечаток, что в нём есть)."""
+    into = tmp_path / name
+    into.mkdir()
+    print_, copied = snapshot(found, into)
+    return into, print_, copied
+
+
+def test_a_snapshot_holds_only_the_inventory_files(repo, tmp_path):
+    """Игнорируемое (там бывают .env и ключи) и .git модели не видят: их нет в снимке."""
+    (repo / "secret.log").write_text("token=123\n", encoding="utf-8")   # игнорируется
+    (repo / "new.py").write_text("x = 1\n", encoding="utf-8")
+    found = inventory(repo)
+    into, _, copied = copy(found, tmp_path)
+    present = sorted(p.relative_to(into).as_posix() for p in into.rglob("*") if p.is_file())
+    assert present == [".gitignore", "api/deps.py", "new.py"]
+    assert copied == frozenset(present)
+    assert not (into / ".git").exists()
+    assert (into / "api" / "deps.py").read_text(encoding="utf-8") == "def get_context(): ...\n"
+
+
+def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):
+    """Один и тот же код — один отпечаток, в какой бы копии он ни лежал; другой код — другой."""
+    found = inventory(repo)
+    _, first, _ = copy(found, tmp_path, "one")
+    _, again, _ = copy(found, tmp_path, "two")
+    assert first == again
+    (repo / "api" / "deps.py").write_text("def get_context(): return 1\n", encoding="utf-8")
+    _, edited, _ = copy(found, tmp_path, "three")
+    assert edited != first
     clone = tmp_path / "clone"
     subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
-    assert inventory(clone).commit_sha == inventory(repo).commit_sha
-    deps.write_text("def get_context(): ...\n", encoding="utf-8")
-    (repo / "new.py").unlink()
-    assert inventory(repo).fingerprint == clean                       # вернули как было
-    assert inventory(clone).fingerprint != clean                      # другой клон — другой ключ
+    (repo / "api" / "deps.py").write_text("def get_context(): ...\n", encoding="utf-8")
+    _, cloned, _ = copy(inventory(clone), tmp_path, "four")
+    assert cloned == first                                            # тот же код — тот же ключ
 
 
-def test_an_untracked_symlink_counts_as_a_link_not_as_what_it_points_to(repo, tmp_path):
-    """Ссылку не разыменовываем: за ней может быть что угодно, вплоть до /dev/zero."""
+def test_the_snapshot_does_not_change_when_the_working_copy_does(repo, tmp_path):
+    """Правку во время скана модели не увидят: они читают снимок, а он неподвижен."""
+    into, _, _ = copy(inventory(repo), tmp_path)
+    (repo / "api" / "deps.py").write_text("def get_context(): return 2\n", encoding="utf-8")
+    assert (into / "api" / "deps.py").read_text(encoding="utf-8") == "def get_context(): ...\n"
+
+
+def test_a_link_is_not_a_file_of_the_inventory(repo, tmp_path):
+    """Ссылку не разыменовываем: за ней может быть что угодно, вплоть до /dev/zero или ключей."""
     outside = tmp_path / "outside.txt"
-    outside.write_text("раз", encoding="utf-8")
+    outside.write_text("секрет", encoding="utf-8")
     try:
         (repo / "link").symlink_to(outside)
     except OSError:
         pytest.skip("символьные ссылки здесь создавать нельзя")
-    linked = inventory(repo).fingerprint
-    outside.write_text("два", encoding="utf-8")
-    assert inventory(repo).fingerprint == linked
+    assert "link" not in inventory(repo).files
 
 
 @pytest.fixture
@@ -210,55 +226,28 @@ def test_files_of_a_checked_out_submodule_are_in_the_inventory(with_submodule):
     assert "vendor/lib" not in files                                  # не сам gitlink
 
 
-def test_a_new_file_inside_a_submodule_is_in_the_inventory_and_the_fingerprint(with_submodule):
+def test_a_new_file_inside_a_submodule_is_in_the_inventory_and_the_snapshot(with_submodule,
+                                                                             tmp_path):
     """--others в подмодули не заходит: их новые файлы модели читают, значит, и мы их видим."""
-    fresh = with_submodule / "vendor" / "lib" / "fresh.py"
-    fresh.write_text("a = 1\n", encoding="utf-8")
+    (with_submodule / "vendor" / "lib" / "fresh.py").write_text("a = 1\n", encoding="utf-8")
     found = inventory(with_submodule)
     assert "vendor/lib/fresh.py" in found.files
-    fresh.write_text("a = 2\n", encoding="utf-8")
-    assert inventory(with_submodule).fingerprint != found.fingerprint
+    into, _, _ = copy(found, tmp_path)
+    assert (into / "vendor" / "lib" / "fresh.py").is_file()
 
 
-def test_the_tracked_diff_is_hashed_as_a_stream_not_held_in_memory(repo, monkeypatch):
-    """Большой изменённый бинарник дал бы такой же большой патч: его не держим целиком."""
-    (repo / "api" / "deps.py").write_text("def get_context(): return 1\n", encoding="utf-8")
-    streamed = inventory(repo).fingerprint
-    held = repository.git_bytes
-
-    def no_diff(root, *args):
-        assert args[0] != "diff", "патч целиком в памяти"
-        return held(root, *args)
-
-    monkeypatch.setattr(repository, "git_bytes", no_diff)
-    assert inventory(repo).fingerprint == streamed
+def test_evidence_may_name_a_file_by_its_path_in_the_snapshot(tmp_path):
+    """Модель может назвать файл и полным путём в снимке — это тот же файл."""
+    context = Context(files=frozenset({"api/deps.py"}), roots=(tmp_path,))
+    full = f"{tmp_path.as_posix()}/api/deps.py"
+    result = map_of({"findings": [finding(path=full)]}, context)
+    assert [e.path for e in result.findings[0].evidence] == ["api/deps.py"]
 
 
-def test_an_edit_inside_a_submodule_changes_the_fingerprint(with_submodule):
-    """Не только «подмодуль грязный», а какая именно правка: правка поверх правки — другой код."""
-    lib = with_submodule / "vendor" / "lib" / "lib.py"
-    lib.write_text("def api(): return 1\n", encoding="utf-8")
-    first = inventory(with_submodule).fingerprint
-    lib.write_text("def api(): return 2\n", encoding="utf-8")
-    assert inventory(with_submodule).fingerprint != first
-
-
-def test_a_link_is_hashed_by_where_it_points_and_never_read(tmp_path, monkeypatch):
-    """Ссылка — это её цель словами, а не содержимое: оно может быть бесконечным (/dev/zero)."""
-    link = tmp_path / "link"
-    as_link = os.stat_result((stat.S_IFLNK | 0o777,) + (0,) * 9)
-    monkeypatch.setattr(Path, "lstat", lambda self: as_link)
-    monkeypatch.setattr(os, "readlink", lambda path: "/dev/zero")
-    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: pytest.fail("ссылку читать нельзя"))
-    assert file_state(link) == file_state(link)
-    monkeypatch.setattr(os, "readlink", lambda path: "/etc/passwd")
-    assert file_state(link) != b"link:/dev/zero"
-
-
-def test_a_regular_file_is_hashed_by_its_content(tmp_path):
-    one, two = tmp_path / "one", tmp_path / "two"
-    one.write_bytes(b"x" * 3_000_000)
-    two.write_bytes(b"x" * 3_000_000)
-    assert file_state(one) == file_state(two)
-    two.write_bytes(b"y")
-    assert file_state(one) != file_state(two)
+def test_a_flow_entry_point_must_be_a_file_of_the_repository():
+    """Точка входа, которой в репозитории нет, — не точка входа: следующие шаги ей бы поверили."""
+    result = map_of({"findings": [finding()], "flows": [
+        {"name": "Запрос", "entry_point": "api/deps.py:get_context", "steps": []},
+        {"name": "Выдуманный", "entry_point": "api/nowhere.py", "steps": []}]}, CONTEXT)
+    assert [(f.name, f.entry_point) for f in result.flows] == [
+        ("Запрос", "api/deps.py:get_context"), ("Выдуманный", "")]

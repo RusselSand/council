@@ -796,16 +796,22 @@ def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
 # --- скан репозитория
 
 FOUND_REPO = Inventory(root=Path("/repos/project"), commit_sha="abc123", dirty=False,
-                       files=("api/deps.py", "api/routes.py"), fingerprint="состояние-1")
+                       files=("api/deps.py", "api/routes.py"))
 FACT = {"id": "R1", "statement": "Контекст запроса — из зависимостей.", "status": "verified",
         "evidence": [{"path": "api/deps.py", "symbol": "get_context"}], "relevance": "вход"}
 CHECK_PROXY = {"objective": "Проверить авторизацию в прокси", "targets": ["Caddyfile"]}
 
 
-def scan(replies):
+def copy_as(fingerprint):
+    """Снимок без файлов: каталог настоящий, а отпечаток и состав — какие скажут."""
+    return lambda found, into: (fingerprint, frozenset(found.files))
+
+
+def scan(replies, copy=None):
     runner, reports = FakeRunner(replies), []
     result = RepositoryRun("c1", FIND, "project", FOUND_REPO, GROUP_FRAGMENTS, ["sol", "fable"],
-                           "fable", runner, reports.append).run()
+                           "fable", runner, reports.append,
+                           copy=copy or copy_as("снимок-1")).run()
     return result, runner, reports
 
 
@@ -834,8 +840,12 @@ def test_a_scan_reads_the_working_copy_and_follows_up_on_the_judges_gaps():
     assert "get_context" in section(runner.asked["repository_judge", "fable"], "PREVIOUS FINDINGS")
     assert "api/routes.py" in section(runner.asked["repository_discovery", "sol"],
                                       "REPOSITORY INVENTORY")
-    # Модели читают рабочую копию — и участники, и судья.
-    assert set(runner.workspaces.values()) == {FOUND_REPO.root}
+    # Модели — и участники, и судья — читают один снимок, а не саму рабочую копию; после скана
+    # его нет.
+    [place] = set(runner.workspaces.values())
+    assert place != FOUND_REPO.root
+    assert place.name.startswith("council-scan-")
+    assert not place.exists()
     judge_prompt = runner.asked["repository_judge", "fable"]
     assert '"sol"' not in judge_prompt and '"fable"' not in judge_prompt
     assert any(r.rounds == 1 and r.state == "running" for r in reports)   # проход виден сразу
@@ -875,16 +885,23 @@ def question_it_with(replies):
     return result, runner
 
 
-def test_another_working_copy_state_is_a_new_call_not_a_free_retry():
-    """Промпт тот же (коммит, inventory), а код в рабочей копии другой — оплаченный ответ к
-    прежнему коду не годится."""
+def test_another_snapshot_is_a_new_call_not_a_free_retry():
+    """Промпт тот же (коммит, inventory), а код в снимке другой — оплаченный ответ к прежнему
+    коду не годится; тот же код — тот же ключ."""
     found = {"findings": [FACT]}
     replies = {("repository_discovery", "sol"): found, ("repository_discovery", "fable"): found,
                ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
     _, first, _ = scan(replies)
-    runner = FakeRunner(replies)
-    edited = Inventory(root=FOUND_REPO.root, commit_sha="abc123", dirty=True,
-                       files=FOUND_REPO.files, fingerprint="состояние-2")
-    RepositoryRun("c1", FIND, "project", edited, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
-                  lambda _: None).run()
-    assert set(first.keys).isdisjoint(runner.keys)
+    _, same, _ = scan(replies)
+    _, other, _ = scan(replies, copy=copy_as("снимок-2"))
+    assert first.keys == same.keys
+    assert set(first.keys).isdisjoint(other.keys)
+
+
+def test_evidence_counts_only_files_that_made_it_into_the_snapshot():
+    """Файл из inventory, который не скопировался (пропал, не читается), модели не видели."""
+    replies = {("repository_discovery", "sol"): {"findings": [FACT]},
+               ("repository_discovery", "fable"): {"findings": [FACT]},
+               ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
+    result, _, _ = scan(replies, copy=lambda found, into: ("снимок", frozenset({"api/routes.py"})))
+    assert [(f.status, f.evidence) for f in result.result.findings] == [("inferred", [])]

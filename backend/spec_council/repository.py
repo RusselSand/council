@@ -1,11 +1,11 @@
 """Репозиторий потока: inventory рабочей копии и разбор ответов участников и судьи.
 
-Inventory — обычный список файлов, его даёт git при запуске скана: отслеживаемые и новые,
-не игнорируемые, и только те, что на диске есть, — то, что модели и будут читать. Git зовётся
+Inventory — обычный список файлов, его даёт git при запуске скана: отслеживаемые (и в
+подмодулях) и новые, не игнорируемые, и только обычные файлы, что на диске есть. Git зовётся
 только на чтение: каталог может быть смонтирован read-only, а владелец — не тот, кто запускает
-(safe.directory). Корень рабочей копии — внутри каталога репозиториев, иначе модели увидели
-бы то, что он отрезает. Отпечаток рабочей копии — путь, коммит и её правки: оплаченный ответ
-к другому коду повтор не возьмёт.
+(safe.directory). Корень рабочей копии — внутри каталога репозиториев. Модели читают не саму
+рабочую копию, а её снимок — только файлы inventory, без .git и игнорируемого: он не меняется
+во время скана, а его отпечаток ключует оплаченные ответы.
 
 Факт verified держится на evidence, и evidence — на файлах, которые в репозитории есть: путь
 не из inventory отбрасывается, verified без единого подтверждения становится inferred. Ссылки
@@ -19,10 +19,8 @@ import os
 import re
 import stat
 import subprocess
-import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
 from .ideas import reason_of
 from .models import (
@@ -56,14 +54,6 @@ class Inventory:
     commit_sha: str
     dirty: bool
     files: tuple[str, ...]
-    # Какая это рабочая копия и в каком состоянии: путь, коммит, правки и новые файлы.
-    fingerprint: str = ""
-
-
-class Digest(Protocol):
-    """Куда складывать вывод: хеш, который принимает его кусками."""
-
-    def update(self, data: bytes, /) -> None: ...
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -85,25 +75,6 @@ def git_bytes(root: Path, *args: str) -> bytes:
 
 def git(root: Path, *args: str) -> str:
     return git_bytes(root, *args).decode("utf-8", errors="replace")
-
-
-def git_stream(root: Path, digest: Digest, *args: str) -> None:
-    """Вывод git — прямо в хеш, кусками: патч большого бинарника целиком в памяти не держим.
-    stderr — во временный файл: в трубе он мог бы заполнить её и остановить git."""
-    with tempfile.TemporaryFile() as errors:
-        try:
-            process = subprocess.Popen(git_command(root, *args), stdout=subprocess.PIPE,
-                                       stderr=errors)
-        except OSError as exc:
-            raise RepositoryError(f"git не запускается: {exc}") from exc
-        with process:
-            for chunk in iter(lambda: process.stdout.read(1 << 16), b""):
-                digest.update(chunk)
-            code = process.wait(timeout=120)
-        if code != 0:
-            errors.seek(0)
-            detail = errors.read().decode("utf-8", errors="replace").strip()
-            raise RepositoryError(detail or f"git {args[0]} не удался")
 
 
 def untracked(root: Path, prefix: str = "") -> list[str]:
@@ -157,46 +128,65 @@ def working_copy(text: str, base: Path | None) -> Inventory:
 
 
 def inventory(path: Path) -> Inventory:
-    """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, список файлов — тех,
-    что на диске есть (удалённый, но отслеживаемый, и вне sparse checkout — не файлы), — и
-    отпечаток её состояния."""
+    """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, и список файлов — тех,
+    что на диске есть и это обычные файлы (удалённый, но отслеживаемый, вне sparse checkout и
+    ссылка — не файлы)."""
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
     sha = git(root, "rev-parse", "HEAD").strip()
     dirty = bool(git(root, "status", "--porcelain").strip())
     # Отслеживаемые — и в checked-out подмодулях (их файлы модели тоже читают), новые — отдельно:
     # --recurse-submodules с --others git не умеет.
-    fresh = untracked(root)
-    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")), *fresh]
-    files = tuple(sorted({name for name in listed if (root / name).exists()}))
-    return Inventory(root, sha, dirty, files, fingerprint(root, sha, fresh))
+    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")),
+              *untracked(root)]
+    files = tuple(sorted({name for name in listed if regular(root / name)}))
+    return Inventory(root, sha, dirty, files)
 
 
-def fingerprint(root: Path, sha: str, fresh: list[str]) -> str:
-    """Состояние рабочей копии: путь, коммит, правки отслеживаемых файлов — и внутри
-    подмодулей — и новые файлы (fresh), и в подмодулях тоже. Одинаковый у одного и того же
-    кода в одной и той же копии."""
-    digest = hashlib.sha256(f"{root}\0{sha}\0".encode())
-    git_stream(root, digest, "diff", "HEAD", "--binary", "--no-ext-diff", "--submodule=diff")
-    for name in sorted(fresh):
-        digest.update(name.encode() + b"\0" + file_state(root / name) + b"\0")
-    return digest.hexdigest()
-
-
-def file_state(path: Path) -> bytes:
-    """Состояние нового файла для отпечатка. Ссылку не разыменовываем — это её цель словами: за
-    ней может быть что угодно, вплоть до /dev/zero. Обычный файл — хеш содержимого, кусками: а
-    то большой артефакт занял бы всю память. Прочее (FIFO, устройство) — по типу: его не читают.
-    Не прочитать — тоже состояние."""
+def regular(path: Path) -> bool:
+    """Обычный файл, а не ссылка: за ссылкой может быть что угодно, вплоть до /dev/zero или
+    ключей вне репозитория."""
     try:
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            return b"link:" + os.readlink(path).encode()
-        if stat.S_ISREG(info.st_mode):
-            with path.open("rb") as file:
-                return hashlib.file_digest(file, "sha256").digest()
-        return b"special"
+        return stat.S_ISREG(path.lstat().st_mode)
     except OSError:
-        return b"-"
+        return False
+
+
+def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
+    """Снимок рабочей копии, который читают модели: только файлы inventory — без .git и
+    игнорируемого (там бывают .env и ключи) — и только обычные файлы. Пока идёт скан, рабочую
+    копию могут править, а снимок неподвижен: все участники и все проходы читают один и тот же
+    код. Отпечаток — по содержимому снимка: им ключуются оплаченные ответы, и тот же код в
+    другой копии — тот же ключ. Вернёт отпечаток и какие файлы в снимок легли."""
+    digest = hashlib.sha256()
+    copied = []
+    for name in found.files:
+        part = copied_file(found.root / name, into / name)
+        if part is not None:
+            digest.update(name.encode() + b"\0" + part + b"\0")
+            copied.append(name)
+    return digest.hexdigest(), frozenset(copied)
+
+
+def copied_file(source: Path, target: Path) -> bytes | None:
+    """Копия одного файла кусками — и хеш его содержимого. Ссылку не открываем (O_NOFOLLOW там,
+    где он есть, и проверка, что открыт обычный файл); пропал или не читается — None."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    if not regular(source):
+        return None
+    try:
+        handle = os.open(source, flags)
+    except OSError:
+        return None
+    with os.fdopen(handle, "rb") as read:
+        if not stat.S_ISREG(os.fstat(read.fileno()).st_mode):
+            return None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with target.open("wb") as write:
+            for chunk in iter(lambda: read.read(1 << 16), b""):
+                digest.update(chunk)
+                write.write(chunk)
+    return digest.digest()
 
 
 def inventory_prompt(found: Inventory) -> str:
@@ -217,9 +207,20 @@ def sha_prompt(found: Inventory) -> str:
 
 @dataclass(frozen=True)
 class Context:
-    """На что могут ссылаться находки: файлы репозитория."""
+    """На что могут ссылаться находки: файлы репозитория. roots — где лежит снимок: модель
+    может назвать файл и полным путём в нём."""
 
     files: frozenset[str]
+    roots: tuple[Path, ...] = field(default_factory=tuple)
+
+    def path_of(self, value: object) -> str:
+        """Путь файла, как его назвала модель, — относительный, как в inventory."""
+        path = text_of(value).replace("\\", "/").removeprefix("./")
+        for root in self.roots:
+            prefix = root.as_posix().rstrip("/") + "/"
+            if path.startswith(prefix):
+                return path[len(prefix):]
+        return path
 
 
 def text_of(value: object) -> str:
@@ -242,7 +243,7 @@ def evidence_of(value: object, context: Context) -> list[Evidence]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        path = text_of(item.get("path")).replace("\\", "/").removeprefix("./")
+        path = context.path_of(item.get("path"))
         if path not in context.files:
             continue   # файла в репозитории нет — это не подтверждение
         found.append(Evidence(path=path, lines=text_of(item.get("lines")) or None,
@@ -275,10 +276,20 @@ def ids_in(value: object, known: set[str]) -> list[str]:
     return list(dict.fromkeys(name for name in found if name in known))
 
 
-def flows_of(value: object, known: set[str]) -> list[RepositoryFlow]:
+def entry_of(value: object, context: Context) -> str:
+    """Точка входа потока — файл репозитория (можно с символом: «api/routes.py:handler»).
+    Файла нет — точки входа нет: следующие шаги поверили бы несуществующему компоненту."""
+    text = text_of(value)
+    path = context.path_of(text.split(":", 1)[0].split(" ", 1)[0])
+    if path not in context.files:
+        return ""
+    return path + text[len(text.split(":", 1)[0].split(" ", 1)[0]):]
+
+
+def flows_of(value: object, known: set[str], context: Context) -> list[RepositoryFlow]:
     items = value if isinstance(value, list) else []
     return [RepositoryFlow(
-        name=text_of(item.get("name")), entry_point=text_of(item.get("entry_point")),
+        name=text_of(item.get("name")), entry_point=entry_of(item.get("entry_point"), context),
         steps=[FlowStep(description=text_of(step.get("description")),
                         finding_ids=ids_in(step.get("finding_ids"), known))
                for step in (item.get("steps") if isinstance(item.get("steps"), list) else [])
@@ -324,7 +335,7 @@ def map_of(data: dict, context: Context) -> RepositoryMap:
         raise BadAnswer("нет списка findings")
     findings = findings_of(data.get("findings"), context)
     known = {finding.id for finding in findings}
-    return RepositoryMap(findings=findings, flows=flows_of(data.get("flows"), known),
+    return RepositoryMap(findings=findings, flows=flows_of(data.get("flows"), known, context),
                          coverage=coverage_of(data.get("coverage"), known),
                          unknowns=unknowns_of(data.get("unknowns")),
                          documentation_conflicts=conflicts_of(data.get("documentation_conflicts")))

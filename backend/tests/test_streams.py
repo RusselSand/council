@@ -78,6 +78,9 @@ class Agents:
         self.asked.append(key)
         self.prompts[key.split("-")[1]] = prompt
         self.workspaces[key.split("-")[1]] = workspace
+        if workspace is not None:     # что модель видела бы в каталоге в момент хода
+            self.seen = sorted(p.relative_to(workspace).as_posix()
+                               for p in workspace.rglob("*") if p.is_file())
         if "-repository_" in key:
             return json.dumps({"status": "complete", "findings": [{
                 "id": "R1", "statement": FACT, "status": "verified",
@@ -839,18 +842,24 @@ def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
     council_id = grouped()
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
+    (repos / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (repos / ".env").write_text("TOKEN=секрет\n", encoding="utf-8")   # игнорируется
     res = scans(council_id, "C")
     assert res.status_code == 202
     assert res.json()["streams"][2]["scan"]["state"] == "running"
     scan = streams_of(council_id)["C"].scan
     assert scan.state == "done" and scan.complete and scan.rounds == 1
-    assert (scan.path, scan.files, scan.idea) == ("project", 1, IDEA_C)
+    assert (scan.path, scan.files, scan.idea) == ("project", 2, IDEA_C)   # app.py и .gitignore
     assert scan.commit_sha == inventory(repos).commit_sha
     assert [(f.id, f.statement, f.status) for f in scan.result.findings] == [
         ("R1", FACT, "verified")]
     # Рабочую копию читают и участники, и судья.
-    assert agents.workspaces["repository_discovery"] == repos.resolve()
-    assert agents.workspaces["repository_judge"] == repos.resolve()
+    # Модели читали снимок: код есть, .git и игнорируемого .env — нет; после скана его нет.
+    assert agents.seen == [".gitignore", "app.py"]
+    snapshot = agents.workspaces["repository_judge"]
+    assert snapshot == agents.workspaces["repository_discovery"]
+    assert snapshot != repos.resolve()
+    assert not snapshot.exists()
     assert "app.py" in agents.prompts["repository_discovery"]         # inventory в промпте
     assert streams_of(council_id)["C"].questions is None              # карту ещё не утвердили
 

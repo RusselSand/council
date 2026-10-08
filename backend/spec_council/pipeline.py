@@ -61,6 +61,7 @@
 import hashlib
 import json
 import logging
+import tempfile
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -121,7 +122,15 @@ from .questions import (
     with_user_questions,
 )
 from .repository import Context as RepositoryContext
-from .repository import Inventory, context_prompt, inventory_prompt, judged_map, map_of, sha_prompt
+from .repository import (
+    Inventory,
+    context_prompt,
+    inventory_prompt,
+    judged_map,
+    map_of,
+    sha_prompt,
+    snapshot,
+)
 from .repository import as_prompt as map_prompt
 from .slicing import (
     BadAnswer,
@@ -959,26 +968,37 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
 
 class RepositoryRun(CouncilRun[RepositoryScan]):
     """Скан репозитория под идею потока. Inventory — список файлов рабочей копии на момент
-    запуска; модели читают её сами, только на чтение. Участники по отдельности устанавливают,
-    как система устроена сейчас, судья проверяет их находки по коду и сводит в одну карту.
-    Если он видит существенные пробелы, участники доисследуют именно их — до двух раз; судья
-    видит и прежнюю карту. Одинаковые находки судья видит одним: число согласных — не довод."""
+    запуска; модели читают не её, а снимок: только файлы inventory, без .git и игнорируемого,
+    неподвижный, пока идёт скан, — только на чтение. Его отпечаток ключует ответы. Участники
+    по отдельности устанавливают, как система устроена сейчас, судья проверяет их находки по
+    коду и сводит в одну карту. Если он видит существенные пробелы, участники доисследуют
+    именно их — до двух раз; судья видит и прежнюю карту. Одинаковые находки судья видит
+    одним: число согласных — не довод. Снимок удаляется, когда скан закончен."""
 
     what = "скан репозитория"
 
     def __init__(self, council_id: str, idea: str, path: str, found: Inventory,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
-                 runner: Runner, report: Callable[[RepositoryScan], None]) -> None:
+                 runner: Runner, report: Callable[[RepositoryScan], None], *,
+                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_scan(participants, judge, idea, path, found))
         self.idea = idea
         self.found = found
         self.fragments = fragments
-        self.workspace = found.root
-        self.fingerprint = found.fingerprint
+        self.copy = copy
 
     def work(self) -> dict[str, Any]:
-        context = RepositoryContext(frozenset(self.found.files))
+        with tempfile.TemporaryDirectory(prefix="council-scan-") as place:
+            folder = Path(place)
+            self.fingerprint, copied = self.copy(self.found, folder)
+            self.workspace = folder
+            try:
+                return self._rounds(RepositoryContext(copied, (folder,)))
+            finally:
+                self.workspace = None
+
+    def _rounds(self, context: RepositoryContext) -> dict[str, Any]:
         values = {
             "idea": self.idea,
             "fragments": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
