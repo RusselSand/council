@@ -182,8 +182,10 @@ def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
 
 
 def status_of(root: Path) -> bytes:
+    """--ignore-submodules=dirty: подмодуль не на записанном в родителе коммите — это правка
+    (снимок уже не показанный коммит), а что внутри него, git сам не смотрит: это его статус."""
     return git_bytes(root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-                     "--ignore-submodules=all")
+                     "--ignore-submodules=dirty")
 
 
 def inventory(path: Path) -> Inventory:
@@ -317,8 +319,15 @@ class Context:
     roots: tuple[Path, ...] = field(default_factory=tuple)
 
     def path_of(self, value: object) -> str:
-        """Путь файла, как его назвала модель, — относительный, как в inventory."""
-        path = text_of(value).replace("\\", "/").removeprefix("./")
+        """Путь файла, как его назвала модель, — относительный, как в inventory. Сначала как
+        есть: в POSIX «\\» — буква имени; «/» вместо «\\» — запасной ход для ссылок в духе
+        Windows."""
+        text = text_of(value)
+        named = [self.relative(path) for path in dict.fromkeys((text, text.replace("\\", "/")))]
+        return next((path for path in named if path in self.files), named[-1])
+
+    def relative(self, path: str) -> str:
+        path = path.removeprefix("./")
         for root in self.roots:
             prefix = root.as_posix().rstrip("/") + "/"
             if path.startswith(prefix):

@@ -379,6 +379,28 @@ def test_a_submodule_replaced_by_a_link_to_its_parent_is_not_walked_in_circles(w
     assert not any(name.startswith("vendor/lib/") for name in found.files)
 
 
+def test_a_submodule_checked_out_at_another_commit_marks_the_copy_dirty(with_submodule):
+    """В самом подмодуле правок нет, но он не на том коммите, что записан в родителе: снимок —
+    уже не показанный коммит."""
+    sub = with_submodule / "vendor" / "lib"
+    (sub / "lib.py").write_text("def api(): return 2\n", encoding="utf-8")
+    git(sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-a", "-m", "ещё")
+    assert inventory(with_submodule).dirty
+    git(with_submodule, "add", "vendor/lib")                    # и записан, но не закоммичен
+    assert inventory(with_submodule).dirty
+
+
+def test_a_backslash_in_a_posix_file_name_is_a_letter_of_the_name():
+    """В POSIX «\\» — буква имени: точная ссылка модели — на этот файл, а не на соседний."""
+    both = Context(files=frozenset({"api\\deps.py", "api/deps.py"}))
+    assert both.path_of("api\\deps.py") == "api\\deps.py"
+    assert Context(files=frozenset({"api\\deps.py"})).path_of("api\\deps.py") == "api\\deps.py"
+
+
+def test_a_windows_style_citation_still_finds_the_file():
+    assert Context(files=frozenset({"api/deps.py"})).path_of("api\\deps.py") == "api/deps.py"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="на Windows имена файлов всегда Unicode")
 def test_a_file_name_that_is_not_utf8_is_scanned_as_it_is(repo, tmp_path):
     raw = os.fsencode(repo) + b"/bad-\xff.py"
