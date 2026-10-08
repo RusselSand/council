@@ -167,7 +167,8 @@ def test_a_chain_and_a_star_of_alike_issues_are_not_one_set():
     chain = answer({2: ["I1"], 3: ["I2"], 4: ["I3"]})
     star = answer({2: ["I1"], 3: ["I1"], 4: ["I1"]})
     assert same_issues(chain) != same_issues(star)
-    assert same_issues(chain) == same_issues(answer({1: ["I2"], 2: ["I3"], 3: ["I4"]}))
+    # Двойники сравниваются буквально: тот же ответ — тот же набор.
+    assert same_issues(chain) == same_issues(answer({2: ["I1"], 3: ["I2"], 4: ["I3"]}))
 
 
 def test_merged_gaps_keep_every_explanation():
@@ -187,3 +188,23 @@ def test_what_holds_an_issue_holds_the_issues_after_it():
                                    issue("I3", "Отчёт", outcomes=("O2",), depends_on=["I2"])]},
                        CONTEXT)
     assert [found.blocked_by for found in answer.issues] == [("Q2",), ("Q2",), ("Q2",)]
+
+
+def test_alike_issues_sharing_a_prerequisite_are_not_two_separate_pairs():
+    """Две задачи после одной и отдельная — не то же, что две независимые пары."""
+    def answer(after):
+        return issue_set({"issues": [issue(f"I{n}", "Шаг", depends_on=after.get(n, []))
+                                     for n in range(1, 5)]}, CONTEXT)
+
+    shared = answer({2: ["I1"], 3: ["I1"]})
+    pairs = answer({3: ["I2"], 4: ["I1"]})
+    assert same_issues(shared) != same_issues(pairs)
+    assert same_issues(shared) == same_issues(answer({2: ["I1"], 3: ["I1"]}))
+
+
+def test_a_gap_that_is_an_open_question_holds_the_issues_of_the_outcomes_it_names():
+    answer = issue_set({"issues": [issue(), issue("I2", "Хранение", outcomes=("O2",))],
+                        "gaps": [{"question": "Где живёт база?", "outcome_ids": ["O2"]}]},
+                       CONTEXT)
+    assert [found.blocked_by for found in answer.issues] == [(), ("Q2",)]
+    assert answer.gaps == ()

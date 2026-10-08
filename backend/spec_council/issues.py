@@ -10,7 +10,6 @@
 Список задач может быть и пустым: всё уже реализовано или заблокировано.
 """
 
-import hashlib
 import itertools
 import json
 import re
@@ -124,14 +123,17 @@ def name_of(value: object) -> str:
     return f"I{int(found.group(1))}" if found else ""
 
 
-def gaps_of(value: object, context: Context) -> tuple[list[Gap], dict[int, str]]:
+def gaps_of(value: object, context: Context
+            ) -> tuple[list[Gap], dict[int, str], dict[str, set[str]]]:
     """Пробелы ответа и куда ведёт ссылка на n-й из них: «G<k>» — на k-й оставшийся, «Q…» — на
     открытый вопрос отбора, с которым он совпал. Пробел, совпавший с решённым вопросом, — уже
     ответ, а пустой или длиннее вопроса отбор не примет: такие отбрасываются. Тот же вопрос
-    дважды — один пробел, про итоги обоих."""
+    дважды — один пробел, про итоги обоих. Пробел, совпавший с открытым вопросом, — этот
+    вопрос, и итоги, что пробел назвал, — его: он держит их задачи (третье в ответе)."""
     items = value if isinstance(value, list) else []
     kept: list[Gap] = []
     refs: dict[int, str] = {}
+    asked: dict[str, set[str]] = {}
     for n, item in enumerate(items, 1):
         if not isinstance(item, dict):
             continue
@@ -142,10 +144,12 @@ def gaps_of(value: object, context: Context) -> tuple[list[Gap], dict[int, str]]
         if known is not None:
             if known in context.open_questions:
                 refs[n] = known
+                asked.setdefault(known, set()).update(
+                    outcomes_in(item.get("outcome_ids"), context.outcomes))
             continue
         refs[n] = joined(kept, question, reason_of(item.get("reason")),
                          outcomes_in(item.get("outcome_ids"), context.outcomes))
-    return kept, refs
+    return kept, refs, asked
 
 
 def joined(gaps: list[Gap], question: str, reason: str, outcome_ids: tuple[str, ...]) -> str:
@@ -224,7 +228,7 @@ def issue_set(data: dict, context: Context) -> Answer:
     raw = data.get("issues")
     if not isinstance(raw, list):
         raise BadAnswer("нет списка issues")
-    gaps, refs = gaps_of(data.get("gaps"), context)
+    gaps, refs, asked = gaps_of(data.get("gaps"), context)
     valid, problems = [], []
     for n, item in enumerate(raw, 1):
         try:
@@ -240,7 +244,7 @@ def issue_set(data: dict, context: Context) -> Answer:
         for question, reason in parent.gaps:
             joined(gaps, question, reason, (outcome_id,))
     gaps, issues = placed(gaps, issues)
-    issues = after_blocked([inherited(issue, gaps, context) for issue in issues])
+    issues = after_blocked([inherited(issue, gaps, context, asked) for issue in issues])
     return Answer(tuple(issues), tuple(gaps))
 
 
@@ -260,12 +264,13 @@ def after_blocked(issues: list[Candidate]) -> list[Candidate]:
         *map(of, issue.depends_on))))) for issue in issues]
 
 
-def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
+def inherited(issue: Candidate, gaps: list[Gap], context: Context,
+              asked: Mapping[str, set[str]]) -> Candidate:
     """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
     повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
     сделал бы ей наперекор. Решения, ограничения, риски и критерии готовности итога — и у
     задачи; открытый вопрос итога — в её blocked_by, как и каждый пробел, названный для её
-    итогов. Здесь, при разборе, —
+    итогов, и открытый вопрос, названный пробелом для её итогов. Здесь, при разборе, —
     чтобы ответы, разные лишь тем, повторили ли они это, сравнивались одинаковыми."""
     parents = [context.parents[name] for name in issue.outcome_ids if name in context.parents]
     adrs = {*issue.adr_ids, *(name for parent in parents for name in parent.adr_ids)}
@@ -273,7 +278,9 @@ def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
                *(name for parent in parents for name in parent.blocked_by
                  if name in context.open_questions),
                *(f"G{n}" for n, gap in enumerate(gaps, 1)
-                 if set(gap.outcome_ids) & set(issue.outcome_ids))}
+                 if set(gap.outcome_ids) & set(issue.outcome_ids)),
+               *(name for name, outcome_ids in asked.items()
+                 if outcome_ids & set(issue.outcome_ids))}
     criteria = dict.fromkeys(text for parent in parents for text in parent.criteria)
     return replace(
         issue, criteria=tuple(criteria),
@@ -378,18 +385,14 @@ def same_issues(answer: Answer) -> str:
         own["blocked_by"] = sorted(gaps.get(name, name) for name in issue["blocked_by"])
         return json.dumps(own, ensure_ascii=False, sort_keys=True)
 
-    # Задача — со всем, что до неё: одинаковые по содержанию задачи цепочкой и звездой — разные
-    # наборы. Круг невозможен (его отверг разбор), а хеш не даёт строке расти с глубиной.
-    issues = {issue["id"]: issue for issue in data["issues"]}
-    labels: dict[str, str] = {}
-
-    def label(name: str) -> str:
-        if name not in labels:
-            issue = issues[name]
-            before = sorted(label(after) for after in issue["depends_on"])
-            labels[name] = hashlib.sha256(json.dumps([content(issue), before],
-                                                     ensure_ascii=False).encode()).hexdigest()
-        return labels[name]
-
-    return json.dumps({"issues": sorted(label(name) for name in issues),
-                       "gaps": sorted(gaps.values())}, ensure_ascii=False, sort_keys=True)
+    contents = {issue["id"]: content(issue) for issue in data["issues"]}
+    if len(set(contents.values())) < len(contents):
+        # Задачи-двойники по содержанию: по содержаниям граф не восстановить (общая ли у них
+        # предшественница — не видно), и набор равен лишь буквально такому же — иначе судья.
+        return json.dumps({"exact": data}, ensure_ascii=False, sort_keys=True)
+    # Содержания разные — граф и есть рёбра между ними: «эта задача — после этих».
+    issues = sorted(json.dumps({"issue": contents[issue["id"]],
+                                "after": sorted(contents[name] for name in issue["depends_on"])},
+                               ensure_ascii=False, sort_keys=True) for issue in data["issues"])
+    return json.dumps({"issues": issues, "gaps": sorted(gaps.values())}, ensure_ascii=False,
+                      sort_keys=True)
