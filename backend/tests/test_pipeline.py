@@ -1042,3 +1042,13 @@ def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
     assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
         ("G1", "Сколько хранить историю?", ["O2"])]
     assert result.issues[0].blocked_by == []                     # I1 — про O1, его не держит
+
+
+def test_answers_that_differ_only_in_what_the_outcomes_give_need_no_judge():
+    """Один участник повторил решение и ограничение итога, другой — нет: после наследования это
+    одна и та же нарезка, судья не нужен."""
+    full = {"issues": [task("I1", "Индекс")]}
+    bare = {"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}
+    result, _ = cut({("issue_discovery", "sol"): full, ("issue_discovery", "fable"): bare},
+                    found=None)
+    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"

@@ -127,8 +127,8 @@ def test_the_same_gaps_in_another_order_are_one_set():
     format_ = {"question": "В каком формате отчёт?", "reason": ""}
     def answer(first, second, gaps):
         return issue_set({"issues": [issue(blocked_by=[first]),
-                                     issue("I2", "Отчёт", blocked_by=[second])], "gaps": gaps},
-                         CONTEXT)
+                                     issue("I2", "Отчёт", outcomes=("O2",), blocked_by=[second])],
+                           "gaps": gaps}, CONTEXT)
 
     one = answer("G1", "G2", [history, format_])
     assert same_issues(one) == same_issues(answer("G2", "G1", [format_, history]))
@@ -147,3 +147,12 @@ def test_a_gap_of_no_approved_outcome_is_dropped_unless_an_issue_waits_for_it():
     assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
         ("Где отчёт?", ("O2",)), ("Сколько хранить?", ("O1",))]
     assert [found.blocked_by for found in answer.issues] == [("G2",), ("G1",)]
+
+
+def test_the_same_gap_named_twice_is_one_gap_about_both_outcomes():
+    answer = issue_set({"issues": [issue(blocked_by=["G2"])],
+                        "gaps": [{"question": "Где отчёт?", "outcome_ids": ["O1"]},
+                                 {"question": "где отчёт", "outcome_ids": ["O2"]}]}, CONTEXT)
+    assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
+        ("Где отчёт?", ("O1", "O2"))]
+    assert answer.issues[0].blocked_by == ("G1",)

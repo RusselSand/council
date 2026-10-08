@@ -44,6 +44,20 @@ class Context:
     open_questions: frozenset[str]
     # Вопросы отбора: текст, как его сравнивает same_question, — номер.
     questions: Mapping[str, str] = field(default_factory=dict)
+    # Что даёт задаче её итог, по его номеру.
+    parents: Mapping[str, Parent] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Parent:
+    """Что задача берёт у своего итога: на чём он стоит (решения, ограничения, риски) и что его
+    держит (открытые вопросы и пробелы — вопрос и почему)."""
+
+    adr_ids: tuple[str, ...] = ()
+    constraint_ids: tuple[int, ...] = ()
+    risk_ids: tuple[int, ...] = ()
+    blocked_by: tuple[str, ...] = ()
+    gaps: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -108,7 +122,8 @@ def name_of(value: object) -> str:
 def gaps_of(value: object, context: Context) -> tuple[list[Gap], dict[int, str]]:
     """Пробелы ответа и куда ведёт ссылка на n-й из них: «G<k>» — на k-й оставшийся, «Q…» — на
     открытый вопрос отбора, с которым он совпал. Пробел, совпавший с решённым вопросом, — уже
-    ответ, а пустой или длиннее вопроса отбор не примет: такие отбрасываются."""
+    ответ, а пустой или длиннее вопроса отбор не примет: такие отбрасываются. Тот же вопрос
+    дважды — один пробел, про итоги обоих."""
     items = value if isinstance(value, list) else []
     kept: list[Gap] = []
     refs: dict[int, str] = {}
@@ -123,10 +138,24 @@ def gaps_of(value: object, context: Context) -> tuple[list[Gap], dict[int, str]]
             if known in context.open_questions:
                 refs[n] = known
             continue
-        kept.append(Gap(question, reason_of(item.get("reason")),
-                        outcomes_in(item.get("outcome_ids"), context.outcomes)))
-        refs[n] = f"G{len(kept)}"
+        refs[n] = joined(kept, question, reason_of(item.get("reason")),
+                         outcomes_in(item.get("outcome_ids"), context.outcomes))
     return kept, refs
+
+
+def joined(gaps: list[Gap], question: str, reason: str, outcome_ids: tuple[str, ...]) -> str:
+    """Пробел в список: тот же вопрос (как его сравнивает same_question) — тот же пробел, про
+    итоги обоих. Вернёт его номер, G-n."""
+    for n, gap in enumerate(gaps, 1):
+        if same_question(gap.question) == same_question(question):
+            gaps[n - 1] = replace(gap, outcome_ids=ordered({*gap.outcome_ids, *outcome_ids}))
+            return f"G{n}"
+    gaps.append(Gap(question, reason, ordered(set(outcome_ids))))
+    return f"G{len(gaps)}"
+
+
+def ordered(outcome_ids: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(outcome_ids, key=lambda name: int(name[1:])))
 
 
 def blocked_of(value: object, context: Context, gaps: list[Gap],
@@ -200,8 +229,34 @@ def issue_set(data: dict, context: Context) -> Answer:
     issues = linked(valid)
     if cycle := cycle_of(issues):
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
+    for outcome_id, parent in context.parents.items():
+        for question, reason in parent.gaps:
+            joined(gaps, question, reason, (outcome_id,))
     gaps, issues = placed(gaps, issues)
+    issues = [inherited(issue, gaps, context) for issue in issues]
     return Answer(tuple(issues), tuple(gaps))
+
+
+def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
+    """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
+    повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
+    сделал бы ей наперекор. Решения, ограничения и риски итога — и у задачи; открытый вопрос
+    итога — в её blocked_by, как и каждый пробел, названный для её итогов. Здесь, при разборе, —
+    чтобы ответы, разные лишь тем, повторили ли они это, сравнивались одинаковыми."""
+    parents = [context.parents[name] for name in issue.outcome_ids if name in context.parents]
+    adrs = {*issue.adr_ids, *(name for parent in parents for name in parent.adr_ids)}
+    blocked = {*issue.blocked_by,
+               *(name for parent in parents for name in parent.blocked_by
+                 if name in context.open_questions),
+               *(f"G{n}" for n, gap in enumerate(gaps, 1)
+                 if set(gap.outcome_ids) & set(issue.outcome_ids))}
+    return replace(
+        issue, adr_ids=tuple(sorted(adrs, key=lambda name: int(name.split("-")[1]))),
+        constraint_ids=tuple(sorted({*issue.constraint_ids,
+                                     *(n for parent in parents for n in parent.constraint_ids)})),
+        risk_ids=tuple(sorted({*issue.risk_ids,
+                               *(n for parent in parents for n in parent.risk_ids)})),
+        blocked_by=tuple(sorted(blocked)))
 
 
 def placed(gaps: list[Gap], issues: list[Candidate]) -> tuple[list[Gap], list[Candidate]]:
@@ -217,8 +272,7 @@ def placed(gaps: list[Gap], issues: list[Candidate]) -> tuple[list[Gap], list[Ca
     renamed: dict[str, str] = {}
     for n, gap in enumerate(gaps, 1):
         if about[f"G{n}"]:
-            kept.append(replace(gap, outcome_ids=tuple(sorted(about[f"G{n}"],
-                                                              key=lambda name: int(name[1:])))))
+            kept.append(replace(gap, outcome_ids=ordered(about[f"G{n}"])))
             renamed[f"G{n}"] = f"G{len(kept)}"
     return kept, [replace(issue, blocked_by=tuple(sorted(
         renamed.get(name, name) for name in issue.blocked_by

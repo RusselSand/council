@@ -79,8 +79,8 @@ from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .issues import Answer as IssueAnswer
 from .issues import Context as IssueContext
+from .issues import Parent, issue_set, same_issues
 from .issues import as_prompt as issue_prompt
-from .issues import issue_set, same_issues
 from .models import (
     SKIPPED,
     Choice,
@@ -1139,7 +1139,10 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             frozenset(f.id for f in limits if f.label == "constraint"),
             frozenset(f.id for f in limits if f.label == "risk"),
             frozenset(q["id"] for q in questions if q["status"] == "open"),
-            {same_question(q.text): q.id for q in self.scope})
+            {same_question(q.text): q.id for q in self.scope},
+            {o.id: Parent(tuple(o.adr_ids), tuple(o.constraint_ids), tuple(o.risk_ids),
+                          tuple(o.blocked_by), tuple((g.question, g.reason) for g in o.gaps))
+             for o in self.outcomes})
         opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
                   for q in questions if q["status"] == "open"}
         values = {
@@ -1198,37 +1201,6 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                   for n, c in enumerate(chosen.issues, 1)]
         gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,
                          outcome_ids=list(g.outcome_ids)) for n, g in enumerate(chosen.gaps, 1)]
-        self._inherit_from_outcomes(issues, gaps)
         covered = {name for issue in issues for name in issue.outcome_ids}
         return {"issues": issues, "gaps": gaps,
                 "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
-
-    def _inherit_from_outcomes(self, issues: list[Issue], gaps: list[IssueGap]) -> None:
-        """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
-        повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
-        сделал бы ей наперекор. Решения, ограничения и риски итога — и у задачи; открытый вопрос
-        итога — в её blocked_by. Пробел каждого утверждённого итога — пробел нарезки (тот же
-        вопрос — тот же пробел), даже если задач по итогу нет: иначе его не отнести в вопросы; и
-        пробел нарезки держит каждую задачу итогов, для которых он назван."""
-        outcomes = {outcome.id: outcome for outcome in self.outcomes}
-        for outcome in self.outcomes:
-            for found in outcome.gaps:
-                same = next((gap for gap in gaps
-                             if same_question(gap.question) == same_question(found.question)), None)
-                if same is None:
-                    gaps.append(IssueGap(id=f"G{len(gaps) + 1}", question=found.question,
-                                         reason=found.reason, outcome_ids=[outcome.id]))
-                elif outcome.id not in same.outcome_ids:
-                    same.outcome_ids.append(outcome.id)
-        for issue in issues:
-            held = set(issue.blocked_by)
-            adrs, limits, risks = set(issue.adr_ids), set(issue.constraint_ids), set(issue.risk_ids)
-            for outcome in (outcomes[name] for name in issue.outcome_ids if name in outcomes):
-                held.update(outcome.blocked_by)
-                adrs.update(outcome.adr_ids)
-                limits.update(outcome.constraint_ids)
-                risks.update(outcome.risk_ids)
-            held.update(gap.id for gap in gaps if set(gap.outcome_ids) & set(issue.outcome_ids))
-            issue.blocked_by = sorted(held)
-            issue.adr_ids = sorted(adrs, key=lambda name: int(name.split("-")[1]))
-            issue.constraint_ids, issue.risk_ids = sorted(limits), sorted(risks)
