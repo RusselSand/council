@@ -67,16 +67,18 @@ def entry_of(text: str, variable: str) -> tuple[str, str, str]:
     return alias, provider, model
 
 
-def config_of(first: str = "", second: str = "", judge: str = "") -> AppConfig:
+def config_of(first: str | None = "", second: str | None = "",
+              judge: str | None = "") -> AppConfig:
     """Совет из настройки: два участника «имя=провайдер/модель» и судья — имя одного из них
-    или третья модель. Пусто — как по умолчанию; судья не задан — второй участник."""
+    или третья модель. Пусто или не задано (None) — как по умолчанию; судья не задан — второй
+    участник."""
     participants = [entry_of(first or DEFAULT_PARTICIPANTS[0], "COUNCIL_PARTICIPANT_1"),
                     entry_of(second or DEFAULT_PARTICIPANTS[1], "COUNCIL_PARTICIPANT_2")]
     if participants[0][0] == participants[1][0]:
         raise ConfigError(f"COUNCIL_PARTICIPANT_1 и _2: имя {participants[0][0]} у обоих — "
                           "нужны разные")
     known = {alias: (alias, provider, model) for alias, provider, model in participants}
-    judge = judge.strip() or participants[1][0]
+    judge = (judge or "").strip() or participants[1][0]
     if "=" in judge:
         entry = entry_of(judge, "COUNCIL_JUDGE")
         if entry[0] in known and known[entry[0]] != entry:

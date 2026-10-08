@@ -2,6 +2,7 @@
 
 import pytest
 
+from spec_council import deps
 from spec_council.agents import AgentRunner
 from spec_council.config import Agent, ConfigError, config_of, fitted
 from spec_council.models import Council, CouncilStatus
@@ -88,3 +89,13 @@ def test_a_lineup_of_models_still_configured_is_kept():
     # Ушла одна — на её место встаёт заданная, остальные остаются.
     partly = fitted(council(["astra", "sol"], "sol"), config)
     assert (partly.participants, partly.judge) == (["sol", "fable"], "sol")
+
+
+def test_without_the_variables_at_all_the_council_is_the_default(tmp_path, monkeypatch):
+    """Не пустые, а вовсе не заданные — как в .env.example, где они закомментированы."""
+    for variable in ("COUNCIL_PARTICIPANT_1", "COUNCIL_PARTICIPANT_2", "COUNCIL_JUDGE"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.chdir(tmp_path)                                       # и .env рядом нет
+    config = deps.get_config.__wrapped__()
+    assert (config.default_participants, config.default_judge) == (["sol", "fable"], "fable")
+    assert config_of(None, None, None).default_judge == "fable"
