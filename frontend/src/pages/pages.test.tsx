@@ -1114,6 +1114,13 @@ describe('Поток: решения и итоги', () => {
     expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
   })
 
+  it('решение вне итогов видно и на задачах — поток не готов', async () => {
+    const lost: OutcomeDiscovery = { ...ASSEMBLED, uncovered_adr_ids: ['ADR-1'] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: lost, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
+    expect(await screen.findByText('Решения, не вошедшие ни в один итог, нет и в задачах: ADR-1.')).toBeTruthy()
+    expect(screen.getAllByText('вне итогов и задач: ADR-1').length).toBeGreaterThan(0)
+  })
+
   it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
     openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
     await card('Сохранять состояние в файлы')

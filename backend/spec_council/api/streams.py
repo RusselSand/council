@@ -8,6 +8,7 @@
 для unresolved подбирает вариант из тех, что есть. Человек фиксирует решения — и совет сразу
 собирает из них итоги. Каждый шаг утверждают заново — то, что ниже по цепочке, ищется заново."""
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -804,9 +805,15 @@ def code_of(stream: Stream, repositories: Path | None) -> Inventory | None:
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return None
     try:
-        return working_copy(scan.path, repositories)
+        found = working_copy(scan.path, repositories)
     except RepositoryError as exc:
         raise HTTPException(422, f"Рабочую копию {scan.path} не прочитать: {exc}") from None
+    # Тот же путь от другого каталога репозиториев — уже другая рабочая копия: читать её под
+    # картой прежней нельзя.
+    if scan.root and os.path.normcase(str(found.root)) != os.path.normcase(scan.root):
+        raise HTTPException(422, f"По пути {scan.path} теперь другая рабочая копия: сканировали "
+                                 f"{scan.root}, а сейчас это {found.root} — просканируйте заново")
+    return found
 
 
 def issue_run(council: Council, group: str, stream: Stream, found: Inventory | None,

@@ -1165,6 +1165,29 @@ def test_with_an_approved_scan_the_issues_are_cut_reading_the_code_anew(agents, 
     assert FACT in context                                            # и карта скана
 
 
+def test_another_repositories_folder_is_not_taken_for_the_scanned_copy(agents, repos, tmp_path):
+    """COUNCIL_REPOS поменяли после скана: тот же относительный путь — уже другая рабочая копия,
+    и читать её под картой прежней нельзя."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    other = tmp_path / "other"
+    (other / "project").mkdir(parents=True)
+    (other / "project" / "app.py").write_text("print(2)\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(other / "project"), "init", "-q"], check=True,
+                   capture_output=True)
+    app.dependency_overrides[get_repositories] = lambda: other
+    res = approves(council_id, "C")
+    assert res.status_code == 422
+    assert "другая" in res.json()["detail"]
+    assert streams_of(council_id)["C"].issues is None
+
+
 def test_a_working_copy_gone_since_the_scan_refuses_the_approval(agents, repos):
     council_id = grouped()
     confirm(council_id)

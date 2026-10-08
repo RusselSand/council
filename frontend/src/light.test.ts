@@ -196,6 +196,10 @@ describe('светофор', () => {
     expect(attention(council(blocked)).map(a => a.what)).toEqual(['issuesWait'])
     expect(attention(council(on(cut('failed')))).map(a => a.what)).toEqual(['issuesFailed'])
     expect(attention(council(ready))).toEqual([])
+    // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла — не зелёный.
+    const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
+                            { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))
+    expect(streamLight(unplaced)).toBe('yours')
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {

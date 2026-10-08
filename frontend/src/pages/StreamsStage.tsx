@@ -290,6 +290,8 @@ function issuesStatus(stream: Stream, t: T): string {
   if (blocked > 0) return t('chain.issuesBlocked', { count: blocked, total })
   if (run.gaps.length > 0) return t('chain.issuesGaps', { count: run.gaps.length })
   if (run.uncovered_outcome_ids.length > 0) return t('chain.issuesUncovered', { ids: run.uncovered_outcome_ids.join(', ') })
+  const lost = stream.outcomes?.uncovered_adr_ids ?? []
+  if (lost.length > 0) return t('chain.issuesLost', { ids: lost.join(', ') })
   return t('chain.issuesReady', { count: total, total })
 }
 
@@ -1441,6 +1443,8 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
   }))
   const questions = new Map(scope.map(q => [q.id, q.text]))
   const outcomes = new Map((stream.outcomes?.outcomes ?? []).map(o => [o.id, o.title]))
+  // Решения, не вошедшие ни в один итог, нет и в задачах: их видно и здесь.
+  const lost = stream.outcomes?.uncovered_adr_ids ?? []
   const cut = () => void retry.go(() => startOrFollow(
     () => api.seekIssues(council.id, group.id), council, c => streamOf(c, group.id)?.issues))
   if (!run) return null
@@ -1490,6 +1494,7 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
       {run.uncovered_outcome_ids.length > 0 && (
         <p className="fragment-note">{t('issues.uncovered', { ids: run.uncovered_outcome_ids.join(', ') })}</p>
       )}
+      {lost.length > 0 && <p className="fragment-note">{t('issues.lostDecisions', { ids: lost.join(', ') })}</p>}
       <div className="stream-actions">
         <button className="btn-link" onClick={onBack}>{t('issues.change')}</button>
       </div>

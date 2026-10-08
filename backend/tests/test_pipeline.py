@@ -951,6 +951,9 @@ def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
     assert (result.outcomes, result.code, result.commit_sha) == ("o1", True, "abc123")
     prompt = runner.asked["issue_discovery", "sol"]
     assert '"id": "O2"' in section(prompt, "OUTCOMES")
+    # Открытый вопрос, держащий итог, виден текстом и с вариантами, а не одним номером.
+    outcomes = section(prompt, "OUTCOMES")
+    assert WHERE.text in outcomes and "Notion" in outcomes
     assert '"id": "ADR-1"' in section(prompt, "ACCEPTED ADRS")
     assert "Бюджет — до $200." in section(prompt, "CONSTRAINTS AND RISKS")
     context = section(prompt, "REPOSITORY CONTEXT")

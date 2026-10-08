@@ -297,6 +297,7 @@ export const en: Dict = {
   'chain.issuesBlocked': 'blocked {{count}} of {{total}}',
   'chain.issuesGaps': 'gaps: {{count}}',
   'chain.issuesUncovered': 'outside the issues: {{ids}}',
+  'chain.issuesLost': 'outside the outcomes and issues: {{ids}}',
   'chain.issuesReady': 'ready {{count}} of {{total}}',
 
   'idea.caps': 'Group · you',
@@ -513,6 +514,7 @@ export const en: Dict = {
   'issues.gapOutcomes': 'outcomes {{ids}}',
   'issues.toQuestions': 'Add to the questions',
   'issues.uncovered': 'Not part of any issue: {{ids}}.',
+  'issues.lostDecisions': 'Decisions left out of every outcome are not in the issues either: {{ids}}.',
   'issues.change': 'Change the outcomes',
 
   'run.note': 'This takes minutes. You can close the page: the work goes on on the server.',

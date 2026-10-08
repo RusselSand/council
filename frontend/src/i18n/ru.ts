@@ -293,6 +293,7 @@ export const ru = {
   'chain.issuesBlocked': 'заблокировано {{count}} из {{total}}',
   'chain.issuesGaps': 'пробелов: {{count}}',
   'chain.issuesUncovered': 'вне задач: {{ids}}',
+  'chain.issuesLost': 'вне итогов и задач: {{ids}}',
   'chain.issuesReady': 'готово {{count}} из {{total}}',
 
   'idea.caps': 'Группа · вы',
@@ -509,6 +510,7 @@ export const ru = {
   'issues.gapOutcomes': 'итоги {{ids}}',
   'issues.toQuestions': 'Добавить в вопросы',
   'issues.uncovered': 'Не вошли ни в одну задачу: {{ids}}.',
+  'issues.lostDecisions': 'Решения, не вошедшие ни в один итог, нет и в задачах: {{ids}}.',
   'issues.change': 'Изменить итоги',
 
   'run.note': 'Это занимает минуты. Страницу можно закрыть: работа идёт на сервере.',

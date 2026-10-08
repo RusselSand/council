@@ -219,7 +219,8 @@ SCAN_ROUNDS = 3
 def start_scan(participants: list[str], judge: str, idea: str, path: str,
                found: Inventory) -> RepositoryScan:
     return RepositoryScan(state="running", run=uuid4().hex[:8], idea=idea, path=path,
-                          commit_sha=found.commit_sha, dirty=found.dirty, files=len(found.files),
+                          root=str(found.root), commit_sha=found.commit_sha, dirty=found.dirty,
+                          files=len(found.files),
                           outside=found.outside, omitted=capped(found.omitted),
                           omitted_count=len(found.omitted),
                           steps=steps(participants, judge, (StepName.repository_discovery,
@@ -1138,6 +1139,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             frozenset(f.id for f in limits if f.label == "risk"),
             frozenset(q["id"] for q in questions if q["status"] == "open"),
             {same_question(q.text): q.id for q in self.scope})
+        opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
+                  for q in questions if q["status"] == "open"}
         values = {
             "idea": self.idea,
             "outcomes": as_json([{
@@ -1146,7 +1149,9 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
                 "risk_ids": [f"F{i}" for i in outcome.risk_ids],
                 "acceptance_criteria": outcome.acceptance_criteria,
-                "blocked_by": outcome.blocked_by,
+                # Открытый вопрос, что держит итог, — текстом и с вариантами: по одному
+                # номеру модели не поймут, чего не хватает и что от него зависит.
+                "blocked_by": [opened.get(name, name) for name in outcome.blocked_by],
                 "gaps": [gap.model_dump() for gap in outcome.gaps]} for outcome in self.outcomes]),
             "accepted_adrs": as_json(adrs),
             "constraints_and_risks": limits_prompt(limits),
