@@ -38,6 +38,8 @@ class StepName(StrEnum):
     decision_judge = "decision_judge"        # судья сводит их анализы в один итог по вопросу
     outcome_discovery = "outcome_discovery"  # участники собирают решения в изменения системы
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
+    issue_discovery = "issue_discovery"  # участники нарезают утверждённые итоги на задачи
+    issue_judge = "issue_judge"          # судья сводит их нарезки в итоговый набор задач
 
 
 class ModelRun(BaseModel):
@@ -486,6 +488,60 @@ class OutcomeDiscovery(BaseModel):
     error: str | None = None
 
 
+class IssueGap(BaseModel):
+    """Неопределённость, без решения которой часть работы не начать: материал для нового
+    открытого вопроса, а не ответ на него."""
+
+    # G1, G2… по порядку: на него ссылается blocked_by задачи.
+    id: str
+    question: str
+    reason: str = ""
+    outcome_ids: list[str] = []
+
+
+class Issue(BaseModel):
+    """Задача для coding agent — законченная часть одного или нескольких утверждённых итогов:
+    кому и зачем (user story), где менять (точки входа и что там сейчас) и что именно сделать
+    (scope). Задача, которой не хватает решения, заблокирована: недостающее не додумывается."""
+
+    # I1, I2… по порядку.
+    id: str
+    title: str
+    user_story: str
+    main_entry_points: list[str] = []
+    current_state: str = ""
+    scope: list[str] = []
+    outcome_ids: list[str] = []
+    adr_ids: list[str] = []
+    constraint_ids: list[int] = []
+    risk_ids: list[int] = []
+    # Задачи, результат которых нужен этой.
+    depends_on: list[str] = []
+    # Пробелы нарезки (G-n) и открытые вопросы потока, без решения которых её не сделать.
+    blocked_by: list[str] = []
+
+
+class IssueDiscovery(BaseModel):
+    """Нарезка утверждённых итогов на задачи: участники по отдельности, судья сводит их в
+    итоговый набор. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же
+    рабочей копии заново — точки входа проверяются по коду. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К каким итогам нарезали (OutcomeDiscovery.run): собрали другие — нарезают заново.
+    outcomes: str = ""
+    # С какого кода нарезали: code — читали ли его вообще (без скана — нет), коммит и правки.
+    code: bool = False
+    commit_sha: str = ""
+    dirty: bool = False
+    steps: list[Step]
+    issues: list[Issue] = []
+    gaps: list[IssueGap] = []
+    # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
+    uncovered_outcome_ids: list[str] = []
+    error: str | None = None
+
+
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
     её ищет совет (discovery), утверждает человек (idea); потом необязательный скан
@@ -494,7 +550,8 @@ class Stream(BaseModel):
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
     (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
-    человек фиксирует решения (decisions); из них совет собирает итоги (outcomes)."""
+    человек фиксирует решения (decisions); из них совет собирает итоги (outcomes), а
+    утверждённые человеком итоги нарезает на задачи для coding agents (issues)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
@@ -509,11 +566,12 @@ class Stream(BaseModel):
     analysis: DecisionAnalysis | None = None
     decisions: list[Decision] | None = None
     outcomes: OutcomeDiscovery | None = None
+    issues: IssueDiscovery | None = None
 
 
 # Ходы потока по его цепочке: поиск идеи, скан репозитория, поиск вопросов, вариантов,
-# проверка выбора, сборка итогов.
-STREAM_RUNS = ("discovery", "scan", "questions", "proposals", "analysis", "outcomes")
+# проверка выбора, сборка итогов, нарезка на задачи.
+STREAM_RUNS = ("discovery", "scan", "questions", "proposals", "analysis", "outcomes", "issues")
 
 
 class Council(BaseModel):
@@ -640,6 +698,13 @@ class ApproveDecisions(GroupsEdit):
 
     analysis_run: str
     decisions: list[DecisionDraft]
+
+
+class ApproveOutcomes(GroupsEdit):
+    """Человек утверждает итоги потока — и совет нарезает их на задачи. outcomes_run — какие
+    итоги были на экране (OutcomeDiscovery.run): собрали заново — 409."""
+
+    outcomes_run: str
 
 
 class Model(BaseModel):

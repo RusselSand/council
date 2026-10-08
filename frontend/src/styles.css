@@ -343,6 +343,8 @@ section > .option-note { margin: 8px 0 0 18px }
 .outcome-open { color: var(--stop-text) }
 .outcome-gap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px }
 .outcome-gap .btn-link { font-size: 12.5px }
+.outcome-rows code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere }
+.issue-gaps { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px }
 @media (max-width: 600px) {
   .outcome-rows { grid-template-columns: minmax(0, 1fr); gap: 2px }
   .outcome-rows dd + dt { margin-top: 8px }
@@ -379,7 +381,7 @@ section > .option-note { margin: 8px 0 0 18px }
 .now-caps.failed { color: var(--stop-bright) }
 .now-caps.running, .now-caps.done { color: var(--go-bright) }
 .now-title { margin: 0 0 14px; font-size: 17px; font-weight: 600 }
-.segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
+.segments { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
 .segment::before { content: ""; display: block; height: 4px; margin-bottom: 8px; border-radius: 99px; background: var(--ink-line) }
 .segment.done::before, .segment.running::before { background: var(--go-bright) }
 .segment.yours::before { background: var(--wait) }
@@ -426,5 +428,5 @@ section > .option-note { margin: 8px 0 0 18px }
 @media (max-width: 600px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
   /* Пять сегментов в узкой карточке не помещаются: листаются внутри неё. */
-  .segments { grid-template-columns: repeat(6, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
+  .segments { grid-template-columns: repeat(7, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
 }

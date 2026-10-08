@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, IdeaDiscovery, Label, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
+  Council, CouncilPatch, DecisionAnalysis, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
+  QuestionDiscovery,
   RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure,
 } from '../api'
 import { App } from '../App'
@@ -135,9 +136,11 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
   streams: [
     { group: 'A', discovery: null, idea: ideas.A ?? null, scan: null, repository: ideas.A ? SKIPPED : null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
+      issues: null,
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
+      issues: null,
       ...more.B },
   ] satisfies Stream[],
 })
@@ -188,7 +191,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|(?:questions|proposals|outcomes)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -464,10 +467,10 @@ describe('Поток: группа и идея', () => {
     expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
     const segments = within(now).getAllByRole('listitem')
     expect(segments.map(segment => segment.className)).toEqual([
-      'segment running', ...Array(5).fill('segment idle')])
+      'segment running', ...Array(6).fill('segment idle')])
     expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
     expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
-      ` (${ru['light.running']})`, ...Array(5).fill(` (${ru['light.idle']})`)])
+      ` (${ru['light.running']})`, ...Array(6).fill(` (${ru['light.idle']})`)])
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
@@ -1054,6 +1057,82 @@ describe('Поток: решения и итоги', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
     expect(await screen.findByText('Состояние в файлах')).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes/discovery', body: undefined }])
+  })
+
+  const CUT: IssueDiscovery = {
+    state: 'done', run: 'i1', outcomes: 'o1', code: true, commit_sha: 'abcdef1234567890', dirty: false, error: null,
+    steps: [{ name: 'issue_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+            { name: 'issue_judge', state: 'skipped', runs: [] }],
+    issues: [
+      { id: 'I1', title: 'Сохранять состояние в файлы', main_entry_points: ['worker/state.py'],
+        user_story: 'As an operator, I want the state in files, so that a restart loses nothing.',
+        current_state: 'Состояние в памяти.', scope: ['Писать state.json после шага.'], outcome_ids: ['O1'],
+        adr_ids: ['ADR-1'], constraint_ids: [1], risk_ids: [], depends_on: [], blocked_by: [] },
+      { id: 'I2', title: 'Считать потери', main_entry_points: [], current_state: '',
+        user_story: 'As an operator, I want losses counted, so that I see them.', scope: ['Считать потери.'],
+        outcome_ids: ['O2'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: ['I1'],
+        blocked_by: ['G1', 'Q2'] },
+    ],
+    gaps: [{ id: 'G1', question: 'Где хранить отчёт?', reason: 'нет решения', outcome_ids: ['O2'] }],
+    uncovered_outcome_ids: [],
+  }
+
+  it('итоги утверждают — совет нарезает их на задачи, экран переходит к задачам', async () => {
+    const cutting: IssueDiscovery = { ...CUT, state: 'running', issues: [], gaps: [] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }),
+               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: cutting })))
+    await card('Состояние в файлах')
+    expect(screen.getByText(ru['outcomes.approveHint'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['outcomes.approve'] }))
+    expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
+    expect(screen.getByText(ru['issues.cutting'], { exact: false })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes',
+                                   body: { run: 'g1', revision: 0, outcomes_run: 'o1' } }])
+  })
+
+  it('задачи: что, где и зачем; заблокированная держится пробелом и вопросом; пробел — в вопросы', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(deciding()))
+    const ready = await card('Сохранять состояние в файлы')
+    expect(within(ready).getByText(ru['issues.ready'])).toBeTruthy()
+    expect(within(ready).getByText('worker/state.py')).toBeTruthy()
+    expect(within(ready).getByText('— Писать state.json после шага.')).toBeTruthy()
+    expect(within(ready).getByText('Состояние в файлах')).toBeTruthy()                    // итог O1
+    expect(within(ready).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()  // ADR-1
+    expect(screen.getByText('По коду коммита abcdef12.')).toBeTruthy()
+    const blocked = await card('Считать потери')
+    expect(within(blocked).getByText('заблокирована G1, Q2')).toBeTruthy()
+    expect(within(blocked).getByText('Не хватает решения: Q2. Задача не додумывается.')).toBeTruthy()
+    expect(within(blocked).getByText('Где хранить отчёт?', { exact: false })).toBeTruthy()
+    expect(within(blocked).getByText('I1')).toBeTruthy()                                  // после задачи I1
+    expect(screen.getAllByText('заблокировано 1 из 2').length).toBeGreaterThan(0)         // цепочка и «Сейчас»
+
+    const gaps = screen.getByRole('region', { name: ru['issues.gapsTitle'] })
+    fireEvent.click(within(gaps).getByRole('button', { name: ru['issues.toQuestions'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
+    expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
+  })
+
+  it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
+    await card('Сохранять состояние в файлы')
+    fireEvent.click(screen.getByRole('button', { name: ru['issues.change'] }))
+    expect(await screen.findByRole('heading', { name: ru['outcomes.title'] })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ru['outcomes.approve'] })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: ru['outcomes.toIssues'] }))
+    expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([])
+  })
+
+  it('нарезка упала — причина видна, её запускают снова', async () => {
+    const failed: IssueDiscovery = { ...CUT, state: 'failed', issues: [], gaps: [],
+                                     error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: failed }),
+               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT })))
+    expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText('Сохранять состояние в файлы')).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'issues/discovery', body: undefined }])
   })
 })
 

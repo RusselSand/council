@@ -10,6 +10,8 @@ from spec_council.models import (
     Decision,
     LabeledFragment,
     OpenQuestion,
+    Outcome,
+    OutcomeDiscovery,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
@@ -19,6 +21,7 @@ from spec_council.pipeline import (
     DecisionRun,
     GroupingRun,
     IdeaRun,
+    IssueRun,
     ModelFailed,
     OutcomeRun,
     ProposalRun,
@@ -26,7 +29,7 @@ from spec_council.pipeline import (
     RepositoryRun,
     SlicingRun,
 )
-from spec_council.repository import Inventory
+from spec_council.repository import Inventory, RepositoryError
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -905,3 +908,76 @@ def test_evidence_counts_only_files_that_made_it_into_the_snapshot():
                ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
     result, _, _ = scan(replies, copy=lambda found, into: ("снимок", frozenset({"api/routes.py"})))
     assert [(f.status, f.evidence) for f in result.result.findings] == [("inferred", [])]
+
+
+# --- нарезка на задачи
+
+APPROVED = OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
+    Outcome(id="O1", title="Поиск по базе", behavior="Ответ находится поиском.",
+            adr_ids=["ADR-1"], constraint_ids=[5], acceptance_criteria=["Находит по слову."]),
+    Outcome(id="O2", title="Хранение базы", behavior="База где-то живёт.", blocked_by=["Q2"])])
+
+
+def task(id_, title, outcomes=("O1",), **extra):
+    return {"id": id_, "title": title,
+            "user_story": f"As a member, I want {title}, so that I find answers.",
+            "main_entry_points": ["api/deps.py"], "current_state": "Поиска нет.",
+            "scope": [f"{title}: сделать."], "outcome_ids": list(outcomes), "adr_ids": ["ADR-1"],
+            "constraint_ids": ["F5"], "risk_ids": [], "depends_on": [], "blocked_by": [],
+            **extra}
+
+
+def cut(replies, found=FOUND_REPO, copy=None):
+    runner, reports = FakeRunner(replies), []
+    result = IssueRun("c1", FIND, [SEARCH, WHERE], DECIDED, FOUND, APPROVED, GROUP_FRAGMENTS,
+                      ["sol", "fable"], "fable", runner, reports.append, found=found,
+                      repository="КАРТА РЕПОЗИТОРИЯ", copy=copy or copy_as("снимок-1")).run()
+    return result, runner
+
+
+def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
+    judge = {"issues": [task("I7", "Индекс базы"),
+                        task("I3", "Выдача ответа", depends_on=["I7"], blocked_by=["G1"])],
+             "gaps": [{"question": "Сколько хранить историю?", "reason": "не решено",
+                       "outcome_ids": ["O1"]}]}
+    result, runner = cut({("issue_discovery", "sol"): {"issues": [task("I1", "Поиск")]},
+                          ("issue_discovery", "fable"): {"issues": [task("I1", "Индекс")]},
+                          ("issue_judge", "fable"): judge})
+    assert result.state == "done"
+    assert [(i.id, i.title, i.depends_on, i.blocked_by) for i in result.issues] == [
+        ("I1", "Индекс базы", [], []), ("I2", "Выдача ответа", ["I1"], ["G1"])]
+    assert [(g.id, g.question) for g in result.gaps] == [("G1", "Сколько хранить историю?")]
+    assert result.uncovered_outcome_ids == ["O2"]                  # считает код, не модель
+    assert (result.outcomes, result.code, result.commit_sha) == ("o1", True, "abc123")
+    prompt = runner.asked["issue_discovery", "sol"]
+    assert '"id": "O2"' in section(prompt, "OUTCOMES")
+    assert '"id": "ADR-1"' in section(prompt, "ACCEPTED ADRS")
+    assert "Бюджет — до $200." in section(prompt, "CONSTRAINTS AND RISKS")
+    context = section(prompt, "REPOSITORY CONTEXT")
+    assert "abc123" in context and context.endswith("КАРТА РЕПОЗИТОРИЯ")
+    assert "Индекс" in section(runner.asked["issue_judge", "fable"],
+                               "INDEPENDENT ISSUE CANDIDATES")
+    # Модели — и участники, и судья — читают один свежий снимок рабочей копии.
+    [place] = set(runner.workspaces.values())
+    assert place.name.startswith("council-scan-")
+    assert not place.exists()
+
+
+def test_without_a_scan_the_issues_are_cut_without_code_and_the_same_sets_need_no_judge():
+    same = {"issues": [task("I1", "Поиск")]}
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         found=None)
+    assert result.state == "done"
+    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
+    assert (result.code, result.commit_sha) == (False, "")
+    assert set(runner.workspaces.values()) == {None}
+    assert "abc123" not in section(runner.asked["issue_discovery", "sol"], "REPOSITORY CONTEXT")
+
+
+def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
+    def broken(found, into):
+        raise RepositoryError("Рабочая копия менялась")
+
+    result, _ = cut({}, copy=broken)
+    assert result.state == "failed"
+    assert "менялась" in result.error

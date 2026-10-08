@@ -62,8 +62,9 @@ import hashlib
 import json
 import logging
 import tempfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from threading import Lock
@@ -76,6 +77,10 @@ from .decisions import as_prompt as analysis_prompt
 from .grouping import StructureOption, judged_structure, structure_options
 from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
+from .issues import Answer as IssueAnswer
+from .issues import Context as IssueContext
+from .issues import as_prompt as issue_prompt
+from .issues import issue_set, same_issues
 from .models import (
     SKIPPED,
     Choice,
@@ -86,6 +91,9 @@ from .models import (
     IdeaDiscovery,
     IdeaOption,
     IdeaProposal,
+    Issue,
+    IssueDiscovery,
+    IssueGap,
     LabeledFragment,
     ModelRun,
     OpenQuestion,
@@ -262,6 +270,16 @@ def start_outcomes(participants: list[str], judge: str,
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
 
 
+def start_issues(participants: list[str], judge: str, outcomes_run: str,
+                 found: Inventory | None) -> IssueDiscovery:
+    return IssueDiscovery(state="running", run=uuid4().hex[:8], outcomes=outcomes_run,
+                          code=found is not None,
+                          commit_sha=found.commit_sha if found else "",
+                          dirty=found.dirty if found else False,
+                          steps=steps(participants, judge,
+                                      (StepName.issue_discovery, StepName.issue_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -281,7 +299,8 @@ def as_json(value: object) -> str:
 
 
 class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
-                     ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery)]:
+                     ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
+                     IssueDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -290,6 +309,8 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
     workspace: Path | None = None
     # Состояние этого каталога: оно входит в ключ ответа — к другому коду ответ не годится.
     fingerprint: str = ""
+    # Какие файлы легли в снимок.
+    copied: frozenset[str] = frozenset()
 
     def __init__(self, council_id: str, participants: list[str], judge: str,
                  runner: Runner, report: Callable[[S], None], state: S) -> None:
@@ -319,6 +340,29 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
 
     def work(self) -> dict[str, Any]:
         raise NotImplementedError
+
+    @contextmanager
+    def _reading(self, found: Inventory | None,
+                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]]
+                 ) -> Iterator[Path | None]:
+        """Модели этого хода читают снимок рабочей копии: только файлы inventory, без .git и
+        игнорируемого, неподвижный, пока ход идёт, — только на чтение. Его отпечаток ключует
+        ответы: к другому коду оплаченный ответ не годится. Снимок удаляется с концом хода.
+        found None — кода нет: ход без файлов."""
+        if found is None:
+            yield None
+            return
+        with tempfile.TemporaryDirectory(prefix="council-scan-") as place:
+            folder = Path(place)
+            try:
+                self.fingerprint, self.copied = copy(found, folder)
+            except RepositoryError as exc:
+                raise StageFailed(str(exc)) from exc
+            self.workspace = folder
+            try:
+                yield folder
+            finally:
+                self.workspace = None
 
     # --- вызовы моделей
 
@@ -888,6 +932,33 @@ def adr_id(n: int) -> str:
     return f"ADR-{n}"
 
 
+def decided_context(scope: list[OpenQuestion], decisions: dict[str, Decision],
+                    found: dict[str, list[Proposal]], fragments: dict[int, LabeledFragment]
+                    ) -> tuple[list[dict], list[dict], list[LabeledFragment]]:
+    """Вопросы отбора с их статусом, принятые решения (ADR-n — по n-му вопросу отбора, с
+    выбранным вариантом и обоснованием) и ограничения с рисками группы — для промптов."""
+    limits = [f for f in fragments.values() if f.label in ("constraint", "risk")]
+    questions, adrs = [], []
+    for n, question in enumerate(scope, 1):
+        options = offered(question, fragments, found)
+        decision = decisions.get(question.id)
+        accepted = decision is not None and decision.proposal is not None
+        questions.append({"id": question.id, "text": question.text,
+                          "status": "decided" if accepted else "open",
+                          "adr_id": adr_id(n) if accepted else None, "proposals": options})
+        if accepted:
+            adrs.append({"id": adr_id(n), "question_id": question.id,
+                         "question": question.text, "proposal_id": decision.proposal,
+                         "decision": next((o["text"] for o in options
+                                           if o["id"] == decision.proposal), None),
+                         "rationale": decision.rationale})
+    return questions, adrs, limits
+
+
+def limits_prompt(limits: list[LabeledFragment]) -> str:
+    return as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in limits])
+
+
 class OutcomeRun(CouncilRun[OutcomeDiscovery]):
     """Итоги потока: участники по отдельности собирают зафиксированные решения в законченные
     изменения системы, судья сводит их наборы в итоговый. Итог, которому не хватает решения
@@ -913,21 +984,8 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
-        limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
-        questions, adrs = [], []
-        for n, question in enumerate(self.scope, 1):
-            options = offered(question, self.fragments, self.found)
-            decision = self.decisions.get(question.id)
-            accepted = decision is not None and decision.proposal is not None
-            questions.append({"id": question.id, "text": question.text,
-                              "status": "decided" if accepted else "open",
-                              "adr_id": adr_id(n) if accepted else None, "proposals": options})
-            if accepted:
-                adrs.append({"id": adr_id(n), "question_id": question.id,
-                             "question": question.text, "proposal_id": decision.proposal,
-                             "decision": next((o["text"] for o in options
-                                               if o["id"] == decision.proposal), None),
-                             "rationale": decision.rationale})
+        questions, adrs, limits = decided_context(self.scope, self.decisions, self.found,
+                                                  self.fragments)
         context = OutcomeContext(
             frozenset(adr["id"] for adr in adrs),
             frozenset(f.id for f in limits if f.label == "constraint"),
@@ -938,8 +996,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             "idea": self.idea,
             "questions_and_proposals": as_json(questions),
             "accepted_adrs": as_json(adrs),
-            "constraints_and_risks": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
-                                              for f in limits]),
+            "constraints_and_risks": limits_prompt(limits),
             "repository": self.repository,
         }
         answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
@@ -993,17 +1050,8 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
-        with tempfile.TemporaryDirectory(prefix="council-scan-") as place:
-            folder = Path(place)
-            try:
-                self.fingerprint, copied = self.copy(self.found, folder)
-            except RepositoryError as exc:
-                raise StageFailed(str(exc)) from exc
-            self.workspace = folder
-            try:
-                return self._rounds(RepositoryContext(copied, (folder,)))
-            finally:
-                self.workspace = None
+        with self._reading(self.found, self.copy) as folder:
+            return self._rounds(RepositoryContext(self.copied, (folder,)))
 
     def _rounds(self, context: RepositoryContext) -> dict[str, Any]:
         values = {
@@ -1039,3 +1087,107 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
             previous = map_prompt(judged.result)
         return {"rounds": self.state.rounds, "complete": self.state.complete,
                 "result": self.state.result, "follow_up": self.state.follow_up}
+
+
+class IssueRun(CouncilRun[IssueDiscovery]):
+    """Нарезка утверждённых итогов на задачи для coding agents: участники по отдельности,
+    судья сводит их нарезки в итоговый набор. Если шаг «Репозиторий» пройден сканом, модели
+    читают снимок той же рабочей копии заново (_reading) — точки входа и нынешнее состояние
+    проверяются по коду, а карта скана идёт им в помощь; без скана кода нет. Задачу, которой
+    не хватает решения, блокирует пробел или открытый вопрос — недостающее не додумывается.
+    Номера задач (I-n) и пробелов (G-n) — по порядку у судьи; какие итоги не вошли ни в одну
+    задачу, считает код, а не модель."""
+
+    what = "нарезка на задачи"
+
+    def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
+                 decisions: list[Decision], proposals: ProposalDiscovery | None,
+                 outcomes: OutcomeDiscovery, fragments: list[LabeledFragment],
+                 participants: list[str], judge: str, runner: Runner,
+                 report: Callable[[IssueDiscovery], None], *, found: Inventory | None,
+                 repository: str = context_prompt(None),
+                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_issues(participants, judge, outcomes.run, found))
+        self.idea = idea
+        self.scope = scope
+        self.decisions = {decision.question_id: decision for decision in decisions}
+        self.found_proposals = {options.question_id: options.proposals
+                                for options in (proposals.options if proposals else [])}
+        self.outcomes = outcomes.outcomes
+        self.fragments = {fragment.id: fragment for fragment in fragments}
+        self.found = found
+        self.repository = repository
+        self.copy = copy
+
+    def work(self) -> dict[str, Any]:
+        with self._reading(self.found, self.copy):
+            return self._cut()
+
+    def _cut(self) -> dict[str, Any]:
+        questions, adrs, limits = decided_context(self.scope, self.decisions,
+                                                  self.found_proposals, self.fragments)
+        context = IssueContext(
+            frozenset(outcome.id for outcome in self.outcomes),
+            frozenset(adr["id"] for adr in adrs),
+            frozenset(f.id for f in limits if f.label == "constraint"),
+            frozenset(f.id for f in limits if f.label == "risk"),
+            frozenset(q["id"] for q in questions if q["status"] == "open"),
+            {same_question(q.text): q.id for q in self.scope})
+        values = {
+            "idea": self.idea,
+            "outcomes": as_json([{
+                "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
+                "adr_ids": outcome.adr_ids,
+                "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
+                "risk_ids": [f"F{i}" for i in outcome.risk_ids],
+                "acceptance_criteria": outcome.acceptance_criteria,
+                "blocked_by": outcome.blocked_by,
+                "gaps": [gap.model_dump() for gap in outcome.gaps]} for outcome in self.outcomes]),
+            "accepted_adrs": as_json(adrs),
+            "constraints_and_risks": limits_prompt(limits),
+            "repository_context": self._code_note() + self.repository,
+        }
+        parse = partial(issue_set, context=context)
+        answers = self._ask_all(StepName.issue_discovery, render("issue_discovery", **values),
+                                parse)
+        # Одинаковые наборы — один; порядок — как у первого, кто его прислал.
+        sets: dict[str, IssueAnswer] = {}
+        for found in answers.values():
+            sets.setdefault(same_issues(found), found)
+        if len(answers) > 1 and len(sets) == 1:
+            self._skip(StepName.issue_judge)
+            chosen = next(iter(sets.values()))
+        else:
+            variants = shuffled([issue_prompt(answer) for answer in sets.values()])
+            prompt = render("issue_judge", **values, issue_candidates=as_json(
+                [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
+            chosen = self._ask_judge(StepName.issue_judge, prompt, parse)
+        return self._numbered(chosen)
+
+    def _code_note(self) -> str:
+        """Где код: снимок — текущий каталог хода; без скана его нет."""
+        if self.found is None:
+            return ""
+        return (f"Код рабочей копии — в текущем каталоге: её снимок, только на чтение, коммит "
+                f"{sha_prompt(self.found)}. Проверяй по нему точки входа и текущее состояние; "
+                f"карта ниже — с шага Repository Discovery.\n\n")
+
+    def _numbered(self, chosen: IssueAnswer) -> dict[str, Any]:
+        """Номера по порядку: задачи — I-n, пробелы — G-n (в ответе они уже по порядку);
+        зависимости — по новым номерам."""
+        renamed = {issue.name: f"I{n}" for n, issue in enumerate(chosen.issues, 1)
+                   if issue.name}
+        issues = [Issue(id=f"I{n}", title=c.title, user_story=c.user_story,
+                        main_entry_points=list(c.entry_points), current_state=c.current_state,
+                        scope=list(c.scope), outcome_ids=list(c.outcome_ids),
+                        adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
+                        risk_ids=list(c.risk_ids),
+                        depends_on=[renamed[name] for name in c.depends_on],
+                        blocked_by=list(c.blocked_by))
+                  for n, c in enumerate(chosen.issues, 1)]
+        gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,
+                         outcome_ids=list(g.outcome_ids)) for n, g in enumerate(chosen.gaps, 1)]
+        covered = {name for issue in issues for name in issue.outcome_ids}
+        return {"issues": issues, "gaps": gaps,
+                "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}

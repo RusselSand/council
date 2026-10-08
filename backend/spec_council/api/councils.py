@@ -16,6 +16,7 @@ from ..models import (
     CouncilStatus,
     DecisionAnalysis,
     IdeaDiscovery,
+    IssueDiscovery,
     Label,
     OutcomeDiscovery,
     ProposalDiscovery,
@@ -48,7 +49,7 @@ council_lock = Lock()
 PROBE_ATTEMPTS = 3
 
 RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
-            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery)
+            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery | IssueDiscovery)
 
 
 @dataclass(frozen=True)
