@@ -634,12 +634,50 @@ def test_a_submodule_not_checked_out_is_told_not_hidden(with_submodule):
     """Подмодуль не скачан: git status молчит, а кода его нет ни на диске, ни в снимке."""
     git(with_submodule, "submodule", "deinit", "-q", "-f", "vendor/lib")
     found = inventory(with_submodule)
-    assert found.absent == ("vendor/lib",)
-    assert "подмодули не скачаны: vendor/lib" in inventory_prompt(found)
+    assert found.omitted == ("vendor/lib/ — подмодуль не скачан",)
+    assert "нет в снимке: vendor/lib/ — подмодуль не скачан" in inventory_prompt(found)
     result = map_of({"findings": []}, CONTEXT)
-    told = json.loads(context_prompt(result, "abc", absent=("vendor/lib",)))
-    assert told["submodules_not_checked_out"] == ["vendor/lib"]
-    assert told["submodules_not_checked_out_count"] == 1
+    told = json.loads(context_prompt(result, "abc", omitted=found.omitted))
+    assert told["not_in_snapshot"] == ["vendor/lib/ — подмодуль не скачан"]
+    assert told["not_in_snapshot_count"] == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="ссылки на Windows git обычно кладёт файлами")
+def test_a_tracked_symlink_is_told_with_its_target_not_copied(repo, tmp_path):
+    """Ссылку в снимок не копируем — за ней может быть что угодно, — но и не прячем: модели
+    знают, что она есть и куда ведёт."""
+    os.symlink("api/deps.py", repo / "entry.py")
+    git(repo, "add", "entry.py")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "link")
+    found = inventory(repo)
+    assert "entry.py" not in found.files
+    assert found.omitted == ("entry.py → api/deps.py — ссылка, в снимок не копируется",)
+    assert "entry.py → api/deps.py" in inventory_prompt(found)
+    into, _, _ = copy(found, tmp_path)
+    assert not os.path.lexists(into / "entry.py")
+
+
+def test_a_link_at_the_top_of_the_working_copy_is_told_too(repo, monkeypatch):
+    """У ссылки в корне нет каталога по дороге — её не теряем. Ссылку здесь подменяем: на
+    Windows их без особых прав не создать."""
+    (repo / "entry.py").write_text("x = 1\n", encoding="utf-8")
+    islink = os.path.islink
+    monkeypatch.setattr(repository.os.path, "islink",
+                        lambda path: Path(path).name == "entry.py" or islink(path))
+    monkeypatch.setattr(repository.os, "readlink", lambda path: "api/deps.py")
+    assert repository.links_of(repo, repository.copies_of(repo)) == [
+        "entry.py → api/deps.py — ссылка, в снимок не копируется"]
+
+
+def test_the_filters_of_the_repository_config_are_read_within_the_output_limit(repo,
+                                                                             monkeypatch):
+    """.git/config не входит ни в снимок, ни в предел файлов: и его читаем не больше
+    OUTPUT_MAX, а не целиком в память."""
+    for n in range(50):
+        git(repo, "config", f"filter.f{n}.clean", "cat")
+    monkeypatch.setattr(repository, "OUTPUT_MAX", 100)
+    with pytest.raises(RepositoryError, match="слишком"):
+        repository.local_filters(repo)
 
 
 def test_commands_from_the_repository_config_are_not_run_by_the_scan(repo, tmp_path):
@@ -665,12 +703,12 @@ def test_commands_from_the_repository_config_are_not_run_by_the_scan(repo, tmp_p
 def test_many_submodules_not_checked_out_are_told_within_a_budget():
     """Нескачанных подмодулей бывают тысячи: карта идёт в каждый промпт ниже — список в ней
     ограничен, а сколько всего — сказано."""
-    absent = tuple(f"vendor/lib{n}" for n in range(1000))
-    found = Inventory(Path("."), "", False, (), absent=absent)
+    omitted = tuple(f"vendor/lib{n}/ — подмодуль не скачан" for n in range(1000))
+    found = Inventory(Path("."), "", False, (), omitted=omitted)
     assert "и ещё 980" in inventory_prompt(found)
-    told = json.loads(context_prompt(map_of({"findings": []}, CONTEXT), "abc", absent=absent))
-    assert len(told["submodules_not_checked_out"]) == 20
-    assert told["submodules_not_checked_out_count"] == 1000
+    told = json.loads(context_prompt(map_of({"findings": []}, CONTEXT), "abc", omitted=omitted))
+    assert len(told["not_in_snapshot"]) == 20
+    assert told["not_in_snapshot_count"] == 1000
 
 
 @pytest.mark.skipif(os.name == "nt", reason="бита исполняемости на Windows нет")

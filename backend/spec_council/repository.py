@@ -85,8 +85,9 @@ class Inventory:
     size: int = 0
     # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
     outside: int = 0
-    # Подмодули, что не скачаны: их кода нет ни на диске, ни в снимке.
-    absent: tuple[str, ...] = ()
+    # Чего нет в снимке, хоть оно и в рабочей копии: нескачанные подмодули и ссылки (их не
+    # копируем — за ссылкой может быть что угодно), с причиной; модели должны это знать.
+    omitted: tuple[str, ...] = ()
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -115,11 +116,10 @@ def git_env(root: Path | None) -> dict[str, str]:
 
 def local_filters(root: Path) -> set[str]:
     """Фильтры, которые задаёт сама рабочая копия (её .git/config, worktree и их include)."""
-    command = git_command(root, "config", "-z", "--show-scope", "--get-regexp", r"^filter\.")
-    try:
-        output = subprocess.run(command, capture_output=True, timeout=GIT_TIMEOUT).stdout
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    # Не больше OUTPUT_MAX, как и всё от git: .git/config не входит ни в какой предел. Ничего
+    # не задано — git config выходит с 1; любая другая ошибка — отказ, а не скан с фильтрами.
+    output = git_bytes(root, "config", "-z", "--show-scope", "--get-regexp", r"^filter\.",
+                       nothing=1)
     entries = output.split(b"\0")
     drivers = set()
     for scope, entry in zip(entries[::2], entries[1::2], strict=False):
@@ -129,9 +129,10 @@ def local_filters(root: Path) -> set[str]:
     return drivers
 
 
-def git_bytes(root: Path, *args: str) -> bytes:
+def git_bytes(root: Path, *args: str, nothing: int | None = None) -> bytes:
     """Вывод git — кусками и не больше OUTPUT_MAX: больше — RepositoryError, а git
-    останавливаем. В рабочей копии с миллионами файлов один список занял бы всю память."""
+    останавливаем. В рабочей копии с миллионами файлов один список занял бы всю память.
+    nothing — код выхода, который значит «ничего не нашлось»: тогда пусто."""
     command = git_command(root, *args)
     # Содержимое файлов — а с ним и фильтры — читают только status и hash-object.
     env = git_env(root) if args[0] in ("status", "hash-object") else git_env(None)
@@ -164,6 +165,8 @@ def git_bytes(root: Path, *args: str) -> bytes:
                                   f"{args[0]} больше {OUTPUT_MAX / 2**20:g} МБ")
         if expired.is_set():
             raise RepositoryError(f"git {args[0]} не уложился в {GIT_TIMEOUT} с")
+        if code == nothing:
+            return b""
         if code != 0:
             errors.seek(0)
             detail = errors.read(8192).decode("utf-8", errors="replace").strip()
@@ -448,8 +451,27 @@ def inventory(path: Path) -> Inventory:
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
     return Inventory(root, found[0][1], dirty, files,
                      state_of(found), modes_of(copies), size,
-                     sum(copy.outside for copy in copies),
-                     tuple(name for copy in copies for name in copy.absent))
+                     sum(copy.outside for copy in copies), omitted_of(root, copies))
+
+
+def omitted_of(root: Path, copies: list[Copy]) -> tuple[str, ...]:
+    """Чего нет в снимке, хоть оно и в рабочей копии, — с причиной."""
+    submodules = [f"{name}/ — подмодуль не скачан" for copy in copies for name in copy.absent]
+    return (*submodules, *links_of(root, copies))
+
+
+def links_of(root: Path, copies: list[Copy]) -> list[str]:
+    """Ссылки рабочей копии — путь и куда ведёт (сам текст ссылки, по ней не ходим)."""
+    found = []
+    for name in sorted(set(listed(copies))):
+        path, folder = root / name, os.path.dirname(name)
+        if os.path.islink(path) and (not folder or unlinked(root, folder)):
+            try:
+                target = shown(os.readlink(path))
+            except OSError:
+                target = "?"
+            found.append(f"{shown(name)} → {target} — ссылка, в снимок не копируется")
+    return found
 
 
 def present(root: Path, copies: list[Copy]) -> tuple[str, ...]:
@@ -595,11 +617,10 @@ def inventory_prompt(found: Inventory) -> str:
     if found.outside:
         text += (f"\n… файлов коммита вне sparse checkout: {found.outside} — их нет ни на диске, "
                  "ни в снимке: коммит виден не весь")
-    if found.absent:
-        shown_absent = capped(found.absent)
-        more = len(found.absent) - len(shown_absent)
-        text += (f"\n… подмодули не скачаны: {', '.join(shown_absent)}"
-                 f"{f' и ещё {more}' if more else ''} — их кода нет ни на диске, ни в снимке")
+    if found.omitted:
+        told = capped(found.omitted)
+        more = len(found.omitted) - len(told)
+        text += f"\n… нет в снимке: {'; '.join(told)}{f'; и ещё {more}' if more else ''}"
     return text
 
 
@@ -854,19 +875,19 @@ def as_prompt(result: RepositoryMap) -> dict:
 
 
 def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
-                   dirty: bool = False, outside: int = 0, absent: Sequence[str] = (),
-                   absent_count: int = 0) -> str:
+                   dirty: bool = False, outside: int = 0, omitted: Sequence[str] = (),
+                   omitted_count: int = 0) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
     сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
     правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
-    files_outside_checkout — сколько файлов коммита вне sparse checkout, а
-    submodules_not_checked_out — какие подмодули не скачаны (первые, всего — _count): их модели
+    files_outside_checkout — сколько файлов коммита вне sparse checkout, а not_in_snapshot —
+    чего ещё нет в снимке (нескачанные подмодули, ссылки; первые, всего — _count): этого модели
     не видели."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
     return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
                        "files_outside_checkout": outside,
-                       "submodules_not_checked_out": capped(absent),
-                       "submodules_not_checked_out_count": max(absent_count, len(absent)),
+                       "not_in_snapshot": capped(omitted),
+                       "not_in_snapshot_count": max(omitted_count, len(omitted)),
                        **as_prompt(result)},
                       ensure_ascii=False, indent=2)

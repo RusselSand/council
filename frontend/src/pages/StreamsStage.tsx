@@ -632,8 +632,8 @@ function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
       </p>
       {scan.dirty && <p className="fragment-note">{t('repository.dirty')}</p>}
       {scan.outside > 0 && <p className="fragment-note">{t('repository.outside', { count: scan.outside })}</p>}
-      {scan.absent_count > 0 && <p className="fragment-note">{t('repository.absent', {
-        count: scan.absent_count, paths: scan.absent.join(', ') + (scan.absent_count > scan.absent.length ? ', …' : '') })}</p>}
+      {scan.omitted_count > 0 && <p className="fragment-note">{t('repository.omitted', {
+        count: scan.omitted_count, items: scan.omitted.join('; ') + (scan.omitted_count > scan.omitted.length ? '; …' : '') })}</p>}
       {scan.state === 'done' && scan.complete && <p className="check ok">{t('repository.complete')}</p>}
       {scan.state === 'done' && !scan.complete && (
         <div className="check problem">
