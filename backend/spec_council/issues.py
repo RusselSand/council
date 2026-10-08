@@ -10,6 +10,7 @@
 Список задач может быть и пустым: всё уже реализовано или заблокировано.
 """
 
+import hashlib
 import itertools
 import json
 import re
@@ -149,10 +150,12 @@ def gaps_of(value: object, context: Context) -> tuple[list[Gap], dict[int, str]]
 
 def joined(gaps: list[Gap], question: str, reason: str, outcome_ids: tuple[str, ...]) -> str:
     """Пробел в список: тот же вопрос (как его сравнивает same_question) — тот же пробел, про
-    итоги обоих. Вернёт его номер, G-n."""
+    итоги обоих и с объяснениями обоих. Вернёт его номер, G-n."""
     for n, gap in enumerate(gaps, 1):
         if same_question(gap.question) == same_question(question):
-            gaps[n - 1] = replace(gap, outcome_ids=ordered({*gap.outcome_ids, *outcome_ids}))
+            reasons = [text for text in dict.fromkeys((*gap.reason.split("; "), reason)) if text]
+            gaps[n - 1] = replace(gap, reason="; ".join(reasons),
+                                  outcome_ids=ordered({*gap.outcome_ids, *outcome_ids}))
             return f"G{n}"
     gaps.append(Gap(question, reason, ordered(set(outcome_ids))))
     return f"G{len(gaps)}"
@@ -237,8 +240,24 @@ def issue_set(data: dict, context: Context) -> Answer:
         for question, reason in parent.gaps:
             joined(gaps, question, reason, (outcome_id,))
     gaps, issues = placed(gaps, issues)
-    issues = [inherited(issue, gaps, context) for issue in issues]
+    issues = after_blocked([inherited(issue, gaps, context) for issue in issues])
     return Answer(tuple(issues), tuple(gaps))
+
+
+def after_blocked(issues: list[Candidate]) -> list[Candidate]:
+    """Что держит задачу, держит и задачи после неё: их не начать, пока она не сделана, — модель
+    может этого не повторить. Зависимости без кругов (их отверг разбор)."""
+    named = {issue.name: issue for issue in issues if issue.name}
+    held: dict[str, frozenset[str]] = {}
+
+    def of(name: str) -> frozenset[str]:
+        if name not in held:
+            issue = named[name]
+            held[name] = frozenset(issue.blocked_by).union(*map(of, issue.depends_on))
+        return held[name]
+
+    return [replace(issue, blocked_by=tuple(sorted(frozenset(issue.blocked_by).union(
+        *map(of, issue.depends_on))))) for issue in issues]
 
 
 def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
@@ -359,9 +378,18 @@ def same_issues(answer: Answer) -> str:
         own["blocked_by"] = sorted(gaps.get(name, name) for name in issue["blocked_by"])
         return json.dumps(own, ensure_ascii=False, sort_keys=True)
 
-    contents = {issue["id"]: content(issue) for issue in data["issues"]}
-    issues = sorted(json.dumps({"issue": contents[issue["id"]],
-                                "after": sorted(contents[name] for name in issue["depends_on"])},
-                               ensure_ascii=False, sort_keys=True) for issue in data["issues"])
-    return json.dumps({"issues": issues, "gaps": sorted(gaps.values())}, ensure_ascii=False,
-                      sort_keys=True)
+    # Задача — со всем, что до неё: одинаковые по содержанию задачи цепочкой и звездой — разные
+    # наборы. Круг невозможен (его отверг разбор), а хеш не даёт строке расти с глубиной.
+    issues = {issue["id"]: issue for issue in data["issues"]}
+    labels: dict[str, str] = {}
+
+    def label(name: str) -> str:
+        if name not in labels:
+            issue = issues[name]
+            before = sorted(label(after) for after in issue["depends_on"])
+            labels[name] = hashlib.sha256(json.dumps([content(issue), before],
+                                                     ensure_ascii=False).encode()).hexdigest()
+        return labels[name]
+
+    return json.dumps({"issues": sorted(label(name) for name in issues),
+                       "gaps": sorted(gaps.values())}, ensure_ascii=False, sort_keys=True)

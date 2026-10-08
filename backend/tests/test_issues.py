@@ -156,3 +156,34 @@ def test_the_same_gap_named_twice_is_one_gap_about_both_outcomes():
     assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
         ("Где отчёт?", ("O1", "O2"))]
     assert answer.issues[0].blocked_by == ("G1",)
+
+
+def test_a_chain_and_a_star_of_alike_issues_are_not_one_set():
+    """Четыре одинаковые по содержанию задачи — цепочкой и звездой: порядок работы разный."""
+    def answer(after):
+        return issue_set({"issues": [issue(f"I{n}", "Шаг", depends_on=after.get(n, []))
+                                     for n in range(1, 5)]}, CONTEXT)
+
+    chain = answer({2: ["I1"], 3: ["I2"], 4: ["I3"]})
+    star = answer({2: ["I1"], 3: ["I1"], 4: ["I1"]})
+    assert same_issues(chain) != same_issues(star)
+    assert same_issues(chain) == same_issues(answer({1: ["I2"], 2: ["I3"], 3: ["I4"]}))
+
+
+def test_merged_gaps_keep_every_explanation():
+    answer = issue_set({"issues": [issue()],
+                        "gaps": [{"question": "Где отчёт?", "reason": "", "outcome_ids": ["O1"]},
+                                 {"question": "где отчёт", "reason": "O2 не начать",
+                                  "outcome_ids": ["O2"]},
+                                 {"question": "Где отчёт?", "reason": "и O1 тоже",
+                                  "outcome_ids": ["O1"]}]}, CONTEXT)
+    assert [gap.reason for gap in answer.gaps] == ["O2 не начать; и O1 тоже"]
+
+
+def test_what_holds_an_issue_holds_the_issues_after_it():
+    """Задача после заблокированной: её не начать, пока не сделана та, — она держится тем же."""
+    answer = issue_set({"issues": [issue("I1", blocked_by=["Q2"]),
+                                   issue("I2", "Выдача", outcomes=("O2",), depends_on=["I1"]),
+                                   issue("I3", "Отчёт", outcomes=("O2",), depends_on=["I2"])]},
+                       CONTEXT)
+    assert [found.blocked_by for found in answer.issues] == [("Q2",), ("Q2",), ("Q2",)]
