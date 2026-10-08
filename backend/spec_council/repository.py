@@ -25,6 +25,7 @@ import threading
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import NamedTuple
 
@@ -43,6 +44,8 @@ from .slicing import BadAnswer
 
 # Больше файлов в промпт не кладём: модели всё равно ищут по репозиторию сами.
 INVENTORY_MAX = 5000
+# И не длиннее этого: путь бывает и в 4 КБ, а список идёт в каждый промпт скана.
+INVENTORY_CHARS = 150_000
 # Снимок ложится на диск сервера: рабочую копию больше этого не копируем, а отказываем, —
 # и по байтам, и по числу файлов (крошечных их бывает миллион: кончились бы память и inode).
 SNAPSHOT_MAX = 512 * 2**20
@@ -163,6 +166,8 @@ def copies_of(root: Path) -> list[Copy]:
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
         found.append(Copy(folder, prefix, cached, others))
+        if sum(len(copy.cached) + len(copy.others) for copy in found) > FILES_MAX:
+            raise too_many()            # пока обходим: подмодулей бывает и тысяча
         links = [name for _, mode, _, name in index if mode == b"160000"]
         for link in [*links, *inner_copies(folder, cached, others)]:
             path = folder / link
@@ -472,13 +477,23 @@ def copied_file(root: Path, name: str, target: Path, *, executable: bool | None 
 
 
 def inventory_prompt(found: Inventory) -> str:
-    # Имя не в UTF-8 в промпт не положить как есть — его байты видны как \xNN.
-    shown = [name.encode("utf-8", "backslashreplace").decode("utf-8")
-             for name in found.files[:INVENTORY_MAX]]
-    text = "\n".join(shown)
-    if len(found.files) > len(shown):
-        text += f"\n… и ещё {len(found.files) - len(shown)} файлов: ищите по репозиторию сами"
+    lines: list[str] = []
+    used = 0
+    for name in found.files[:INVENTORY_MAX]:
+        used += len(shown(name)) + 1
+        if used > INVENTORY_CHARS:
+            break
+        lines.append(shown(name))
+    text = "\n".join(lines)
+    if len(found.files) > len(lines):
+        text += f"\n… и ещё {len(found.files) - len(lines)} файлов: ищите по репозиторию сами"
     return text
+
+
+def shown(name: str) -> str:
+    """Имя файла, каким его видят модели и человек: байты не из UTF-8 — как \\xNN (как есть
+    его в промпт не положить и не сохранить). Обратно его переводит Context.path_of."""
+    return os.fsencode(name).decode("utf-8", "backslashreplace")
 
 
 def sha_prompt(found: Inventory) -> str:
@@ -502,10 +517,20 @@ class Context:
     def path_of(self, value: object) -> str:
         """Путь файла, как его назвала модель, — относительный, как в inventory. Сначала как
         есть: в POSIX «\\» — буква имени; «/» вместо «\\» — запасной ход для ссылок в духе
-        Windows."""
+        Windows. Имя, каким его показали моделям (shown), — тоже этот файл."""
         text = text_of(value)
         named = [self.relative(path) for path in dict.fromkeys((text, text.replace("\\", "/")))]
-        return next((path for path in named if path in self.files), named[-1])
+        for path in named:
+            if path in self.files:
+                return path
+            if path in self.originals:
+                return self.originals[path]
+        return named[-1]
+
+    @cached_property
+    def originals(self) -> dict[str, str]:
+        """Имена файлов по тому, как их показали моделям: у имён не из UTF-8 это разное."""
+        return {shown(name): name for name in self.files if shown(name) != name}
 
     def relative(self, path: str) -> str:
         path = path.removeprefix("./")
@@ -539,7 +564,7 @@ def evidence_of(value: object, context: Context) -> list[Evidence]:
         path = context.path_of(item.get("path"))
         if path not in context.files:
             continue   # файла в репозитории нет — это не подтверждение
-        found.append(Evidence(path=path, lines=text_of(item.get("lines")) or None,
+        found.append(Evidence(path=shown(path), lines=text_of(item.get("lines")) or None,
                               symbol=text_of(item.get("symbol")) or None))
     return found
 
@@ -592,7 +617,7 @@ def entry_of(value: object, context: Context) -> str:
     for end in ends:
         path = context.path_of(text[:end])
         if path in context.files:
-            return path + text[end:]
+            return shown(path) + text[end:]
     return ""
 
 

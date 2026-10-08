@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -55,6 +56,37 @@ def test_a_clean_working_copy_is_not_dirty_and_a_big_one_is_cut(repo, monkeypatc
     assert not inventory(repo).dirty
     monkeypatch.setattr("spec_council.repository.INVENTORY_MAX", 1)
     assert inventory_prompt(inventory(repo)).endswith("и ещё 1 файлов: ищите по репозиторию сами")
+
+
+def test_the_inventory_prompt_is_cut_by_its_length_too(repo, monkeypatch):
+    """5000 путей по 4 КБ — 20 МБ в каждом промпте: модели такого не примут."""
+    monkeypatch.setattr(repository, "INVENTORY_CHARS", len(".gitignore") + 1)
+    text = inventory_prompt(inventory(repo))
+    assert text.startswith(".gitignore\n")
+    assert text.endswith("и ещё 1 файлов: ищите по репозиторию сами")
+
+
+def test_a_name_that_is_not_utf8_is_shown_as_its_bytes_and_found_back():
+    """Имя с байтом не из UTF-8 (так его отдаёт POSIX): в промпте — его байты как \\xNN, модель
+    называет его так же — это тот же файл, и карта с ним сохраняется."""
+    name = "bad-\udcff.py"
+    context = Context(files=frozenset({name}))
+    shown = inventory_prompt(Inventory(Path("."), "", False, (name,)))
+    shown.encode("utf-8")                                    # промпт уходит в UTF-8
+    result = map_of({"findings": [finding(path=shown)], "flows": [
+        {"name": "Поток", "entry_point": f"{shown}:main", "steps": []}]}, context)
+    assert result.findings[0].status == "verified"
+    assert [e.path for e in result.findings[0].evidence] == [shown]
+    assert result.flows[0].entry_point == f"{shown}:main"
+    result.model_dump_json()
+
+
+def test_the_file_cap_holds_across_nested_copies_while_walking_them(with_submodule, monkeypatch):
+    """Подмодулей может быть много, у каждого — меньше предела, а вместе — миллионы путей:
+    считаем, пока обходим, а не после."""
+    monkeypatch.setattr(repository, "FILES_MAX", 4)
+    with pytest.raises(RepositoryError, match="много файлов"):
+        repository.copies_of(with_submodule)
 
 
 def test_a_folder_that_is_not_a_repository_is_refused(tmp_path):
