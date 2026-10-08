@@ -24,11 +24,12 @@ import tempfile
 import threading
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
-from typing import NamedTuple
+from typing import BinaryIO, NamedTuple
 
 from .ideas import reason_of
 from .models import (
@@ -280,12 +281,31 @@ def inner_copies(folder: Path, *listings: list[str]) -> list[str]:
     """Репозитории внутри, не подмодули: каталоги с .git, где лежат файлы из списков. --others
     показывает такой каталог одной строкой («tools/gen/»), а если в нём есть и отслеживаемые
     файлы внешней копии — поштучно. Игнорируемые каталоги в списки не попадают — в них не ищем."""
-    folders: set[str] = set()
-    for name in itertools.chain(*listings):
+    return [prefix for prefix, is_folder in prefixes(itertools.chain(*listings))
+            if is_folder and os.path.lexists(folder / prefix / ".git")]
+
+
+def prefixes(names: Iterable[str]) -> Iterator[tuple[str, bool]]:
+    """Пути от корня к именам — и каталоги по дороге, и сами имена — каждый по одному разу, по
+    порядку: (путь, каталог ли). Имена — по порядку, и у соседних общее начало уже пройдено:
+    все имена под одним каталогом в нём идут подряд. Строк «каталог по дороге» у глубокого пути
+    квадратично много — их общая длина не больше PATHS_MAX, иначе RepositoryError."""
+    previous: list[str] = []
+    used = 0
+    for name in sorted(set(names)):
         parts = name.removesuffix("/").split("/")
         whole = name.endswith("/")                   # «tools/gen/» — сам каталог тоже
-        folders.update("/".join(parts[:i]) for i in range(1, len(parts) + whole))
-    return sorted(inner for inner in folders if os.path.lexists(folder / inner / ".git"))
+        same = 0
+        while same < min(len(parts), len(previous)) and parts[same] == previous[same]:
+            same += 1
+        for depth in range(same + 1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            used += len(prefix)
+            if used > PATHS_MAX:
+                raise RepositoryError(f"Рабочая копия слишком велика для скана: пути к её файлам "
+                                      f"вместе длиннее {PATHS_MAX / 2**20:g} МБ")
+            yield prefix, depth < len(parts) or whole
+        previous = parts
 
 
 def names(output: bytes) -> list[str]:
@@ -299,6 +319,8 @@ def located(text: str, base: Path | None) -> Path:
     только внутри него; без него — абсолютный."""
     if not text.strip():           # пробелы по краям — часть имени: « repo» — не «repo»
         raise RepositoryError("Укажите путь к рабочей копии репозитория")
+    if "\0" in text:              # в пути его не бывает, а resolve() на нём падает
+        raise RepositoryError("В пути не может быть символа NUL")
     path = Path(text)
     if base is not None:
         path = (base / path).resolve()
@@ -479,18 +501,14 @@ def links_of(root: Path, copies: list[Copy]) -> list[str]:
     на каталог по дороге к файлу: файлов за ней в снимке нет, даже если git её самой не
     показывает (каталог игнорируется). Каждая — один раз, первая по пути."""
     found: list[str] = []
-    linked: dict[str, bool] = {}
-    for name in sorted(set(listed(copies))):
-        parts = name.removesuffix("/").split("/")
-        for depth in range(1, len(parts) + 1):
-            prefix = "/".join(parts[:depth])
-            if prefix not in linked:
-                linked[prefix] = is_link(root / prefix)
-                if linked[prefix]:
-                    found.append(f"{shown(prefix)} → {link_text(root / prefix)} — ссылка, в "
-                                 "снимок не копируется")
-            if linked[prefix]:
-                break
+    behind = None                                    # ссылка, за которой уже не смотрим
+    for prefix, _ in prefixes(listed(copies)):
+        if behind is not None and prefix.startswith(behind):
+            continue
+        if is_link(root / prefix):
+            found.append(f"{shown(prefix)} → {link_text(root / prefix)} — ссылка, в снимок не "
+                         "копируется")
+            behind = prefix + "/"
     return found
 
 
@@ -617,10 +635,9 @@ def copied_file(root: Path, name: str, target: Path, *, executable: bool | None 
         info = os.fstat(read.fileno())
         if not stat.S_ISREG(info.st_mode):
             return None
-        target.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
         size = 0
-        with target.open("wb") as write:
+        with written(target, name) as write:
             for chunk in iter(lambda: read.read(1 << 16), b""):
                 size += len(chunk)
                 if limit is not None and size > limit:
@@ -632,6 +649,20 @@ def copied_file(root: Path, name: str, target: Path, *, executable: bool | None 
     if executable and os.name != "nt":
         target.chmod(0o755)   # исполняемый — и в снимке: модели видят, что это запускают
     return digest.digest() + (b"x" if executable else b"-"), (info.st_size, info.st_mtime_ns)
+
+
+@contextmanager
+def written(target: Path, name: str) -> Iterator[BinaryIO]:
+    """Файл снимка на запись. Путь в снимке длиннее исходного (временный каталог), и предел
+    системы может кончиться — это причина отказа, а не внутренняя ошибка."""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        file = target.open("wb")
+    except OSError as exc:
+        raise RepositoryError(f"Не записать в снимок {shown(name)}: "
+                              f"{exc.strerror or exc}") from exc
+    with file:
+        yield file
 
 
 def inventory_prompt(found: Inventory) -> str:

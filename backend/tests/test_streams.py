@@ -958,6 +958,7 @@ def test_another_way_through_the_step_asks_the_questions_again(agents, repos):
     ("нет", 422, "Каталога нет"),
     ("..", 422, "вне каталога"),
     ("", 422, "Укажите"),
+    ("pro\u0000ject", 422, "NUL"),
 ])
 def test_a_scan_of_something_that_is_not_a_working_copy_is_refused(agents, repos, path, status,
                                                                      problem):

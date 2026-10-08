@@ -1,5 +1,6 @@
 """Репозиторий: inventory рабочей копии, путь к ней, разбор находок и вердикта судьи."""
 
+import errno
 import json
 import os
 import shutil
@@ -397,6 +398,36 @@ def test_a_file_reached_through_a_linked_folder_is_neither_listed_nor_copied(rep
     with pytest.raises(RepositoryError, match="conf/app.ini"):
         snapshot(forged, tmp_path / "snap")
     assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
+
+
+def test_folders_on_the_way_to_deep_paths_are_bounded_too(tmp_path, monkeypatch):
+    """Путь в тысячи каталогов: строк «каталог по дороге» у него квадратично много — и их
+    общая длина в пределах PATHS_MAX, а не гигабайты."""
+    deep = "/".join(["a"] * 2000) + "/x.py"
+    monkeypatch.setattr(repository, "PATHS_MAX", 100_000)
+    with pytest.raises(RepositoryError, match="слишком"):
+        repository.inner_copies(tmp_path, [deep], [])
+
+
+def test_a_path_too_long_for_the_snapshot_is_refused_with_its_name(repo, tmp_path,
+                                                                   monkeypatch):
+    """Путь в снимке длиннее исходного: предел системы — не внутренняя ошибка, а причина."""
+    found = inventory(repo)
+    mkdir = Path.mkdir
+
+    def too_long(self, *args, **kwargs):
+        if self.name == "api":
+            raise OSError(errno.ENAMETOOLONG, "File name too long")
+        return mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", too_long)
+    with pytest.raises(RepositoryError, match="api/deps.py"):
+        copy(found, tmp_path)
+
+
+def test_a_path_with_nul_is_refused_as_a_path(tmp_path):
+    with pytest.raises(RepositoryError, match="NUL"):
+        located("pro\0ject", tmp_path)
 
 
 def test_a_tracked_folder_swapped_for_an_ignored_link_is_told_not_hidden(repo, tmp_path):
