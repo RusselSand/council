@@ -28,7 +28,7 @@ const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>
   ({ state, run: 'd1', choices: [], steps: [], analyses: [], error: null })
 const result = (more: Partial<Outcome> = {}): Outcome => ({
   id: 'O1', title: 'Итог', behavior: 'Так работает.', adr_ids: [], constraint_ids: [], risk_ids: [],
-  acceptance_criteria: [], blocked_by: [], gaps: [], ...more })
+  acceptance_criteria: ['Видно сразу.'], blocked_by: [], gaps: [], ...more })
 const assembled = (state: OutcomeDiscovery['state'], outcomes: Outcome[] = []): OutcomeDiscovery =>
   ({ state, run: 'o1', decisions: [], steps: [], outcomes, uncovered_adr_ids: [], error: null })
 /**
@@ -153,6 +153,8 @@ describe('светофор', () => {
     const empty = on(assembled('done'))
     expect([streamLight(empty), chainLight(empty, 'outcomes')]).toEqual(['yours', 'yours'])
     expect(attention(council(empty)).map(a => a.what)).toEqual(['outcomesWait'])
+    // Без критериев готовности итог не проверить — он не готов.
+    expect(streamLight(on(assembled('done', [result({ acceptance_criteria: [] })])))).toBe('yours')
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {

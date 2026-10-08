@@ -256,7 +256,7 @@ export const ru = {
   'chain.outcomesNone': 'итоги не собирали',
   'chain.outcomesEmpty': 'итогов нет',
   'chain.outcomesBlocked': 'заблокировано {{count}} из {{total}}',
-  'chain.outcomesGaps': 'с пробелами {{count}} из {{total}}',
+  'chain.outcomesNotReady': 'не готово {{count}} из {{total}}',
   'chain.outcomesReady': 'готово {{count}} из {{total}}',
 
   'idea.caps': 'Группа · вы',
@@ -389,6 +389,7 @@ export const ru = {
   'outcomes.none': 'ИИ не собрал ни одного итога: решений не хватает даже для ожидаемого поведения.',
   'outcomes.blocked': 'заблокирован {{ids}}',
   'outcomes.withGaps': 'есть пробелы',
+  'outcomes.noCriteria': 'нет критериев готовности',
   'outcomes.ready': 'готов к разработке',
   'outcomes.missing': 'Не хватает решения: {{ids}}. Итог не додумывается.',
   'outcomes.back': 'Вернуться к вопросу',

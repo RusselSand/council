@@ -524,11 +524,14 @@ def assembles_anew(stream: Stream, decisions: list[Decision]) -> bool:
 def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
                             agents: AgentsDep, launch: LauncherDep) -> Council:
     """Собирает итоги заново: после сбоя или если при фиксации решений не было подключения к
-    моделям. Повтор не платит второй раз за уже данные ответы."""
+    моделям. Повтор не платит второй раз за уже данные ответы. Собранные итоги он не трогает:
+    за них заплачено, а заново они соберутся, когда поменяются решения."""
     def ready(council: Council) -> None:
         stream = stream_in(council, group)
         if stream.decisions is None:
             raise HTTPException(409, "Сначала зафиксируйте решения")
+        if stream.outcomes is not None and stream.outcomes.state == "done":
+            raise HTTPException(409, "Итоги уже собраны — заново они соберутся по другим решениям")
         if outdated(council.slicing, council.structure):
             raise HTTPException(
                 409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")

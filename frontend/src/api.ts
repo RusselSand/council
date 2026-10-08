@@ -334,8 +334,9 @@ export const searchesOf = (stream: Stream) =>
 export const seeking = (council: Council): boolean =>
   council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
 
-/** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел. */
-export const outcomeReady = (outcome: Outcome): boolean => outcome.blocked_by.length === 0 && outcome.gaps.length === 0
+/** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел, и есть чем проверить, что он готов. */
+export const outcomeReady = (outcome: Outcome): boolean =>
+  outcome.blocked_by.length === 0 && outcome.gaps.length === 0 && outcome.acceptance_criteria.length > 0
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

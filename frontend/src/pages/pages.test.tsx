@@ -907,6 +907,15 @@ describe('Поток: решения и итоги', () => {
     expect(scrolled.mock.contexts.map(el => (el as Element).id)).toContain('decision-Q2-title')
   })
 
+  it('итог без критериев готовности — не готов к разработке', async () => {
+    const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: vague }))
+    const outcome = await card('Состояние в файлах')
+    expect(within(outcome).getByText(ru['outcomes.noCriteria'])).toBeTruthy()
+    expect(within(outcome).queryByText(ru['outcomes.ready'])).toBeNull()
+    expect(screen.getAllByText('не готово 1 из 1').length).toBeGreaterThan(0)
+  })
+
   it('пока ИИ собирает итоги, решения не зафиксировать заново', async () => {
     const assembling: OutcomeDiscovery = { ...ASSEMBLED, state: 'running', outcomes: [] }
     openStream(() => deciding({ decisions: FIXED, outcomes: assembling }))

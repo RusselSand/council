@@ -708,6 +708,9 @@ def test_fixed_decisions_start_the_outcomes_and_an_open_question_blocks(agents):
     assert [(o.id, o.title, o.adr_ids, o.blocked_by, o.constraint_ids)
             for o in outcomes.outcomes] == [("O1", RESULT, ["ADR-1"], ["Q2"], [4])]
     assert outcomes.uncovered_adr_ids == []
+    # Собранные итоги повтор не затирает: за них заплачено, а решения те же.
+    assert assembles(council_id, "C").status_code == 409
+    assert streams_of(council_id)["C"].outcomes.run == outcomes.run
 
 
 def test_the_same_decisions_keep_the_outcomes_and_other_ones_assemble_again(agents):

@@ -260,7 +260,7 @@ export const en: Dict = {
   'chain.outcomesNone': 'not assembled',
   'chain.outcomesEmpty': 'no outcomes',
   'chain.outcomesBlocked': 'blocked {{count}} of {{total}}',
-  'chain.outcomesGaps': 'with gaps {{count}} of {{total}}',
+  'chain.outcomesNotReady': 'not ready {{count}} of {{total}}',
   'chain.outcomesReady': 'ready {{count}} of {{total}}',
 
   'idea.caps': 'Group · you',
@@ -393,6 +393,7 @@ export const en: Dict = {
   'outcomes.none': 'The AI assembled no outcomes: the decisions do not define even the expected behavior.',
   'outcomes.blocked': 'blocked by {{ids}}',
   'outcomes.withGaps': 'has gaps',
+  'outcomes.noCriteria': 'no acceptance criteria',
   'outcomes.ready': 'ready for development',
   'outcomes.missing': 'A decision is missing: {{ids}}. The outcome is not made up.',
   'outcomes.back': 'Back to the question',

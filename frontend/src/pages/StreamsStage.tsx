@@ -253,7 +253,7 @@ function groupStatus(stream: Stream, group: Group, t: T): string {
   return `${t('chain.fragments', { count: group.fragment_ids.length })} · ${ideaStatus(stream, group, t)}`
 }
 
-/** Что с итогами потока: собираются, сборка упала, сколько держат открытые вопросы или пробелы, сколько готово. */
+/** Что с итогами потока: собираются, сборка упала, сколько держат открытые вопросы, сколько ещё не готово, сколько готово. */
 function outcomesStatus(stream: Stream, t: T): string {
   const run = stream.outcomes
   if (run?.state === 'running') return t('chain.outcomesAssembling')
@@ -263,8 +263,8 @@ function outcomesStatus(stream: Stream, t: T): string {
   if (total === 0) return t('chain.outcomesEmpty')
   const blocked = run.outcomes.filter(o => o.blocked_by.length > 0).length
   if (blocked > 0) return t('chain.outcomesBlocked', { count: blocked, total })
-  const gaps = run.outcomes.filter(o => !outcomeReady(o)).length
-  if (gaps > 0) return t('chain.outcomesGaps', { count: gaps, total })
+  const unready = run.outcomes.filter(o => !outcomeReady(o)).length
+  if (unready > 0) return t('chain.outcomesNotReady', { count: unready, total })
   return t('chain.outcomesReady', { count: total, total })
 }
 
@@ -1155,7 +1155,8 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap
   const blocked = outcome.blocked_by
   let pill = <span className="pill ready">{t('outcomes.ready')}</span>
   if (blocked.length > 0) pill = <span className="pill blocked">{t('outcomes.blocked', { ids: blocked.join(', ') })}</span>
-  else if (!outcomeReady(outcome)) pill = <span className="pill open">{t('outcomes.withGaps')}</span>
+  else if (outcome.gaps.length > 0) pill = <span className="pill open">{t('outcomes.withGaps')}</span>
+  else if (!outcomeReady(outcome)) pill = <span className="pill open">{t('outcomes.noCriteria')}</span>
   const limits = (ids: number[]) => (
     <ul>{ids.map(id => <li key={id}><span className="fragment-id">F{id}</span> {fragments.get(id)?.text ?? '—'}</li>)}</ul>
   )
