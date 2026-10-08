@@ -602,6 +602,19 @@ def test_a_skip_worktree_file_absent_from_disk_is_a_sparse_checkout_not_an_edit(
     assert not inventory(repo).dirty
 
 
+def test_files_left_out_by_a_sparse_checkout_are_told_not_hidden(repo):
+    """Файлов коммита вне sparse checkout нет ни на диске, ни в снимке: модели и следующие шаги
+    должны знать, что видели не весь коммит."""
+    git(repo, "update-index", "--skip-worktree", "api/deps.py")
+    (repo / "api" / "deps.py").unlink()
+    found = inventory(repo)
+    assert found.outside == 1
+    assert "вне sparse checkout: 1" in inventory_prompt(found)
+    result = map_of({"findings": []}, CONTEXT)
+    assert json.loads(context_prompt(result, "abc", outside=1))["files_outside_checkout"] == 1
+    assert json.loads(context_prompt(result, "abc"))["files_outside_checkout"] == 0
+
+
 def test_an_untracked_working_copy_inside_is_scanned_too(repo, tmp_path):
     """Вложенная рабочая копия, не подмодуль: git показывает только её каталог, а код в ней
     модели должны видеть — без её .git и игнорируемого."""

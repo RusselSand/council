@@ -287,6 +287,8 @@ class RepositoryScan(BaseModel):
     dirty: bool = False
     # Сколько файлов в inventory и сколько проходов участников и судьи понадобилось.
     files: int = 0
+    # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
+    outside: int = 0
     rounds: int = 0
     steps: list[Step]
     # complete — судья счёл исследование достаточным; иначе остались задания follow_up.

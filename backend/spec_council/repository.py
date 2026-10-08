@@ -80,6 +80,8 @@ class Inventory:
     modes: Mapping[str, bool] = field(default_factory=dict)
     # Сколько весят файлы: больше SNAPSHOT_MAX — снимка не будет.
     size: int = 0
+    # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
+    outside: int = 0
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -141,6 +143,7 @@ class Copy(NamedTuple):
     cached: list[str]
     others: list[str]
     embedded: bool = False
+    outside: int = 0
 
 
 def listed(copies: list[Copy]) -> list[str]:
@@ -170,7 +173,11 @@ def copies_of(root: Path) -> list[Copy]:
         index = index_of(folder)
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
-        found.append(Copy(folder, prefix, cached, others, embedded))
+        # skip-worktree, а файла нет — он вне sparse checkout: в снимок не ляжет.
+        outside = sum(1 for tag, mode, _, name in index
+                      if tag.upper() == b"S" and mode in (b"100644", b"100755")
+                      and not plain(folder, name))
+        found.append(Copy(folder, prefix, cached, others, embedded, outside))
         if sum(len(copy.cached) + len(copy.others) for copy in found) > FILES_MAX:
             raise too_many()            # пока обходим: подмодулей бывает и тысяча
         # Подмодуль записан в коммите своего родителя; репозиторий внутри — нигде.
@@ -370,7 +377,8 @@ def inventory(path: Path) -> Inventory:
     # Правки — и вложенный репозиторий, не подмодуль: его кода в коммите корня нет.
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
     return Inventory(root, found[0][1], dirty, files,
-                     state_of(found), modes_of(copies), size)
+                     state_of(found), modes_of(copies), size,
+                     sum(copy.outside for copy in copies))
 
 
 def plain(root: Path, name: str) -> bool:
@@ -502,6 +510,9 @@ def inventory_prompt(found: Inventory) -> str:
     text = "\n".join(lines)
     if len(found.files) > len(lines):
         text += f"\n… и ещё {len(found.files) - len(lines)} файлов: ищите по репозиторию сами"
+    if found.outside:
+        text += (f"\n… файлов коммита вне sparse checkout: {found.outside} — их нет ни на диске, "
+                 "ни в снимке: коммит виден не весь")
     return text
 
 
@@ -744,11 +755,13 @@ def as_prompt(result: RepositoryMap) -> dict:
 
 
 def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
-                   dirty: bool = False) -> str:
+                   dirty: bool = False, outside: int = 0) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
     сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
-    правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет."""
+    правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
+    files_outside_checkout — сколько файлов коммита вне sparse checkout: их модели не видели."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
     return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
-                       **as_prompt(result)}, ensure_ascii=False, indent=2)
+                       "files_outside_checkout": outside, **as_prompt(result)},
+                      ensure_ascii=False, indent=2)

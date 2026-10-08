@@ -126,7 +126,7 @@ describe('светофор', () => {
 
   it('репозиторий: сканирует ИИ, скан упал, ждёт вас; пройденный — дальше вопросы', () => {
     const scanned = (state: RepositoryScan['state']): RepositoryScan => ({
-      state, run: 's1', idea: 'Идея', path: 'project', commit_sha: 'abc', dirty: false, files: 1, rounds: 1,
+      state, run: 's1', idea: 'Идея', path: 'project', commit_sha: 'abc', dirty: false, files: 1, outside: 0, rounds: 1,
       steps: [], complete: true, result: null, follow_up: [], error: null })
     const on = (scan: RepositoryScan | null) => ({ ...stream(null, true), scan, repository: null })
     expect([on(scanned('running')), on(scanned('failed')), on(scanned('done')), on(null)].map(streamLight))

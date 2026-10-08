@@ -887,6 +887,22 @@ def test_an_approved_map_goes_into_the_questions_and_every_step_below(agents, re
     assert {agents.workspaces[step] for step in later} == {None}
 
 
+def test_files_outside_a_sparse_checkout_are_on_record_and_in_the_map_below(agents, repos):
+    """Файлы коммита вне sparse checkout модели не видели: это видно на скане и в карте ниже."""
+    subprocess.run(["git", "-C", str(repos), "update-index", "--skip-worktree", "app.py"],
+                   check=True, capture_output=True)
+    (repos / "app.py").unlink()
+    (repos / "main.py").write_text("print(1)\n", encoding="utf-8")
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    assert streams_of(council_id)["C"].scan.outside == 1
+    assert "вне sparse checkout: 1" in agents.prompts["repository_discovery"]
+    takes(council_id, "C")
+    assert '"files_outside_checkout": 1' in agents.prompts["question_discovery"]
+
+
 def test_another_way_through_the_step_asks_the_questions_again(agents, repos):
     council_id = grouped()
     confirm(council_id)

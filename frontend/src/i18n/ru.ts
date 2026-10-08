@@ -313,6 +313,7 @@ export const ru = {
   'repository.failedNote': 'Скан остановился. Запустите его снова или пропустите шаг.',
   'repository.summary': '{{path}} · коммит {{sha}} · файлов: {{files}} · проходов: {{rounds}}',
   'repository.dirty': 'В рабочей копии есть незакоммиченные правки: модели читали её, а не коммит.',
+  'repository.outside': 'Вне sparse checkout — файлов коммита: {{count}}. Их нет ни на диске, ни в снимке: модели их не видели.',
   'repository.complete': 'Судья счёл исследование достаточным.',
   'repository.incomplete': 'Пробелы остались — доисследовать за три прохода не успели:',
   'repository.findings': 'находки',
