@@ -6,6 +6,7 @@ export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
   | 'idea_discovery' | 'idea_judge' | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
+  | 'outcome_discovery' | 'outcome_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -135,17 +136,34 @@ export interface Decision {
 }
 /** Решение, как его фиксирует человек: у открытого вопроса proposal и rationale — null. */
 export interface DecisionDraft { question_id: string; proposal: string | null; rationale: string | null }
+/** Неопределённость, которой нет среди вопросов потока: материал для нового поиска вопросов. */
+export interface OutcomeGap { question: string; reason: string }
+/**
+ * Итог — законченное изменение системы после принятых решений (O1, O2…). adr_ids — на каких
+ * решениях стоит (ADR-n — решение по n-му вопросу отбора); blocked_by — открытые вопросы, без
+ * решения которых его поведение не определить: недостающее не додумывается.
+ */
+export interface Outcome {
+  id: string; title: string; behavior: string; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
+  acceptance_criteria: string[]; blocked_by: string[]; gaps: OutcomeGap[]
+}
+/** Сборка итогов из решений (decisions — к каким); uncovered_adr_ids — решения, не вошедшие ни в один итог. */
+export interface OutcomeDiscovery {
+  state: 'running' | 'done' | 'failed'; run: string; decisions: string[]; steps: Step[]
+  outcomes: Outcome[]; uncovered_adr_ids: string[]; error: string | null
+}
 /**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
  * тексте; questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
  * proposals — поиск вариантов к ним; choices — выбор по каждому; analysis — его проверка;
- * decisions — решения, которые зафиксировал человек.
+ * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
+  outcomes: OutcomeDiscovery | null
 }
 
 /** Правка с экрана: меняются только присланные поля. */
@@ -245,12 +263,15 @@ export const api = {
   /** Проверить выбор заново: после сбоя или без подключения к моделям. */
   checkChoices: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/analysis`, { method: 'POST' }),
-  /** Решения по каждому отобранному вопросу. analysisRun — к какой проверке выбора. */
+  /** Решения по каждому отобранному вопросу; совет сразу собирает из них итоги. analysisRun — к какой проверке выбора. */
   approveDecisions: (id: string, at: GroupsVersion, group: string, analysisRun: string, decisions: DecisionDraft[]) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/decisions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, analysis_run: analysisRun, decisions }),
     }),
+  /** Собрать итоги заново: после сбоя или без подключения к моделям. */
+  seekOutcomes: (id: string, group: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes/discovery`, { method: 'POST' }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/idea`, {
@@ -305,12 +326,16 @@ export const structureIsStale = (council: Council): boolean => {
 export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
-/** Ходы потока: поиск идеи, вопросов, вариантов и проверка выбора. */
-export const searchesOf = (stream: Stream) => [stream.discovery, stream.questions, stream.proposals, stream.analysis]
+/** Ходы потока: поиск идеи, вопросов, вариантов, проверка выбора и сборка итогов. */
+export const searchesOf = (stream: Stream) =>
+  [stream.discovery, stream.questions, stream.proposals, stream.analysis, stream.outcomes]
 
-/** Совет ищет идею, вопросы, варианты или проверяет выбор хоть одного потока. */
+/** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
 export const seeking = (council: Council): boolean =>
   council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
+
+/** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел. */
+export const outcomeReady = (outcome: Outcome): boolean => outcome.blocked_by.length === 0 && outcome.gaps.length === 0
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

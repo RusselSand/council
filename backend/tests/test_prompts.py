@@ -27,6 +27,10 @@ GIVEN = {
     "decision_judge": {"idea", "question", "proposals", "user_selection",
                        "constraints_and_risks", "related_questions", "accepted_adrs",
                        "decision_analyses"},
+    "outcome_discovery": {"idea", "questions_and_proposals", "accepted_adrs",
+                          "constraints_and_risks"},
+    "outcome_judge": {"idea", "questions_and_proposals", "accepted_adrs", "constraints_and_risks",
+                      "outcome_candidates"},
 }
 
 

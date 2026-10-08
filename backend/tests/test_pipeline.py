@@ -6,6 +6,7 @@ import pytest
 
 from spec_council.models import (
     Choice,
+    Decision,
     LabeledFragment,
     OpenQuestion,
     Proposal,
@@ -18,6 +19,7 @@ from spec_council.pipeline import (
     GroupingRun,
     IdeaRun,
     ModelFailed,
+    OutcomeRun,
     ProposalRun,
     QuestionRun,
     SlicingRun,
@@ -702,3 +704,65 @@ def test_a_model_that_failed_one_check_stays_failed_after_the_next():
     assert result.analyses[1].verdict == "none"
     runs = {run.model: (run.state, run.error) for run in result.steps[0].runs}
     assert runs == {"sol": ("failed", "Q1: лимит"), "fable": ("done", None)}
+
+
+# --- итоги потока
+
+DECIDED = [Decision(question_id="Q1", proposal="F2", rationale="Уже есть в тексте.",
+                    rationale_by="human"), Decision(question_id="Q2")]
+
+
+def result_of(title, adrs=(), blocked=(), criteria=("Видно сразу.",)):
+    return {"title": title, "behavior": f"{title}: так работает.", "adr_ids": list(adrs),
+            "constraint_ids": ["F5"], "risk_ids": [], "acceptance_criteria": list(criteria),
+            "blocked_by": list(blocked), "gaps": []}
+
+
+def assemble(replies, decisions=DECIDED):
+    runner, reports = FakeRunner(replies), []
+    result = OutcomeRun("c1", FIND, [SEARCH, WHERE], decisions, FOUND, GROUP_FRAGMENTS,
+                        ["sol", "fable"], "fable", runner, reports.append).run()
+    return result, runner
+
+
+def test_outcomes_stand_on_the_decisions_and_an_open_question_blocks():
+    judge = {"outcomes": [result_of("Поиск по базе", adrs=["ADR-1"]),
+                          result_of("Хранение базы", adrs=["ADR-2"], blocked=["Q2", "Q1"])],
+             "coverage": {"covered_adr_ids": ["ADR-1"], "uncovered_adr_ids": []}}
+    result, runner = assemble({
+        ("outcome_discovery", "sol"): {"outcomes": [result_of("Поиск", adrs=["ADR-1"])]},
+        ("outcome_discovery", "fable"): {"outcomes": [result_of("Хранение", blocked=["Q2"])]},
+        ("outcome_judge", "fable"): judge})
+    assert result.state == "done"
+    found = [(o.id, o.title, o.adr_ids, o.blocked_by, o.constraint_ids) for o in result.outcomes]
+    assert found == [("O1", "Поиск по базе", ["ADR-1"], [], [5]),
+                     ("O2", "Хранение базы", [], ["Q2"], [5])]
+    assert result.uncovered_adr_ids == []
+    assert result.decisions == ["Q1: F2: Уже есть в тексте.", "Q2: -: "]
+    prompt = runner.asked["outcome_discovery", "sol"]
+    adrs = section(prompt, "ACCEPTED ADRS")
+    assert '"id": "ADR-1"' in adrs and "Полнотекстовый поиск по базе." in adrs
+    assert "Уже есть в тексте." in adrs and "ADR-2" not in adrs        # Q2 открыт — решения нет
+    questions = section(prompt, "OPEN QUESTIONS AND PROPOSALS")
+    assert '"status": "open"' in questions and HYBRID in questions
+    judge_prompt = runner.asked["outcome_judge", "fable"]
+    assert "Поиск" in section(judge_prompt, "INDEPENDENT OUTCOME CANDIDATES")
+    assert '"sol"' not in judge_prompt and '"fable"' not in judge_prompt
+
+
+def test_the_same_sets_need_no_judge_and_an_uncovered_decision_is_named():
+    same = {"outcomes": [result_of("Поиск", blocked=["Q2"])]}
+    result, runner = assemble({("outcome_discovery", "sol"): same,
+                               ("outcome_discovery", "fable"): same})
+    assert {s.name.value: s.state for s in result.steps}["outcome_judge"] == "skipped"
+    assert [o.blocked_by for o in result.outcomes] == [["Q2"]]
+    assert result.uncovered_adr_ids == ["ADR-1"]
+    assert sorted(runner.forgotten) == sorted(runner.keys)
+
+
+def test_a_judge_answer_without_a_list_fails_the_assembly():
+    result, _ = assemble({("outcome_discovery", "sol"): {"outcomes": [result_of("Поиск")]},
+                          ("outcome_discovery", "fable"): {"outcomes": []},
+                          ("outcome_judge", "fable"): {"coverage": {}}})
+    assert result.state == "failed"
+    assert "outcomes" in result.error

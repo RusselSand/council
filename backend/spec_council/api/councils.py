@@ -17,6 +17,7 @@ from ..models import (
     DecisionAnalysis,
     IdeaDiscovery,
     Label,
+    OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
     Slicing,
@@ -46,7 +47,7 @@ council_lock = Lock()
 PROBE_ATTEMPTS = 3
 
 RunState = (Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
-            | DecisionAnalysis)
+            | DecisionAnalysis | OutcomeDiscovery)
 
 
 @dataclass(frozen=True)
@@ -251,8 +252,9 @@ def running(state: RunState | None) -> bool:
 
 
 def seeking(council: Council) -> bool:
-    """Совет ищет идею, вопросы, варианты или проверяет выбор хоть одного потока: новая
-    нарезка, раскладка или другой состав групп стёрли бы потоки из-под него."""
+    """Совет работает хоть над одним потоком — ищет идею, вопросы, варианты, проверяет выбор
+    или собирает итоги: новая нарезка, раскладка или другой состав групп стёрли бы потоки из-под
+    него."""
     return any(running(getattr(stream, field))
                for stream in council.streams or [] for field in STREAM_RUNS)
 

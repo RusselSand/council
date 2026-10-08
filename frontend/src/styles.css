@@ -332,6 +332,20 @@ section > .option-note { margin: 8px 0 0 18px }
   .adr-rows dd + dt { margin-top: 4px }
 }
 
+/* Шаг «Итоги»: по итогу — что меняется, на каких решениях стоит, что соблюдать и когда готово. */
+.pill.blocked { background: var(--stop-soft); color: var(--stop-text) }
+.outcome-missing { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
+.outcome-missing .btn-secondary { margin-left: auto; padding: 3px 12px; font-size: 12.5px }
+.outcome-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 14px 0 0; font-size: 13px }
+.outcome-rows dt { padding-top: 1px; color: var(--fg-muted); font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase }
+.outcome-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere }
+.outcome-rows ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none }
+.outcome-open { color: var(--stop-text) }
+@media (max-width: 600px) {
+  .outcome-rows { grid-template-columns: minmax(0, 1fr); gap: 2px }
+  .outcome-rows dd + dt { margin-top: 8px }
+}
+
 /* Светофор точкой: в списках, легенде, на карточках советов. */
 .light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }
 .light-dot.done, .light-dot.running { background: var(--go); box-shadow: none }

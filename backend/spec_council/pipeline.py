@@ -35,6 +35,12 @@
 2. decision_judge — судья сводит их анализы в один итог (decision_judge.md). У unresolved
    вопроса без вариантов сравнивать нечего — модели его не видят.
 
+Итоги потока (OutcomeRun) — из зафиксированных решений:
+1. outcome_discovery — каждый участник собирает решения в законченные изменения системы,
+   а то, что держит открытый вопрос, помечает заблокированным (outcome_discovery.md);
+2. outcome_judge — судья сравнивает наборы и сводит их в итоговый (outcome_judge.md); если
+   наборы совпали, он не нужен.
+
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
 того же текста один и тот же промпт.
@@ -62,6 +68,7 @@ from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .models import (
     Choice,
+    Decision,
     DecisionAnalysis,
     Group,
     GroupRelation,
@@ -71,6 +78,9 @@ from .models import (
     LabeledFragment,
     ModelRun,
     OpenQuestion,
+    Outcome,
+    OutcomeDiscovery,
+    OutcomeGap,
     Proposal,
     ProposalDiscovery,
     QuestionAnalysis,
@@ -84,6 +94,9 @@ from .models import (
     StructureProposal,
     Vote,
 )
+from .outcomes import Context as OutcomeContext
+from .outcomes import as_prompt as outcome_prompt
+from .outcomes import outcome_list
 from .prompts import PromptError, render
 from .proposals import Context, Verdict, judged_proposals, proposal_list
 from .proposals import as_prompt as proposal_prompt
@@ -194,6 +207,19 @@ def start_analysis(participants: list[str], judge: str, choices: list[Choice]) -
                                         (StepName.decision_analysis, StepName.decision_judge)))
 
 
+def decisions_key(decisions: list[Decision]) -> list[str]:
+    """Решения, как их помнит сборка итогов: поменялись (и обоснование тоже) — собирать заново."""
+    return [f"{d.question_id}: {d.proposal or '-'}: {d.rationale or ''}" for d in decisions]
+
+
+def start_outcomes(participants: list[str], judge: str,
+                   decisions: list[Decision]) -> OutcomeDiscovery:
+    return OutcomeDiscovery(state="running", run=uuid4().hex[:8],
+                            decisions=decisions_key(decisions),
+                            steps=steps(participants, judge,
+                                        (StepName.outcome_discovery, StepName.outcome_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -213,7 +239,7 @@ def as_json(value: object) -> str:
 
 
 class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
-                     DecisionAnalysis)]:
+                     DecisionAnalysis, OutcomeDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -769,14 +795,7 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                                partial(judged_analysis, context=context))
 
     def _offered(self, question: OpenQuestion) -> list[dict]:
-        """Варианты вопроса: из текста группы и найденные к нему советом."""
-        group = [{"id": f"F{i}", "source": "group", "text": self.fragments[i].text}
-                 for i in question.proposal_ids if i in self.fragments]
-        found = [{"id": p.id, "source": "council", "text": p.text, "reason": p.reason,
-                  "constraint_ids": as_ids(p.constraint_ids), "risk_ids": as_ids(p.risk_ids),
-                  "depends_on_question_ids": p.depends_on}
-                 for p in self.found.get(question.id, [])]
-        return group + found
+        return offered(question, self.fragments, self.found)
 
     def _related(self, question: OpenQuestion) -> dict:
         """Другой вопрос потока и что по нему выбрал человек."""
@@ -793,3 +812,95 @@ def analysis_of_question(question: OpenQuestion, verdict: Analysis) -> QuestionA
         constraint_conflicts=list(verdict.conflicts), risk_ids=list(verdict.risks),
         depends_on=list(verdict.depends_on), reason=verdict.reason or None,
         rationale=verdict.rationale)
+
+
+def offered(question: OpenQuestion, fragments: dict[int, LabeledFragment],
+            found: dict[str, list[Proposal]]) -> list[dict]:
+    """Варианты вопроса для промпта: из текста группы и найденные к нему советом."""
+    group = [{"id": f"F{i}", "source": "group", "text": fragments[i].text}
+             for i in question.proposal_ids if i in fragments]
+    council = [{"id": p.id, "source": "council", "text": p.text, "reason": p.reason,
+                "constraint_ids": as_ids(p.constraint_ids), "risk_ids": as_ids(p.risk_ids),
+                "depends_on_question_ids": p.depends_on}
+               for p in found.get(question.id, [])]
+    return group + council
+
+
+def adr_id(n: int) -> str:
+    """Решение по n-му вопросу отбора: ADR-n — тот же номер, что у карточки на экране."""
+    return f"ADR-{n}"
+
+
+class OutcomeRun(CouncilRun[OutcomeDiscovery]):
+    """Итоги потока: участники по отдельности собирают зафиксированные решения в законченные
+    изменения системы, судья сводит их наборы в итоговый. Итог, которому не хватает решения
+    открытого вопроса, заблокирован им — недостающее не додумывается. Решения — ADR-n по
+    номеру вопроса в отборе; открытый вопрос решения не имеет. Какие решения не вошли ни в
+    один итог, считает код, а не модель."""
+
+    what = "сборка итогов"
+
+    def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
+                 decisions: list[Decision], proposals: ProposalDiscovery | None,
+                 fragments: list[LabeledFragment], participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[OutcomeDiscovery], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_outcomes(participants, judge, decisions))
+        self.idea = idea
+        self.scope = scope
+        self.decisions = {decision.question_id: decision for decision in decisions}
+        self.found = {options.question_id: options.proposals
+                      for options in (proposals.options if proposals else [])}
+        self.fragments = {fragment.id: fragment for fragment in fragments}
+
+    def work(self) -> dict[str, Any]:
+        limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
+        questions, adrs = [], []
+        for n, question in enumerate(self.scope, 1):
+            options = offered(question, self.fragments, self.found)
+            decision = self.decisions.get(question.id)
+            accepted = decision is not None and decision.proposal is not None
+            questions.append({"id": question.id, "text": question.text,
+                              "status": "decided" if accepted else "open",
+                              "adr_id": adr_id(n) if accepted else None, "proposals": options})
+            if accepted:
+                adrs.append({"id": adr_id(n), "question_id": question.id,
+                             "question": question.text, "proposal_id": decision.proposal,
+                             "decision": next((o["text"] for o in options
+                                               if o["id"] == decision.proposal), None),
+                             "rationale": decision.rationale})
+        context = OutcomeContext(
+            frozenset(adr["id"] for adr in adrs),
+            frozenset(f.id for f in limits if f.label == "constraint"),
+            frozenset(f.id for f in limits if f.label == "risk"),
+            frozenset(q["id"] for q in questions if q["status"] == "open"))
+        values = {
+            "idea": self.idea,
+            "questions_and_proposals": as_json(questions),
+            "accepted_adrs": as_json(adrs),
+            "constraints_and_risks": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
+                                              for f in limits]),
+        }
+        answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
+                                partial(outcome_list, context=context))
+        sets = {as_json([outcome_prompt(c) for c in found]): found for found in answers.values()}
+        if len(answers) > 1 and len(sets) == 1:
+            self._skip(StepName.outcome_judge)
+            chosen = next(iter(sets.values()))
+        else:
+            variants = shuffled([{"outcomes": [outcome_prompt(c) for c in found]}
+                                 for found in sets.values()])
+            prompt = render("outcome_judge", **values, outcome_candidates=as_json(
+                [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
+            chosen = self._ask_judge(StepName.outcome_judge, prompt,
+                                     partial(outcome_list, context=context))
+        outcomes = [Outcome(id=f"O{n}", title=c.title, behavior=c.behavior,
+                            adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
+                            risk_ids=list(c.risk_ids), acceptance_criteria=list(c.criteria),
+                            blocked_by=list(c.blocked_by),
+                            gaps=[OutcomeGap(question=g.question, reason=g.reason)
+                                  for g in c.gaps])
+                    for n, c in enumerate(chosen, 1)]
+        covered = {name for outcome in outcomes for name in outcome.adr_ids}
+        return {"outcomes": outcomes,
+                "uncovered_adr_ids": [adr["id"] for adr in adrs if adr["id"] not in covered]}

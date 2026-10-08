@@ -24,7 +24,13 @@ from spec_council.models import (
     Structure,
     StructureProposal,
 )
-from spec_council.pipeline import start_analysis, start_idea, start_proposals, start_questions
+from spec_council.pipeline import (
+    start_analysis,
+    start_idea,
+    start_outcomes,
+    start_proposals,
+    start_questions,
+)
 
 client = TestClient(app)
 
@@ -36,6 +42,7 @@ IDEA_C = "Полезные треды не теряются"
 MEASURE = "Как понять, что идея сработала?"
 OPTION = "Считать долю вопросов, на которые ответила база"
 WHY = "Мерило видно без опросов."
+RESULT = "Мерило идеи"
 
 
 def section(prompt, title):
@@ -64,6 +71,8 @@ class Agents:
     def ask(self, model, prompt, key):
         self.asked.append(key)
         found = {"text": OPTION, "reason": "мерило идеи", "constraint_ids": ["F4"]}
+        if "-outcome_" in key:
+            return json.dumps(self.outcomes(prompt))
         if "-decision_" in key:
             return json.dumps(self.analysis(prompt, judge="-decision_judge-" in key))
         if "-proposal_discovery-" in key:
@@ -96,6 +105,17 @@ class Agents:
             return {"status": "recommended", "proposal_id": options[0], "reason": "проще",
                     "rationale": {"text": WHY, "source": "ai"}}
         return {"status": "unresolved", "recommendation": {"proposal_id": options[0]}}
+
+    @staticmethod
+    def outcomes(prompt):
+        """Один итог: на всех принятых решениях, заблокирован всеми открытыми вопросами."""
+        adrs = json.loads(section(prompt, "ACCEPTED ADRS"))
+        questions = json.loads(section(prompt, "OPEN QUESTIONS AND PROPOSALS"))
+        return {"outcomes": [{
+            "title": RESULT, "behavior": "Доля отвеченных вопросов видна команде.",
+            "adr_ids": [adr["id"] for adr in adrs], "constraint_ids": ["F4"],
+            "acceptance_criteria": ["Доля считается по #help."],
+            "blocked_by": [q["id"] for q in questions if q["status"] == "open"]}]}
 
     def forget(self, keys):
         pass
@@ -665,3 +685,87 @@ def test_a_failed_check_still_lets_one_decide_with_ones_own_rationale(agents):
     res = decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", "Своё")])
     assert res.status_code == 200
     assert [d.rationale_by for d in streams_of(council_id)["C"].decisions] == ["human", "human"]
+
+
+# --- итоги
+
+def assembles(council_id, group):
+    return client.post(f"/api/councils/{council_id}/streams/{group}/outcomes/discovery")
+
+
+DECIDED = [("Q1", "P1", WHY), ("Q2", None, None)]
+
+
+def test_fixed_decisions_start_the_outcomes_and_an_open_question_blocks(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    res = decide(council_id, "C", DECIDED)
+    assert res.status_code == 200
+    assert res.json()["streams"][2]["outcomes"]["state"] == "running"
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert outcomes.state == "done"
+    assert [(o.id, o.title, o.adr_ids, o.blocked_by, o.constraint_ids)
+            for o in outcomes.outcomes] == [("O1", RESULT, ["ADR-1"], ["Q2"], [4])]
+    assert outcomes.uncovered_adr_ids == []
+
+
+def test_the_same_decisions_keep_the_outcomes_and_other_ones_assemble_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    decide(council_id, "C", DECIDED)
+    first = streams_of(council_id)["C"].outcomes.run
+    decide(council_id, "C", [("Q1", "P1", f" {WHY}"), ("Q2", None, "лишнее")])
+    assert streams_of(council_id)["C"].outcomes.run == first
+
+    decide(council_id, "C", [("Q1", "P1", "Другое обоснование"), ("Q2", None, None)])
+    assert streams_of(council_id)["C"].outcomes.run != first
+    decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", WHY)])
+    assert streams_of(council_id)["C"].outcomes.outcomes[0].blocked_by == []
+
+
+def test_another_choice_scope_or_idea_drops_the_outcomes(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    decide(council_id, "C", DECIDED)
+    chose(council_id, "C", [("Q1", None), ("Q2", None)])
+    assert streams_of(council_id)["C"].outcomes is None
+
+    decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)])
+    choose(council_id, "C", ["Q1"])
+    assert streams_of(council_id)["C"].outcomes is None
+
+
+def test_nothing_upstream_changes_while_the_outcomes_are_assembled(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    decide(council_id, "C", DECIDED)
+    stream = streams_of(council_id)["C"]
+    assembling = start_outcomes(["sol"], "sol", stream.decisions)
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"outcomes": assembling}) if s.group == "C" else s
+        for s in get_store().get_council(council_id).streams]})
+    assert decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)]).status_code == 423
+    assert chose(council_id, "C", [("Q1", None), ("Q2", None)]).status_code == 423
+    assert choose(council_id, "C", ["Q1"]).status_code == 423
+    assert approve(council_id, "C", "Другая идея").status_code == 423
+    assert decide(council_id, "C", DECIDED).status_code == 200                 # те же решения
+    assert assembles(council_id, "C").status_code == 409                       # уже идёт
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
+
+
+def test_without_models_the_decisions_are_fixed_and_the_outcomes_can_be_retried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    assert assembles(council_id, "C").status_code == 409                       # решений ещё нет
+    agents.online = set()
+    assert decide(council_id, "C", DECIDED).status_code == 200
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert outcomes.state == "failed" and outcomes.error.startswith("Нет подключения")
+    agents.online = {"sol", "fable"}
+    assert assembles(council_id, "C").status_code == 202
+    assert streams_of(council_id)["C"].outcomes.state == "done"

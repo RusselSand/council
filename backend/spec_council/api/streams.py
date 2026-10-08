@@ -4,8 +4,8 @@
 вопросы. Человек отбирает, какие из них решать, и добавляет свои, — и совет сразу ищет к
 ним новые варианты ответа. Человек выбирает по варианту на вопрос или оставляет его
 unresolved — и совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что
-есть. Человек фиксирует решения. Каждый шаг утверждают заново — то, что ниже по цепочке,
-ищется заново."""
+есть. Человек фиксирует решения — и совет сразу собирает из них итоги. Каждый шаг утверждают
+заново — то, что ниже по цепочке, ищется заново."""
 
 from collections.abc import Callable
 
@@ -33,6 +33,7 @@ from ..models import (
     IdeaDiscovery,
     LabeledFragment,
     OpenQuestion,
+    OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
     Stream,
@@ -42,13 +43,16 @@ from ..pipeline import (
     CouncilRun,
     DecisionRun,
     IdeaRun,
+    OutcomeRun,
     ProposalRun,
     QuestionRun,
     Runner,
     choices_key,
+    decisions_key,
     scope_key,
     start_analysis,
     start_idea,
+    start_outcomes,
     start_proposals,
     start_questions,
 )
@@ -176,7 +180,7 @@ def approve_idea(council_id: str, group: str, edit: ApproveIdea, store: StoreDep
                 runs = [question_run(council, group, idea.text, agents, store)]
                 questions = runs[0].state.model_copy(deep=True)
             changes |= {"questions": questions, "scope": None, "proposals": None,
-                        "choices": None, "analysis": None, "decisions": None}
+                        "choices": None, "analysis": None, "decisions": None, "outcomes": None}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -282,7 +286,7 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
                 runs = [proposal_run(council, group, stream.idea.text, scope, agents, store)]
                 proposals = runs[0].state.model_copy(deep=True)
             changes |= {"proposals": proposals, "choices": None, "analysis": None,
-                        "decisions": None}
+                        "decisions": None, "outcomes": None}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -336,7 +340,8 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         422: {"description": "Не по каждому вопросу один выбор, или такого "
                                              "варианта у вопроса нет"},
-                        423: {"description": "Совет ещё проверяет прежний выбор"}})
+                        423: {"description": "Совет ещё проверяет прежний выбор или собирает "
+                                             "итоги по нему"}})
 def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: StoreDep,
                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек утверждает выбор: по каждому отобранному вопросу — вариант из текста группы
@@ -350,8 +355,8 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         anew = analyzes_anew(stream, choices_for(stream, edit))
-        if anew and running(stream.analysis):
-            raise HTTPException(423, "Совет ещё проверяет прежний выбор — дождитесь его")
+        if anew and below_running(stream, "analysis"):
+            raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -367,7 +372,7 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
                 runs = [decision_run(council, group, stream.model_copy(
                     update={"choices": choices}), agents, store)]
                 analysis = runs[0].state.model_copy(deep=True)
-            changes |= {"analysis": analysis, "decisions": None}
+            changes |= {"analysis": analysis, "decisions": None, "outcomes": None}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -454,34 +459,88 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
 
 
 @router.post("/{council_id}/streams/{group}/decisions",
-             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM,
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         422: {"description": "Не по каждому вопросу одно решение, такого "
                                              "варианта у вопроса нет или у решения нет "
-                                             "обоснования"}})
-def approve_decisions(council_id: str, group: str, edit: ApproveDecisions,
-                      store: StoreDep) -> Council:
+                                             "обоснования"},
+                        423: {"description": "Совет ещё собирает итоги по прежним решениям"}})
+def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store: StoreDep,
+                      config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек фиксирует решения: по каждому отобранному вопросу — вариант с обоснованием (ADR)
-    или открытый вопрос. Вариант — любой из тех, что у вопроса есть, а не только проверенный
-    советом: решает человек, и проблема, которую нашёл совет, решению не мешает. Обоснование
-    совета, оставленное как есть, — подтверждённое человеком (ai), своё или поправленное —
-    human. Решения — к той проверке, что была на экране: проверили заново — 409. Если проверка
-    упала, решать можно и без неё — со своим обоснованием."""
-    with council_lock:
+    или открытый вопрос, — и совет сразу собирает из них итоги. Вариант — любой из тех, что у
+    вопроса есть, а не только проверенный советом: решает человек, и проблема, которую нашёл
+    совет, решению не мешает. Обоснование совета, оставленное как есть, — подтверждённое
+    человеком (ai), своё или поправленное — human. Зафиксировать заново — поменять решения:
+    итоги собираются заново; те же решения их не трогают. Решения — к той проверке, что была
+    на экране: проверили заново — 409. Если проверка упала, решать можно и без неё — со своим
+    обоснованием."""
+    def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
-        analysis = stream.analysis
-        if stream.choices is None or analysis is None:
-            raise HTTPException(409, "Решать ещё рано: сначала утвердите выбор по вопросам")
-        if running(analysis):
-            raise HTTPException(409, "Совет ещё проверяет выбор — дождитесь его")
-        if analysis.run != edit.analysis_run:
-            raise HTTPException(409, "Выбор уже проверили заново — решения были к прежней проверке")
-        decisions = decided(stream.scope, stream.proposals, analysis, edit.decisions)
-        council = store.update_council(council_id, {
-            "streams": replaced(council, stream.model_copy(update={"decisions": decisions}))})
-    if council is None:
-        raise HTTPException(404, MISSING)
-    return council
+        anew = assembles_anew(stream, decisions_for(stream, edit))
+        if anew and running(stream.outcomes):
+            raise HTTPException(423, "Совет ещё собирает итоги по прежним решениям — дождитесь его")
+        return council, anew
+
+    def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
+        stream = stream_in(council, group)
+        decisions = decisions_for(stream, edit)
+        changes: dict = {"decisions": decisions}
+        runs: list[CouncilRun] = []
+        if assembles_anew(stream, decisions):
+            if missing:
+                outcomes = unconnected(
+                    start_outcomes(council.participants, council.judge, decisions), missing)
+            else:
+                runs = [outcome_run(council, group, stream.model_copy(
+                    update={"decisions": decisions}), agents, store)]
+                outcomes = runs[0].state.model_copy(deep=True)
+            changes["outcomes"] = outcomes
+        return store.update_council(council_id, {
+            "streams": replaced(council, stream.model_copy(update=changes))}), runs
+
+    return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
+
+
+def decisions_for(stream: Stream, edit: ApproveDecisions) -> list[Decision]:
+    """Решения, которые фиксируют: к нынешней проверке выбора, когда та закончилась."""
+    analysis = stream.analysis
+    if stream.choices is None or analysis is None:
+        raise HTTPException(409, "Решать ещё рано: сначала утвердите выбор по вопросам")
+    if running(analysis):
+        raise HTTPException(409, "Совет ещё проверяет выбор — дождитесь его")
+    if analysis.run != edit.analysis_run:
+        raise HTTPException(409, "Выбор уже проверили заново — решения были к прежней проверке")
+    return decided(stream.scope, stream.proposals, analysis, edit.decisions)
+
+
+def assembles_anew(stream: Stream, decisions: list[Decision]) -> bool:
+    """Итоги собираются заново, если их ещё не собирали или собирали к другим решениям."""
+    return stream.outcomes is None or stream.outcomes.decisions != decisions_key(decisions)
+
+
+@router.post("/{council_id}/streams/{group}/outcomes/discovery", status_code=202,
+             responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
+def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
+                            agents: AgentsDep, launch: LauncherDep) -> Council:
+    """Собирает итоги заново: после сбоя или если при фиксации решений не было подключения к
+    моделям. Повтор не платит второй раз за уже данные ответы."""
+    def ready(council: Council) -> None:
+        stream = stream_in(council, group)
+        if stream.decisions is None:
+            raise HTTPException(409, "Сначала зафиксируйте решения")
+        if outdated(council.slicing, council.structure):
+            raise HTTPException(
+                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+
+    def build(council: Council, report: Callable) -> OutcomeRun:
+        stream = stream_in(council, group)
+        return OutcomeRun(council.id, stream.idea.text, stream.scope, stream.decisions,
+                          stream.proposals, fragments_of(council, group_of(council, group)),
+                          council.participants, council.judge, agents, report)
+
+    return start_run(council_id, store, config, agents, launch, assembling(group), ready, None,
+                     build)
 
 
 def decided(scope: list[OpenQuestion], search: ProposalDiscovery | None,
@@ -566,8 +625,8 @@ def launched_all(store: Store, council_id: str, launch: Launcher, council: Counc
     return (store.get_council(council_id) or council) if failed else council
 
 
-def unconnected[S: (IdeaDiscovery, QuestionDiscovery, ProposalDiscovery, DecisionAnalysis)](
-        state: S, missing: list[str]) -> S:
+def unconnected[S: (IdeaDiscovery, QuestionDiscovery, ProposalDiscovery, DecisionAnalysis,
+                    OutcomeDiscovery)](state: S, missing: list[str]) -> S:
     """Ход, который не запустить: к моделям нет подключения. Записан упавшим с причиной."""
     return state.model_copy(update={
         "state": "failed", "error": f"Нет подключения к моделям: {', '.join(missing)}"})
@@ -591,6 +650,11 @@ def proposing(group: str) -> Slot:
 def checking(group: str) -> Slot:
     """Проверка выбора потока как место хода."""
     return stream_slot(group, "analysis")
+
+
+def assembling(group: str) -> Slot:
+    """Сборка итогов потока как место хода."""
+    return stream_slot(group, "outcomes")
 
 
 def below_running(stream: Stream, field: str) -> bool:
@@ -635,6 +699,14 @@ def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
                        stream.proposals, fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, checking(group)))
+
+
+def outcome_run(council: Council, group: str, stream: Stream, runner: Runner,
+                store: Store) -> OutcomeRun:
+    return OutcomeRun(council.id, stream.idea.text, stream.scope, stream.decisions,
+                      stream.proposals, fragments_of(council, group_of(council, group)),
+                      council.participants, council.judge, runner,
+                      reporter(store, council.id, assembling(group)))
 
 
 def find_stream(council: Council, group: str) -> Stream | None:
