@@ -29,6 +29,7 @@ describe('контраст текста', () => {
     ...['fg', 'fg-soft', 'fg-muted', 'wait-text', 'stop-text', 'go-text']
       .flatMap(text => ['surface', 'bg', 'surface-sunken'].map(background => [text, background])),
     ['#ffffff', 'go'], ['#ffffff', 'stop'], ['wait-ink', 'wait'], ['fg', 'surface'],
+    ['wait-text', 'wait-soft'], ['go-text', 'go-soft'], ['stop-text', 'stop-soft'],
     ['ink-muted', 'ink'], ['go-bright', 'ink'], ['wait-bright', 'ink'], ['stop-bright', 'ink'],
   ])('%s на %s — не меньше 4.5:1', (text, background) => {
     expect(tokens.size).toBeGreaterThan(10)

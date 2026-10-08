@@ -32,6 +32,8 @@ class StepName(StrEnum):
     question_judge = "question_judge"          # судья сводит их в один канонический список
     proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
     proposal_judge = "proposal_judge"          # судья решает, какие из них показать
+    decision_analysis = "decision_analysis"  # участники проверяют выбор или сравнивают варианты
+    decision_judge = "decision_judge"        # судья сводит их анализы в один итог по вопросу
 
 
 class ModelRun(BaseModel):
@@ -277,12 +279,60 @@ class Choice(BaseModel):
     proposal: str | None = None
 
 
+class QuestionAnalysis(BaseModel):
+    """Что совет сказал по вопросу перед решением: проверил выбор человека или, если вопрос
+    unresolved, сравнил его варианты. Новых вариантов здесь нет, выбор человека не меняется."""
+
+    question_id: str
+    # validated — выбор проверен, проблем нет; conflict — с выбором проблема (решать всё равно
+    # человеку); recommended — для unresolved совет предлагает вариант; none — обоснованно
+    # выбрать нельзя.
+    verdict: Literal["validated", "conflict", "recommended", "none"]
+    # Выбор человека (validated, conflict) или рекомендованный вариант (recommended): Fn или Pn.
+    proposal: str | None = None
+    # С какими ограничениями группы вариант расходится, какие её риски с ним связаны, от каких
+    # других вопросов потока он зависит.
+    constraint_conflicts: list[int] = []
+    risk_ids: list[int] = []
+    depends_on: list[str] = []
+    # Почему так: в чём проблема, чем рекомендованный лучше, чего не хватает для выбора.
+    reason: str | None = None
+    # Обоснование решения, предложенное советом: в ADR — только если человек его подтвердит.
+    rationale: str | None = None
+
+
+class DecisionAnalysis(BaseModel):
+    """Проверка выбора по отобранным вопросам потока: по вопросу за раз, участники по
+    отдельности, судья сводит их анализы. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К какому выбору проверяли: выбрали другое — проверяют заново.
+    choices: list[str] = []
+    steps: list[Step]
+    # По вопросу, по мере готовности.
+    analyses: list[QuestionAnalysis] = []
+    error: str | None = None
+
+
+class Decision(BaseModel):
+    """Решение человека по вопросу — ADR: вариант и почему он. proposal None — вопрос оставлен
+    открытым: решения и обоснования нет, и он заблокирует свои итоги."""
+
+    question_id: str
+    proposal: str | None = None
+    rationale: str | None = None
+    # ai — обоснование совета, человек подтвердил его как есть; human — своё или поправленное.
+    rationale_by: Literal["ai", "human"] | None = None
+
+
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
     её ищет совет (discovery), утверждает человек (idea); потом вопросы — их ищет совет
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
-    (choices)."""
+    (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
+    человек фиксирует решения (decisions)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
@@ -292,6 +342,12 @@ class Stream(BaseModel):
     scope: list[OpenQuestion] | None = None
     proposals: ProposalDiscovery | None = None
     choices: list[Choice] | None = None
+    analysis: DecisionAnalysis | None = None
+    decisions: list[Decision] | None = None
+
+
+# Ходы потока по его цепочке: поиск идеи, вопросов, вариантов и проверка выбора.
+STREAM_RUNS = ("discovery", "questions", "proposals", "analysis")
 
 
 class Council(BaseModel):
@@ -382,6 +438,25 @@ class ApproveChoices(GroupsEdit):
 
     proposals_run: str
     choices: list[Choice]
+
+
+class DecisionDraft(BaseModel):
+    """Решение по вопросу, как его фиксирует человек: вариант и обоснование, или None —
+    вопрос остаётся открытым, и обоснование тогда не нужно."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str
+    proposal: str | None = None
+    rationale: str | None = None
+
+
+class ApproveDecisions(GroupsEdit):
+    """Человек фиксирует решения: по каждому отобранному вопросу — вариант с обоснованием или
+    открытый вопрос. analysis_run — к какой проверке выбора (DecisionAnalysis.run)."""
+
+    analysis_run: str
+    decisions: list[DecisionDraft]
 
 
 class Model(BaseModel):

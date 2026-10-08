@@ -1,25 +1,30 @@
-"""Потоки: подтверждение групп запускает поиск идеи, утверждение идеи — поиск вопросов;
-повторы поисков, утверждение идеи и отбор вопросов."""
+"""Потоки: подтверждение групп запускает поиск идеи, утверждение идеи — поиск вопросов,
+отбор — поиск вариантов, выбор — его проверку; повторы ходов и фиксация решений."""
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
 
 from spec_council.api.councils import reporter
-from spec_council.api.streams import discovery
+from spec_council.api.streams import decided, discovery
 from spec_council.app import app
 from spec_council.deps import get_agents, get_launcher, get_store
 from spec_council.groups import arranged
 from spec_council.models import (
     CouncilStatus,
+    DecisionAnalysis,
+    DecisionDraft,
     Group,
     LabeledFragment,
+    OpenQuestion,
+    QuestionAnalysis,
     Slicing,
     Structure,
     StructureProposal,
 )
-from spec_council.pipeline import start_idea, start_proposals, start_questions
+from spec_council.pipeline import start_analysis, start_idea, start_proposals, start_questions
 
 client = TestClient(app)
 
@@ -30,6 +35,11 @@ IDEA_B = "Команда сама находит ответы"
 IDEA_C = "Полезные треды не теряются"
 MEASURE = "Как понять, что идея сработала?"
 OPTION = "Считать долю вопросов, на которые ответила база"
+WHY = "Мерило видно без опросов."
+
+
+def section(prompt, title):
+    return prompt.split(f"## {title}\n")[1].split("\n## ")[0].strip()
 
 
 def grp(gid, fragments, ideas=()):
@@ -54,6 +64,8 @@ class Agents:
     def ask(self, model, prompt, key):
         self.asked.append(key)
         found = {"text": OPTION, "reason": "мерило идеи", "constraint_ids": ["F4"]}
+        if "-decision_" in key:
+            return json.dumps(self.analysis(prompt, judge="-decision_judge-" in key))
         if "-proposal_discovery-" in key:
             return json.dumps({"proposals": [found]})
         if "-proposal_judge-" in key:
@@ -71,6 +83,19 @@ class Agents:
         idea, evidence = (IDEA_B, ["F3"]) if TEXTS[3] in prompt else (IDEA_C, ["F5"])
         return json.dumps({"number": 1, "options": [
             {"idea": idea, "evidence": evidence, "reason": "общая цель"}]})
+
+    @staticmethod
+    def analysis(prompt, judge):
+        """Выбранное — проверено без проблем, у unresolved — рекомендован первый вариант."""
+        options = re.findall(r'"id": "([FP]\d+)"', section(prompt, "PROPOSALS"))
+        if section(prompt, "USER SELECTION") != "null":
+            if judge:
+                return {"status": "validated", "rationale": {"text": WHY, "source": "ai"}}
+            return {"status": "user_selected", "validation": {"valid": True}}
+        if judge:
+            return {"status": "recommended", "proposal_id": options[0], "reason": "проще",
+                    "rationale": {"text": WHY, "source": "ai"}}
+        return {"status": "unresolved", "recommendation": {"proposal_id": options[0]}}
 
     def forget(self, keys):
         pass
@@ -478,3 +503,165 @@ def test_without_models_the_scope_is_approved_and_the_proposal_search_can_be_ret
     agents.online = {"sol", "fable"}
     assert proposes(council_id, "C").status_code == 202
     assert streams_of(council_id)["C"].proposals.state == "done"
+
+
+# --- проверка выбора и решения
+
+def checks(council_id, group):
+    return client.post(f"/api/councils/{council_id}/streams/{group}/analysis")
+
+
+def decide(council_id, group, decisions, revision=0, analysis_run=None):
+    run = analysis_run or streams_of(council_id)[group].analysis.run
+    return client.post(f"/api/councils/{council_id}/streams/{group}/decisions",
+                       json={"run": "g1", "revision": revision, "analysis_run": run,
+                             "decisions": [{"question_id": q, "proposal": p, "rationale": r}
+                                           for q, p, r in decisions]})
+
+
+def chosen_c(council_id, choices=(("Q1", "P1"), ("Q2", None))):
+    """Поток C: вопросы отобраны, варианты найдены, выбор утверждён — и совет его проверил."""
+    scoped_c(council_id)
+    return chose(council_id, "C", list(choices))
+
+
+def test_approved_choices_start_the_check(agents):
+    council_id = grouped()
+    confirm(council_id)
+    res = chosen_c(council_id)
+    assert res.status_code == 200
+    assert res.json()["streams"][2]["analysis"]["state"] == "running"
+    analysis = streams_of(council_id)["C"].analysis
+    assert analysis.state == "done"
+    assert [(a.question_id, a.verdict, a.proposal, a.rationale) for a in analysis.analyses] == [
+        ("Q1", "validated", "P1", WHY), ("Q2", "recommended", "P2", WHY)]
+
+
+def test_the_same_choices_keep_the_check_and_other_ones_check_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    first = streams_of(council_id)["C"].analysis.run
+    assert decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", None, None)]).status_code == 200
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    stream = streams_of(council_id)["C"]
+    assert stream.analysis.run == first and stream.decisions is not None
+
+    chose(council_id, "C", [("Q1", None), ("Q2", None)])
+    stream = streams_of(council_id)["C"]
+    assert stream.analysis.run != first and stream.decisions is None
+    assert [a.verdict for a in stream.analysis.analyses] == ["recommended", "recommended"]
+
+
+def test_another_scope_or_idea_drops_the_check_and_the_decisions(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)])
+    choose(council_id, "C", ["Q1"])
+    stream = streams_of(council_id)["C"]
+    assert (stream.choices, stream.analysis, stream.decisions) == (None, None, None)
+
+    chose(council_id, "C", [("Q1", None)])
+    approve(council_id, "C", "Другая идея")
+    stream = streams_of(council_id)["C"]
+    assert (stream.analysis, stream.decisions) == (None, None)
+
+
+def test_nothing_upstream_changes_while_the_choice_is_checked(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    stream = streams_of(council_id)["C"]
+    checking = start_analysis(["sol"], "sol", stream.choices)
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"analysis": checking}) if s.group == "C" else s
+        for s in get_store().get_council(council_id).streams]})
+    assert chose(council_id, "C", [("Q1", None), ("Q2", None)]).status_code == 423
+    assert choose(council_id, "C", ["Q1"]).status_code == 423
+    assert approve(council_id, "C", "Другая идея").status_code == 423
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None)]).status_code == 200  # тот же
+    assert decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)]).status_code == 409
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
+
+
+def test_decisions_take_any_option_and_tell_whose_rationale_it_is(agents):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    # Q1 — проверенный P1, Q2 — рекомендованный P2; обоснования совета — как есть.
+    res = decide(council_id, "C", [("Q2", "P2", f"  {WHY} "), ("Q1", "P1", WHY)])
+    assert res.status_code == 200
+    decisions = streams_of(council_id)["C"].decisions
+    assert [(d.question_id, d.proposal, d.rationale, d.rationale_by) for d in decisions] == [
+        ("Q1", "P1", WHY, "ai"), ("Q2", "P2", WHY, "ai")]
+
+    decide(council_id, "C", [("Q1", "P1", "Своё обоснование"), ("Q2", None, "лишнее")])
+    decisions = streams_of(council_id)["C"].decisions
+    assert [(d.proposal, d.rationale, d.rationale_by) for d in decisions] == [
+        ("P1", "Своё обоснование", "human"), (None, None, None)]
+    assert checks(council_id, "C").status_code == 409            # решения уже зафиксированы
+
+
+@pytest.mark.parametrize(("decisions", "problem"), [
+    ([("Q1", "P1", "  "), ("Q2", None, None)], "У решения по Q1 нет обоснования"),
+    ([("Q1", "P1", "x" * 2001), ("Q2", None, None)], "длиннее"),
+    ([("Q1", "P2", WHY), ("Q2", None, None)], "У вопроса Q1 нет варианта P2"),
+    ([("Q1", None, None)], "Нет решения по вопросам: Q2"),
+    ([("Q1", None, None), ("Q1", None, None), ("Q2", None, None)], "дважды"),
+])
+def test_a_senseless_decision_is_refused(agents, decisions, problem):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    res = decide(council_id, "C", decisions)
+    assert res.status_code == 422
+    assert problem in res.json()["detail"]
+    assert streams_of(council_id)["C"].decisions is None
+
+
+def test_decisions_for_an_earlier_check_or_before_the_choice_are_refused(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    assert decide(council_id, "C", [], analysis_run="нет").status_code == 409
+    chose(council_id, "C", [("Q1", None), ("Q2", None)])
+    res = decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)],
+                 analysis_run="прежний")
+    assert res.status_code == 409 and "заново" in res.json()["detail"]
+
+
+def test_without_models_the_choice_is_approved_and_the_check_can_be_retried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    agents.online = set()
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None)]).status_code == 200
+    analysis = streams_of(council_id)["C"].analysis
+    assert analysis.state == "failed" and analysis.error.startswith("Нет подключения")
+    agents.online = {"sol", "fable"}
+    assert checks(council_id, "C").status_code == 202
+    assert streams_of(council_id)["C"].analysis.state == "done"
+
+
+def test_an_option_the_council_did_not_check_is_decided_with_ones_own_rationale():
+    scope = [OpenQuestion(id="Q1", text=MEASURE, source="discovered", proposal_ids=[2, 3])]
+    analysis = DecisionAnalysis(state="done", steps=[], analyses=[QuestionAnalysis(
+        question_id="Q1", verdict="validated", proposal="F2", rationale=WHY)])
+    [other] = decided(scope, None, analysis,
+                      [DecisionDraft(question_id="Q1", proposal="F3", rationale=WHY)])
+    assert (other.proposal, other.rationale_by) == ("F3", "human")
+    [checked] = decided(scope, None, analysis,
+                        [DecisionDraft(question_id="Q1", proposal="F2", rationale=WHY)])
+    assert checked.rationale_by == "ai"
+
+
+def test_a_failed_check_still_lets_one_decide_with_ones_own_rationale(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    agents.online = set()
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    res = decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", "Своё")])
+    assert res.status_code == 200
+    assert [d.rationale_by for d in streams_of(council_id)["C"].decisions] == ["human", "human"]

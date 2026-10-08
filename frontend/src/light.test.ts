@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { Council, IdeaDiscovery, ProposalDiscovery, QuestionDiscovery, Slicing, Stream, Structure } from './api'
-import { attention, chainLight, councilLight, stageLight, streamLight } from './light'
+import type {
+  Council, DecisionAnalysis, IdeaDiscovery, ProposalDiscovery, QuestionDiscovery, Slicing, Stream, Structure,
+} from './api'
+import { attention, CHAIN, chainLight, councilLight, currentStep, stageLight, streamLight } from './light'
 
 const BASE: Council = {
   id: 'c1', name: 'Совет', status: 'brief', brief: 'текст', participants: ['sol', 'fable'], judge: 'fable',
@@ -21,16 +23,21 @@ const asked = (state: QuestionDiscovery['state']): QuestionDiscovery =>
   ({ state, run: 'q1', idea: 'Идея', steps: [], questions: [], error: null })
 const offered = (state: ProposalDiscovery['state']): ProposalDiscovery =>
   ({ state, run: 'p1', scope: [], steps: [], options: [], error: null })
+const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>
+  ({ state, run: 'd1', choices: [], steps: [], analyses: [], error: null })
 /**
  * Поток: approved — идея утверждена; questions — поиск вопросов; chosen — вопросы отобраны;
- * proposals — поиск вариантов; picked — выбор по ним утверждён.
+ * proposals — поиск вариантов; picked — выбор по ним утверждён; analysis — его проверка;
+ * decided — решения зафиксированы.
  */
 const stream = (discovery: IdeaDiscovery | null, approved = false, questions: QuestionDiscovery | null = null,
-                chosen = false, proposals: ProposalDiscovery | null = null, picked = false): Stream => ({
+                chosen = false, proposals: ProposalDiscovery | null = null, picked = false,
+                analysis: DecisionAnalysis | null = null, decided = false): Stream => ({
   group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions,
   scope: chosen ? [{ id: 'Q1', text: 'Как?', source: 'discovered', source_question_id: null, proposal_ids: [], reason: null }]
     : null,
   proposals, choices: picked ? [{ question_id: 'Q1', proposal: null }] : null,
+  analysis, decisions: decided ? [{ question_id: 'Q1', proposal: null, rationale: null, rationale_by: null }] : null,
 })
 const at = (council: Partial<Council>): Council => ({ ...BASE, ...council })
 
@@ -62,10 +69,9 @@ describe('светофор', () => {
     expect(streamLight(stream(search('running')))).toBe('running')
     expect(streamLight(stream(search('failed')))).toBe('failed')
     expect(streamLight(stream(search('done')))).toBe('yours')
-    const picked = stream(search('done'), true, asked('done'), true, offered('done'), true)
-    expect(streamLight(picked)).toBe('idle')
-    expect(['group', 'questions', 'options', 'decisions'].map(step => chainLight(picked, step as 'group'))).toEqual(
-      ['done', 'done', 'done', 'idle'])
+    const decided = stream(search('done'), true, asked('done'), true, offered('done'), true, checked('done'), true)
+    expect(streamLight(decided)).toBe('idle')
+    expect(CHAIN.map(step => chainLight(decided, step))).toEqual(['done', 'done', 'done', 'done', 'idle'])
   })
 
   it('своя идея после упавшего поиска: поток прошёл шаг, ошибки больше нет', () => {
@@ -100,11 +106,26 @@ describe('светофор', () => {
   it('варианты: ищет ИИ, упал поиск, ждут выбора, выбор утверждён', () => {
     const on = (proposals: ProposalDiscovery | null, picked = false) =>
       stream(null, true, asked('done'), true, proposals, picked)
-    expect([on(offered('running')), on(offered('failed')), on(offered('done')), on(null), on(offered('done'), true)]
-      .map(streamLight)).toEqual(['running', 'failed', 'yours', 'yours', 'idle'])
+    expect([on(offered('running')), on(offered('failed')), on(offered('done')), on(null)]
+      .map(streamLight)).toEqual(['running', 'failed', 'yours', 'yours'])
+    expect(chainLight(on(offered('done'), true), 'options')).toBe('done')
     const council = at({ slicing: slicing('done'), structure: structure('done'), streams: [on(offered('done'))] })
     expect(attention(council)).toEqual([
       { light: 'yours', what: 'optionsWait', group: 'A', to: '/councils/c1/streams/A' }])
+  })
+
+  it('решения: проверяет ИИ, проверка упала, ждут фиксации; зафиксированные ведут к итогам', () => {
+    const on = (analysis: DecisionAnalysis | null, decided = false) =>
+      stream(null, true, asked('done'), true, offered('done'), true, analysis, decided)
+    expect([on(checked('running')), on(checked('failed')), on(checked('done')), on(null)].map(streamLight))
+      .toEqual(['running', 'failed', 'yours', 'yours'])
+    const done = on(checked('done'), true)
+    expect([currentStep(done), chainLight(done, 'decisions'), streamLight(done)]).toEqual(['outcomes', 'done', 'idle'])
+    const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
+    expect(attention(council(on(checked('failed'))))).toEqual([
+      { light: 'failed', what: 'decisionsFailed', group: 'A', to: '/councils/c1/streams/A' }])
+    expect(attention(council(on(checked('done')))).map(a => a.what)).toEqual(['decisionsWait'])
+    expect(attention(council(done))).toEqual([])
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {
