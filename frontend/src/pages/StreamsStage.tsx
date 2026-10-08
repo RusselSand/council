@@ -566,6 +566,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
         <p className="next-caps">{t(sought ? 'repository.capsAi' : 'repository.caps')}</p>
         <h2 id="step-title" className="panel-title large">{t('repository.title')}</h2>
         <p className="panel-hint">{t('repository.hint')}</p>
+        <p className="fragment-note">{t('repository.trust')}</p>
       </section>
       <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
       <section className="card panel" aria-label={t('repository.title')}>

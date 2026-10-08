@@ -307,6 +307,7 @@ export const en: Dict = {
   'repository.capsAi': 'Repository · AI',
   'repository.title': 'Repository scan',
   'repository.hint': 'An optional step: the council studies the existing code for the idea, and the map of the implementation goes into the questions, options, decisions and outcomes. It can be skipped.',
+  'repository.trust': 'Scan only your own, trusted repositories: the models read the code, and an instruction hidden in it can make them read more than they should, up to the account tokens.',
   'repository.path': 'Working copy',
   'repository.pathRoot': 'path from {{root}}, e.g. project',
   'repository.pathAbsolute': 'absolute path to the working copy',
