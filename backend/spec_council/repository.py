@@ -19,6 +19,7 @@ import os
 import re
 import stat
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,8 @@ from .slicing import BadAnswer
 
 # Больше файлов в промпт не кладём: модели всё равно ищут по репозиторию сами.
 INVENTORY_MAX = 5000
+# Снимок ложится на диск сервера: рабочую копию больше этого не копируем, а отказываем.
+SNAPSHOT_MAX = 512 * 2**20
 TEXT_MAX = 2000
 FINDING_ID = re.compile(r"R?(\d+)", re.IGNORECASE)
 STATUSES = ("verified", "inferred", "unknown")
@@ -57,6 +60,10 @@ class Inventory:
     files: tuple[str, ...]
     # Состояние рабочей копии при inventory — коммит и git status: снимок сверяется с ним.
     state: bytes = b""
+    # Бит исполняемости из индекса — там, где git не верит диску (core.fileMode=false).
+    modes: Mapping[str, bool] = field(default_factory=dict)
+    # Сколько весят файлы: больше SNAPSHOT_MAX — снимка не будет.
+    size: int = 0
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -154,7 +161,20 @@ def working_copy(text: str, base: Path | None) -> Inventory:
     found = inventory(located(text, base))
     if base is not None and not found.root.is_relative_to(base.resolve()):
         raise RepositoryError(f"Корень рабочей копии {found.root} вне каталога репозиториев {base}")
+    fits(found.size)
     return found
+
+
+def fits(size: int) -> None:
+    """Снимок такого размера ляжет на диск сервера — или RepositoryError: больше не копируем."""
+    if size > SNAPSHOT_MAX:
+        raise too_big()
+
+
+def too_big() -> RepositoryError:
+    return RepositoryError(
+        f"Рабочая копия слишком велика для снимка: файлы весят больше "
+        f"{SNAPSHOT_MAX / 2**20:g} МБ — крупные артефакты держите вне git, в игнорируемых")
 
 
 def head(root: Path) -> str:
@@ -191,16 +211,8 @@ def hidden_of(root: Path) -> bytes:
     """Правки в файлах с assume-unchanged или skip-worktree: их содержимое git status не
     сверяет, а модели читают уже не коммит. Такие файлы на диске сверяем сами — с индексом
     (hash-object — с теми же фильтрами, что и git add)."""
-    flagged: dict[str, str] = {}
-    for entry in git_bytes(root, "ls-files", "-z", "-v", "--stage").split(b"\0"):
-        if not entry:
-            continue
-        tag, _, rest = entry.partition(b" ")      # «h 100644 <sha> 0\t<имя>»
-        meta, _, raw = rest.partition(b"\t")
-        mode, sha = meta.split(b" ")[:2]
-        name = os.fsdecode(raw)
-        if (tag.islower() or tag == b"S") and mode != b"160000" and plain(root, name):
-            flagged[name] = sha.decode()
+    flagged = {name: sha for tag, mode, sha, name in index_of(root)
+               if (tag.islower() or tag == b"S") and mode != b"160000" and plain(root, name)}
     names = list(flagged)
     changed = []
     for start in range(0, len(names), 100):        # по сотне — командная строка не бесконечна
@@ -208,6 +220,39 @@ def hidden_of(root: Path) -> bytes:
         shas = git(root, "hash-object", "--", *chunk).split()
         changed += [name for name, sha in zip(chunk, shas, strict=True) if sha != flagged[name]]
     return b"\0".join(os.fsencode(name) for name in changed)
+
+
+def index_of(root: Path) -> list[tuple[bytes, bytes, str, str]]:
+    """Записи индекса: (тег ls-files -v, режим, sha, имя) — из «h 100644 <sha> 0<TAB><имя>»."""
+    found = []
+    for entry in git_bytes(root, "ls-files", "-z", "-v", "--stage").split(b"\0"):
+        if entry:
+            tag, _, rest = entry.partition(b" ")
+            meta, _, raw = rest.partition(b"\t")
+            mode, sha = meta.split(b" ")[:2]
+            found.append((tag, mode, sha.decode(), os.fsdecode(raw)))
+    return found
+
+
+def modes_of(root: Path) -> dict[str, bool]:
+    """Бит исполняемости, которому git верит больше, чем диску: при core.fileMode=false — из
+    индекса (на диске он бывает и у всех файлов сразу, как в bind mount из Windows). Снимок
+    берёт его оттуда же, откуда взял бы коммит: иначе модели видели бы не показанный коммит, а
+    копия числилась бы без правок."""
+    modes: dict[str, bool] = {}
+    for folder, prefix in [(root, ""), *submodules(root)]:
+        if not file_mode(folder):
+            modes.update({prefix + name: mode == b"100755" for _, mode, _, name in index_of(folder)
+                          if mode in (b"100644", b"100755")})
+    return modes
+
+
+def file_mode(root: Path) -> bool:
+    """core.fileMode: false — бит исполняемости на диске git не сверяет."""
+    try:
+        return git(root, "config", "--type=bool", "--get", "core.fileMode").strip() != "false"
+    except RepositoryError:
+        return True                                  # не задан — сверяет
 
 
 def status_of(root: Path) -> bytes:
@@ -224,8 +269,9 @@ def inventory(path: Path) -> Inventory:
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
     found = levels(root)
     files = tuple(sorted({name for name in listed(root) if plain(root, name)}))
+    size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
     return Inventory(root, found[0][1], any(status for _, _, status in found), files,
-                     state_of(found))
+                     state_of(found), modes_of(root), size)
 
 
 def plain(root: Path, name: str) -> bool:
@@ -249,17 +295,21 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
     оплаченные ответы, и тот же код в другой копии — тот же ключ. Файл inventory не прочитать —
     тоже RepositoryError: промпт его называет, и карта без него вышла бы «полной», хотя его никто
     не читал. Вернёт отпечаток и какие файлы в снимок легли."""
+    fits(found.size)
     digest = hashlib.sha256()
     taken: dict[str, tuple[int, int]] = {}
     missed: list[str] = []
+    written = 0
     for name in found.files:
-        copied = copied_file(found.root, name, into / name)
+        copied = copied_file(found.root, name, into / name, executable=found.modes.get(name),
+                             limit=SNAPSHOT_MAX - written)
         if copied is None:
             missed.append(name)
             continue
         part, stamp = copied
         digest.update(os.fsencode(name) + b"\0" + part + b"\0")
         taken[name] = stamp
+        written += (into / name).stat().st_size
     if state_of(levels(found.root)) != found.state or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
@@ -304,9 +354,12 @@ def open_inside(root: Path, name: str) -> int:
     return os.open(real, flags)
 
 
-def copied_file(root: Path, name: str, target: Path) -> tuple[bytes, tuple[int, int]] | None:
+def copied_file(root: Path, name: str, target: Path, *, executable: bool | None = None,
+                limit: int | None = None) -> tuple[bytes, tuple[int, int]] | None:
     """Копия одного файла кусками — и хеш его содержимого с битом исполняемости, и его размер
-    и время правки на момент копирования. Пропал, не читается, не обычный файл — None."""
+    и время правки на момент копирования. Пропал, не читается, не обычный файл — None.
+    executable — бит из индекса, если диску git не верит; limit — сколько ещё влезет в снимок:
+    вырос больше — RepositoryError, не дописываем."""
     try:
         handle = open_inside(root, name)
     except OSError:
@@ -317,12 +370,17 @@ def copied_file(root: Path, name: str, target: Path) -> tuple[bytes, tuple[int, 
             return None
         target.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
+        size = 0
         with target.open("wb") as write:
             for chunk in iter(lambda: read.read(1 << 16), b""):
+                size += len(chunk)
+                if limit is not None and size > limit:
+                    raise too_big()
                 digest.update(chunk)
                 write.write(chunk)
-    executable = bool(info.st_mode & 0o111) and os.name != "nt"
-    if executable:
+    if executable is None:
+        executable = bool(info.st_mode & 0o111) and os.name != "nt"
+    if executable and os.name != "nt":
         target.chmod(0o755)   # исполняемый — и в снимке: модели видят, что это запускают
     return digest.digest() + (b"x" if executable else b"-"), (info.st_size, info.st_mtime_ns)
 

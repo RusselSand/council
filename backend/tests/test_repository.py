@@ -293,8 +293,8 @@ def test_a_working_copy_edited_while_the_snapshot_is_made_is_refused(repo, tmp_p
     found = inventory(repo)
     copy_one = repository.copied_file
 
-    def edit_after_copy(root, name, target):
-        copied = copy_one(root, name, target)
+    def edit_after_copy(root, name, target, **options):
+        copied = copy_one(root, name, target, **options)
         if name == "api/deps.py":
             (root / name).write_text("def get_context(): return 'новое и длиннее'\n",
                                      encoding="utf-8")
@@ -344,6 +344,52 @@ def test_the_executable_bit_is_copied_and_counts_in_the_fingerprint(repo, tmp_pa
     assert executable != plain
 
 
+def test_with_file_mode_off_the_executable_bit_comes_from_the_index(repo, tmp_path):
+    """core.fileMode=false: бит на диске git не сверяет — снимок берёт его из индекса, как взял
+    бы коммит. Иначе модели видели бы не тот коммит, что показан, а копия — «без правок»."""
+    git(repo, "config", "core.fileMode", "false")
+    _, plain, _ = copy(inventory(repo), tmp_path, "one")
+    git(repo, "update-index", "--chmod=+x", "api/deps.py")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "исполняемый")
+    found = inventory(repo)
+    assert not found.dirty
+    _, executable, _ = copy(found, tmp_path, "two")
+    assert executable != plain
+
+
+@pytest.mark.skipif(os.name == "nt", reason="бита исполняемости на Windows нет")
+def test_with_file_mode_off_a_bit_set_only_on_disk_is_not_in_the_snapshot(repo, tmp_path):
+    git(repo, "config", "core.fileMode", "false")
+    (repo / "api" / "deps.py").chmod(0o755)
+    found = inventory(repo)
+    assert not found.dirty
+    into, _, _ = copy(found, tmp_path)
+    assert not os.access(into / "api" / "deps.py", os.X_OK)
+
+
+def test_a_working_copy_too_big_for_a_snapshot_is_refused_before_copying(repo, tmp_path,
+                                                                        monkeypatch):
+    """Снимок ложится на диск сервера: без предела большой репозиторий его бы заполнил."""
+    monkeypatch.setattr(repository, "SNAPSHOT_MAX", 10)
+    with pytest.raises(RepositoryError, match="слишком"):
+        working_copy(str(repo), None)
+    found = inventory(repo)
+    with pytest.raises(RepositoryError, match="слишком"):
+        copy(found, tmp_path)
+    assert not any((tmp_path / "snap").iterdir())
+
+
+def test_a_file_that_grows_past_the_limit_while_copying_stops_the_snapshot(repo, tmp_path,
+                                                                           monkeypatch):
+    found = inventory(repo)
+    monkeypatch.setattr(repository, "SNAPSHOT_MAX", 40)
+    (repo / "api" / "deps.py").write_bytes(b"x" * 1000)           # вырос после inventory
+    with pytest.raises(RepositoryError, match="слишком"):
+        copy(found, tmp_path)
+    copied = tmp_path / "snap" / "api" / "deps.py"
+    assert not copied.exists() or copied.stat().st_size <= 40
+
+
 def test_the_next_steps_know_the_map_is_of_a_working_copy_with_uncommitted_changes():
     """Коммит — не вся правда о грязной копии: следующие шаги не должны приписать ему её правки."""
     result = map_of({"findings": [finding()]}, CONTEXT)
@@ -360,8 +406,8 @@ def test_a_new_file_swapped_inside_a_submodule_while_copying_is_caught(with_subm
     found = inventory(with_submodule)
     copy_one = repository.copied_file
 
-    def swap(root, name, target):
-        copied = copy_one(root, name, target)
+    def swap(root, name, target, **options):
+        copied = copy_one(root, name, target, **options)
         if name == ".gitignore":                       # копируется первым — дальше подмена
             (sub / "a.txt").unlink()
             (sub / "b.txt").write_text("b\n", encoding="utf-8")
