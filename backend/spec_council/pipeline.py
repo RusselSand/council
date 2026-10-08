@@ -1206,7 +1206,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
     def _inherit_blockers(self, issues: list[Issue], gaps: list[IssueGap]) -> None:
         """Что держит итог, держит и каждую его задачу: модель может забыть это повторить, а
         задача без решения не «можно брать». Открытый вопрос итога — в blocked_by задачи, пробел
-        итога — пробел нарезки (тот же вопрос — тот же пробел), и он тоже её держит."""
+        итога — пробел нарезки (тот же вопрос — тот же пробел), и он тоже её держит; как и
+        пробел нарезки, названный для этого итога."""
         outcomes = {outcome.id: outcome for outcome in self.outcomes}
 
         def gap_for(question: str, reason: str, outcome_id: str) -> str:
@@ -1224,4 +1225,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             for outcome in (outcomes[name] for name in issue.outcome_ids if name in outcomes):
                 held.update(outcome.blocked_by)
                 held.update(gap_for(gap.question, gap.reason, outcome.id) for gap in outcome.gaps)
+            issue.blocked_by = sorted(held)
+        for issue in issues:
+            held = set(issue.blocked_by)
+            held.update(gap.id for gap in gaps if set(gap.outcome_ids) & set(issue.outcome_ids))
             issue.blocked_by = sorted(held)

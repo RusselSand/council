@@ -950,7 +950,8 @@ def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
                           ("issue_judge", "fable"): judge})
     assert result.state == "done"
     assert [(i.id, i.title, i.depends_on, i.blocked_by) for i in result.issues] == [
-        ("I1", "Индекс базы", [], []), ("I2", "Выдача ответа", ["I1"], ["G1"])]
+        ("I1", "Индекс базы", [], ["G1"]),            # пробел назван для O1 — держит и её
+        ("I2", "Выдача ответа", ["I1"], ["G1"])]
     assert [(g.id, g.question) for g in result.gaps] == [("G1", "Сколько хранить историю?")]
     assert result.uncovered_outcome_ids == ["O2"]                  # считает код, не модель
     assert (result.outcomes, result.code, result.commit_sha) == ("o1", True, "abc123")
@@ -1005,3 +1006,13 @@ def test_an_issue_inherits_what_blocks_its_outcomes():
     assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
     assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
         ("G1", "Сколько хранить историю?", ["O1"])]
+
+
+def test_a_gap_found_for_an_outcome_holds_every_issue_of_it():
+    """Пробел назван для O1, а задачу по O1 модель им не пометила: он держит и её."""
+    same = {"issues": [task("I1", "Индекс")],
+            "gaps": [{"question": "Сколько хранить историю?", "reason": "",
+                      "outcome_ids": ["O1"]}]}
+    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                    found=None)
+    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"])]

@@ -133,3 +133,17 @@ def test_the_same_gaps_in_another_order_are_one_set():
     one = answer("G1", "G2", [history, format_])
     assert same_issues(one) == same_issues(answer("G2", "G1", [format_, history]))
     assert same_issues(one) != same_issues(answer("G2", "G1", [history, format_]))
+
+
+def test_a_gap_of_no_approved_outcome_is_dropped_unless_an_issue_waits_for_it():
+    """Пробел ни к одному утверждённому итогу не держит поток; а тот, что держит задачу, — про
+    её итоги, даже если модель их не назвала. Номера оставшихся — по порядку."""
+    answer = issue_set({"issues": [issue(blocked_by=["G3"]), issue("I2", "Отчёт", outcomes=("O2",),
+                                                                   blocked_by=["G2"])],
+                        "gaps": [{"question": "Ни о чём?", "outcome_ids": ["O9"]},
+                                 {"question": "Где отчёт?", "outcome_ids": []},
+                                 {"question": "Сколько хранить?", "outcome_ids": ["O1"]}]},
+                       CONTEXT)
+    assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
+        ("Где отчёт?", ("O2",)), ("Сколько хранить?", ("O1",))]
+    assert [found.blocked_by for found in answer.issues] == [("G2",), ("G1",)]

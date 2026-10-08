@@ -200,7 +200,29 @@ def issue_set(data: dict, context: Context) -> Answer:
     issues = linked(valid)
     if cycle := cycle_of(issues):
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
+    gaps, issues = placed(gaps, issues)
     return Answer(tuple(issues), tuple(gaps))
+
+
+def placed(gaps: list[Gap], issues: list[Candidate]) -> tuple[list[Gap], list[Candidate]]:
+    """Пробел — про итоги, которые он назвал, и про итоги задач, которые он держит: модель могла
+    их не назвать. Пробел ни к одному утверждённому итогу ничего не держит — он отбрасывается,
+    а номера оставшихся идут по порядку."""
+    about = {f"G{n}": set(gap.outcome_ids) for n, gap in enumerate(gaps, 1)}
+    for issue in issues:
+        for name in issue.blocked_by:
+            if name in about:
+                about[name].update(issue.outcome_ids)
+    kept: list[Gap] = []
+    renamed: dict[str, str] = {}
+    for n, gap in enumerate(gaps, 1):
+        if about[f"G{n}"]:
+            kept.append(replace(gap, outcome_ids=tuple(sorted(about[f"G{n}"],
+                                                              key=lambda name: int(name[1:])))))
+            renamed[f"G{n}"] = f"G{len(kept)}"
+    return kept, [replace(issue, blocked_by=tuple(sorted(
+        renamed.get(name, name) for name in issue.blocked_by
+        if name in renamed or not GAP_ID.fullmatch(name)))) for issue in issues]
 
 
 def linked(issues: list[Candidate]) -> list[Candidate]:
