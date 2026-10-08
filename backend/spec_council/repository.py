@@ -91,17 +91,54 @@ class Inventory:
 
 def git_command(root: Path, *args: str) -> list[str]:
     # --no-optional-locks: status не пытается обновить индекс — каталог может быть read-only.
-    return ["git", "-c", "safe.directory=*", "--no-optional-locks", "-C", str(root), *args]
+    # core.fsmonitor — команда из конфига рабочей копии: git status её запускает, не надо.
+    return ["git", "--no-pager", "-c", "safe.directory=*", "-c", "core.fsmonitor=false",
+            "--no-optional-locks", "-C", str(root), *args]
+
+
+def git_env(root: Path | None) -> dict[str, str]:
+    """Окружение git без команд из конфига рабочей копии: фильтры (clean, smudge, process),
+    заданные в ней самой, git status и hash-object запускают — от имени сервера, с его доступом
+    к ключам моделей. Их отключаем; заданные сервером (git-lfs) — его, им верим. Через
+    GIT_CONFIG_*, а не -c: там «=» в имени фильтра разорвало бы настройку."""
+    pairs = []
+    for driver in local_filters(root) if root is not None else ():
+        pairs += [(f"filter.{driver}.{key}", "") for key in ("clean", "smudge", "process")]
+        pairs.append((f"filter.{driver}.required", "false"))
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_CONFIG_")}
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for n, (key, value) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{n}"] = key
+        env[f"GIT_CONFIG_VALUE_{n}"] = value
+    return env
+
+
+def local_filters(root: Path) -> set[str]:
+    """Фильтры, которые задаёт сама рабочая копия (её .git/config, worktree и их include)."""
+    command = git_command(root, "config", "-z", "--show-scope", "--get-regexp", r"^filter\.")
+    try:
+        output = subprocess.run(command, capture_output=True, timeout=GIT_TIMEOUT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    entries = output.split(b"\0")
+    drivers = set()
+    for scope, entry in zip(entries[::2], entries[1::2], strict=False):
+        name = os.fsdecode(entry.split(b"\n", 1)[0])           # «filter.<драйвер>.<ключ>»
+        if scope in (b"local", b"worktree") and name.count(".") >= 2:
+            drivers.add(name[len("filter."):name.rindex(".")])
+    return drivers
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
     """Вывод git — кусками и не больше OUTPUT_MAX: больше — RepositoryError, а git
     останавливаем. В рабочей копии с миллионами файлов один список занял бы всю память."""
     command = git_command(root, *args)
+    # Содержимое файлов — а с ним и фильтры — читают только status и hash-object.
+    env = git_env(root) if args[0] in ("status", "hash-object") else git_env(None)
     expired = threading.Event()
     with tempfile.TemporaryFile() as errors:
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors, env=env)
         except OSError as exc:
             raise RepositoryError(f"git не запускается: {exc}") from exc
 

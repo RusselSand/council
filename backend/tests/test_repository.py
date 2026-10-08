@@ -614,6 +614,26 @@ def test_a_submodule_not_checked_out_is_told_not_hidden(with_submodule):
     assert told["submodules_not_checked_out_count"] == 1
 
 
+def test_commands_from_the_repository_config_are_not_run_by_the_scan(repo, tmp_path):
+    """fsmonitor и фильтры — команды из .git/config: git status и hash-object их запускают, а
+    рабочая копия может быть чужой. Скан их не запускает, ни одной."""
+    marker = tmp_path / "ran"
+    command = f"sh -c 'echo ran >> \"{marker.as_posix()}\"; cat'"
+    (repo / ".gitattributes").write_text("*.py filter=evil\n", encoding="utf-8")
+    git(repo, "config", "filter.evil.clean", command)
+    git(repo, "config", "filter.evil.required", "true")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "filter")
+    git(repo, "config", "core.fsmonitor", command)
+    git(repo, "update-index", "--assume-unchanged", "api/deps.py")      # его сверит hash-object
+    marker.unlink(missing_ok=True)
+    later = os.stat(repo / "api" / "deps.py").st_mtime + 10
+    os.utime(repo / "api" / "deps.py", (later, later))                   # git status перечитает
+    found = inventory(repo)
+    copy(found, tmp_path)
+    assert not marker.exists()
+
+
 def test_many_submodules_not_checked_out_are_told_within_a_budget():
     """Нескачанных подмодулей бывают тысячи: карта идёт в каждый промпт ниже — список в ней
     ограничен, а сколько всего — сказано."""
