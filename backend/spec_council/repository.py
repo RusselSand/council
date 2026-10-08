@@ -230,6 +230,8 @@ def copies_of(root: Path) -> list[Copy]:
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
         counted += len(cached) + len(others)
+        # Пути — как их потом соберёт listed(): с путём копии от корня у каждого.
+        chars += (len(cached) + len(others)) * len(prefix)
         chars += sum(map(len, cached)) + sum(map(len, others))
         within(counted, chars, len(seen))   # пока обходим: подмодулей бывает и тысяча
         # Подмодуль записан в коммите своего родителя (recorded); репозиторий внутри — нигде.
@@ -239,8 +241,12 @@ def copies_of(root: Path) -> list[Copy]:
         for link, inside, recorded in links:
             path = folder / link
             if not checked_out(path, top):
-                if recorded:
-                    absent.append(shown(prefix + link))   # подмодуль есть, а кода его нет
+                # Подменённую ссылкой покажет links_of; остальное — тут, с причиной.
+                if recorded and not is_link(path):
+                    absent.append(f"{shown(prefix + link)}/ — подмодуль не скачан")
+                elif not is_link(path):
+                    absent.append(f"{shown(prefix + link)}/ — репозиторий внутри не прочитать: "
+                                  "его .git не годится или уводит в другой каталог")
                 continue
             real = os.path.realpath(path)
             if real not in seen:
@@ -423,8 +429,15 @@ def hidden_of(root: Path) -> bytes:
     flagged: dict[str, str] = {}
     changed: list[str] = []
     modes = file_mode(root) and os.name != "nt"
+    symlinks = config_bool(root, "core.symlinks")
     for tag, mode, sha, name in index_of(root):
-        if not (tag.islower() or tag == b"S") or mode not in (b"100644", b"100755"):
+        if not (tag.islower() or tag == b"S"):
+            continue
+        if mode == b"120000":
+            if link_changed(root, name, sha, symlinks=symlinks, sparse=tag.upper() == b"S"):
+                changed.append(name)
+            continue
+        if mode not in (b"100644", b"100755"):
             continue
         if plain(root, name):
             flagged[name] = sha
@@ -434,12 +447,47 @@ def hidden_of(root: Path) -> bytes:
             # assume-unchanged, а файла нет или он уже не файл — правка; у skip-worktree это
             # обычный sparse checkout.
             changed.append(name)
-    names = list(flagged)
-    for start in range(0, len(names), 100):        # по сотне — командная строка не бесконечна
-        chunk = names[start:start + 100]
+    for chunk in batches(list(flagged)):
         shas = git(root, "hash-object", "--", *chunk).split()
         changed += [name for name, sha in zip(chunk, shas, strict=True) if sha != flagged[name]]
     return b"\0".join(os.fsencode(name) for name in changed)
+
+
+def batches(names: list[str], limit: int = 8000) -> Iterator[list[str]]:
+    """Имена пачками по длине: командная строка не бесконечна (на Windows — около 32 тысяч
+    символов), а имя — до 4 КБ, так что по числу пачку не отмерить."""
+    batch: list[str] = []
+    used = 0
+    for name in names:
+        size = len(os.fsencode(name)) + 3            # с пробелом и кавычками
+        if batch and used + size > limit:
+            yield batch
+            batch, used = [], 0
+        batch.append(name)
+        used += size
+    if batch:
+        yield batch
+
+
+def link_changed(root: Path, name: str, sha: str, *, symlinks: bool, sparse: bool) -> bool:
+    """Ссылка с флагом против её версии в индексе (блоб — текст ссылки). Без поддержки ссылок
+    (core.symlinks=false, как на Windows) git кладёт её файлом с этим текстом. Нет на диске:
+    у assume-unchanged — правка, у skip-worktree — sparse checkout."""
+    path = root / name
+    if os.path.islink(path):
+        data = os.fsencode(os.readlink(path))
+    elif not symlinks and plain(root, name):
+        with path.open("rb") as file:
+            data = file.read(1 << 16)
+    else:
+        return os.path.lexists(path) or not sparse
+    return blob_id(data, len(sha)) != sha
+
+
+def blob_id(data: bytes, length: int) -> str:
+    """Имя блоба, как его считает git: sha1 или, в репозитории на sha256, — sha256."""
+    algorithm = hashlib.sha1 if length == 40 else hashlib.sha256
+    return algorithm(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def executable_on_disk(path: Path) -> bool:
@@ -477,10 +525,15 @@ def modes_of(copies: list[Copy]) -> dict[str, bool]:
 
 def file_mode(root: Path) -> bool:
     """core.fileMode: false — бит исполняемости на диске git не сверяет."""
+    return config_bool(root, "core.fileMode")
+
+
+def config_bool(root: Path, key: str) -> bool:
+    """Булева настройка git; не задана — true (так у core.fileMode и core.symlinks)."""
     try:
-        return git(root, "config", "--type=bool", "--get", "core.fileMode").strip() != "false"
+        return git(root, "config", "--type=bool", "--get", key).strip() != "false"
     except RepositoryError:
-        return True                                  # не задан — сверяет
+        return True
 
 
 def status_of(root: Path) -> bytes:
@@ -510,8 +563,7 @@ def inventory(path: Path) -> Inventory:
 
 def omitted_of(root: Path, copies: list[Copy]) -> tuple[str, ...]:
     """Чего нет в снимке, хоть оно и в рабочей копии, — с причиной."""
-    submodules = [f"{name}/ — подмодуль не скачан" for copy in copies for name in copy.absent]
-    return (*submodules, *links_of(root, copies))
+    return (*(entry for copy in copies for entry in copy.absent), *links_of(root, copies))
 
 
 def links_of(root: Path, copies: list[Copy]) -> list[str]:

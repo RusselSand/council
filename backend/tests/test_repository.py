@@ -457,6 +457,35 @@ def test_a_nested_copy_named_not_in_utf8_is_its_own_root(repo):
     assert os.fsdecode(b"gen-\xff/") in [copy.prefix for copy in repository.copies_of(repo)]
 
 
+def test_the_path_budget_counts_the_nested_prefix_of_every_file(with_submodule, monkeypatch):
+    """В inventory путь файла вложенной копии — с её путём от корня: и в предел — так же."""
+    monkeypatch.setattr(repository, "inner_copies", lambda folder, *listings: [])
+    monkeypatch.setattr(repository, "PATHS_MAX", 50)
+    with pytest.raises(RepositoryError, match="пути"):
+        repository.copies_of(with_submodule)
+
+
+def test_a_flagged_link_gone_or_retargeted_marks_the_copy_dirty(repo):
+    """Ссылка с assume-unchanged: git status не заметит, что её убрали или перенаправили."""
+    sha = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                         input=b"api/deps.py", capture_output=True, check=True).stdout
+    git(repo, "update-index", "--add", "--cacheinfo", f"120000,{sha.decode().strip()},entry.py")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "link")
+    git(repo, "update-index", "--assume-unchanged", "entry.py")
+    assert inventory(repo).dirty                                   # её нет на диске
+    git(repo, "config", "core.symlinks", "false")                  # ссылка — файлом с текстом
+    (repo / "entry.py").write_bytes(b"api/deps.py")
+    assert not inventory(repo).dirty
+    (repo / "entry.py").write_bytes(b"api/other.py")               # перенаправили
+    assert inventory(repo).dirty
+
+
+def test_hash_object_batches_fit_a_command_line():
+    """На Windows командная строка — около 32 тысяч символов: пачка — по длине, а не по числу."""
+    assert list(repository.batches(["a" * 5000, "b" * 5000, "c"])) == [
+        ["a" * 5000], ["b" * 5000, "c"]]
+
+
 def test_a_path_with_nul_is_refused_as_a_path(tmp_path):
     with pytest.raises(RepositoryError, match="NUL"):
         located("pro\0ject", tmp_path)
@@ -489,6 +518,8 @@ def test_a_nested_copy_whose_worktree_is_elsewhere_is_not_walked(repo, tmp_path)
     (elsewhere / "secret.txt").write_text("ключ\n", encoding="utf-8")
     git(nested, "config", "core.worktree", str(elsewhere))
     assert [copy.prefix for copy in repository.copies_of(repo)] == [""]
+    # Но и не пропадает молча: кода под ней в снимке нет — это видно.
+    assert [entry for entry in inventory(repo).omitted if entry.startswith("tools/gen/ — ")]
 
 
 def test_paths_of_all_nested_copies_together_are_bounded(with_submodule, monkeypatch):
