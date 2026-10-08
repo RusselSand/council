@@ -968,3 +968,16 @@ def test_without_models_the_scan_is_recorded_failed_and_can_be_run_again(agents,
 
 def test_settings_tell_where_repositories_are(agents, repos):
     assert client.get("/api/settings").json()["repositories"] == str(repos.parent)
+
+
+def test_a_scan_request_is_checked_before_git_reads_the_working_copy(agents, repos, monkeypatch):
+    """Устаревший или лишний запрос не должен ждать git на большой рабочей копии ради 404 и 409."""
+    monkeypatch.setattr("spec_council.api.streams.working_copy",
+                        lambda *args: pytest.fail("git позвали зря"))
+    council_id = grouped()
+    confirm(council_id)
+    assert scans(council_id, "C").status_code == 409                   # идея не утверждена
+    approve(council_id, "C", IDEA_C)
+    assert scans(council_id, "C", revision=7).status_code == 409       # группы уже другие
+    assert client.post("/api/councils/нет/streams/C/repository/scan",
+                       json={"run": "g1", "revision": 0, "path": "project"}).status_code == 404

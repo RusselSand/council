@@ -1,11 +1,15 @@
 """Репозиторий: inventory рабочей копии, путь к ней, разбор находок и вердикта судьи."""
 
+import os
+import shutil
 import subprocess
 
 import pytest
 
+from spec_council import repository
 from spec_council.repository import (
     Context,
+    Inventory,
     RepositoryError,
     context_prompt,
     inventory,
@@ -13,6 +17,7 @@ from spec_council.repository import (
     judged_map,
     located,
     map_of,
+    sha_prompt,
     snapshot,
     working_copy,
 )
@@ -179,7 +184,7 @@ def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):
     _, again, _ = copy(found, tmp_path, "two")
     assert first == again
     (repo / "api" / "deps.py").write_text("def get_context(): return 1\n", encoding="utf-8")
-    _, edited, _ = copy(found, tmp_path, "three")
+    _, edited, _ = copy(inventory(repo), tmp_path, "three")
     assert edited != first
     clone = tmp_path / "clone"
     subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
@@ -251,3 +256,87 @@ def test_a_flow_entry_point_must_be_a_file_of_the_repository():
         {"name": "Выдуманный", "entry_point": "api/nowhere.py", "steps": []}]}, CONTEXT)
     assert [(f.name, f.entry_point) for f in result.flows] == [
         ("Запрос", "api/deps.py:get_context"), ("Выдуманный", "")]
+
+
+def link_folder(link, target):
+    """Каталог-ссылка: на Windows — junction (его можно и без прав администратора)."""
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_a_file_reached_through_a_linked_folder_is_neither_listed_nor_copied(repo, tmp_path):
+    """Каталог в пути подменили ссылкой наружу: файл за ней — чужой, в снимок он не попадёт."""
+    (repo / "conf").mkdir()
+    (repo / "conf" / "app.ini").write_text("x=1\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "conf")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "app.ini").write_text("TOKEN=секрет\n", encoding="utf-8")
+    shutil.rmtree(repo / "conf")
+    link_folder(repo / "conf", outside)
+    found = inventory(repo)
+    assert "conf/app.ini" not in found.files
+    copied = snapshot(Inventory(found.root, found.commit_sha, found.dirty,
+                                (*found.files, "conf/app.ini"), found.state), tmp_path / "snap")[1]
+    assert "conf/app.ini" not in copied
+    assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
+
+
+def test_a_working_copy_edited_while_the_snapshot_is_made_is_refused(repo, tmp_path, monkeypatch):
+    """Файл поправили, когда он уже скопирован: снимок — смесь старого и нового, не годится."""
+    found = inventory(repo)
+    copy_one = repository.copied_file
+
+    def edit_after_copy(root, name, target):
+        copied = copy_one(root, name, target)
+        if name == "api/deps.py":
+            (root / name).write_text("def get_context(): return 'новое и длиннее'\n",
+                                     encoding="utf-8")
+        return copied
+
+    monkeypatch.setattr(repository, "copied_file", edit_after_copy)
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path)
+
+
+def test_a_working_copy_changed_since_the_inventory_is_refused(repo, tmp_path):
+    found = inventory(repo)
+    (repo / "added.py").write_text("x = 1\n", encoding="utf-8")       # новый — после inventory
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path)
+
+
+def test_a_repository_without_commits_can_be_scanned(tmp_path):
+    root = tmp_path / "fresh"
+    root.mkdir()
+    (root / "main.py").write_text("x = 1\n", encoding="utf-8")
+    git(root, "init", "-q")
+    found = inventory(root)
+    assert found.commit_sha == ""
+    assert found.files == ("main.py",)
+    assert "нет коммитов" in sha_prompt(found)
+
+
+def test_an_entry_point_may_have_spaces_in_its_path():
+    context = Context(files=frozenset({"services/payment worker/main.py"}))
+    result = map_of({"findings": [], "flows": [
+        {"name": "Платёж", "entry_point": "services/payment worker/main.py:run", "steps": []},
+        {"name": "Целиком", "entry_point": "services/payment worker/main.py", "steps": []}]},
+        context)
+    assert [f.entry_point for f in result.flows] == [
+        "services/payment worker/main.py:run", "services/payment worker/main.py"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="бита исполняемости на Windows нет")
+def test_the_executable_bit_is_copied_and_counts_in_the_fingerprint(repo, tmp_path):
+    tool = repo / "tool"
+    tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    _, plain, _ = copy(inventory(repo), tmp_path, "one")
+    tool.chmod(0o755)
+    into, executable, _ = copy(inventory(repo), tmp_path, "two")
+    assert os.access(into / "tool", os.X_OK)
+    assert executable != plain

@@ -51,9 +51,12 @@ class RepositoryError(ValueError):
 @dataclass(frozen=True)
 class Inventory:
     root: Path
+    # Пусто — коммитов ещё нет: новый репозиторий, только рабочая копия.
     commit_sha: str
     dirty: bool
     files: tuple[str, ...]
+    # Состояние рабочей копии при inventory — коммит и git status: снимок сверяется с ним.
+    state: bytes = b""
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -127,58 +130,113 @@ def working_copy(text: str, base: Path | None) -> Inventory:
     return found
 
 
+def head(root: Path) -> str:
+    """Коммит рабочей копии; пусто — коммитов ещё нет, а файлы есть."""
+    try:
+        return git(root, "rev-parse", "--verify", "-q", "HEAD").strip()
+    except RepositoryError:
+        return ""
+
+
+def state_of(root: Path) -> bytes:
+    """Коммит и git status — с каждым новым файлом и подмодулями: поменялись — рабочую копию
+    правили."""
+    status = git_bytes(root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                       "--ignore-submodules=none")
+    return head(root).encode() + b"\0" + status
+
+
 def inventory(path: Path) -> Inventory:
     """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, и список файлов — тех,
-    что на диске есть и это обычные файлы (удалённый, но отслеживаемый, вне sparse checkout и
-    ссылка — не файлы)."""
+    что на диске есть, это обычные файлы и лежат в рабочей копии (удалённый, но отслеживаемый,
+    вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
-    sha = git(root, "rev-parse", "HEAD").strip()
-    dirty = bool(git(root, "status", "--porcelain").strip())
-    # Отслеживаемые — и в checked-out подмодулях (их файлы модели тоже читают), новые — отдельно:
-    # --recurse-submodules с --others git не умеет.
+    state = state_of(root)
+    sha, status = state.split(b"\0", 1)
     listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")),
               *untracked(root)]
-    files = tuple(sorted({name for name in listed if regular(root / name)}))
-    return Inventory(root, sha, dirty, files)
+    files = tuple(sorted({name for name in listed if plain(root, name)}))
+    return Inventory(root, sha.decode(), bool(status.strip(b"\0 ")), files, state)
 
 
-def regular(path: Path) -> bool:
-    """Обычный файл, а не ссылка: за ссылкой может быть что угодно, вплоть до /dev/zero или
-    ключей вне репозитория."""
+def plain(root: Path, name: str) -> bool:
+    """Обычный файл, и путь к нему — внутри рабочей копии: ни он сам, ни каталоги по дороге не
+    ссылки наружу. За ссылкой может быть что угодно, вплоть до /dev/zero или чужих ключей."""
+    path = root / name
     try:
-        return stat.S_ISREG(path.lstat().st_mode)
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return False
     except OSError:
         return False
+    return Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root))
 
 
 def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
     """Снимок рабочей копии, который читают модели: только файлы inventory — без .git и
-    игнорируемого (там бывают .env и ключи) — и только обычные файлы. Пока идёт скан, рабочую
-    копию могут править, а снимок неподвижен: все участники и все проходы читают один и тот же
-    код. Отпечаток — по содержимому снимка: им ключуются оплаченные ответы, и тот же код в
-    другой копии — тот же ключ. Вернёт отпечаток и какие файлы в снимок легли."""
+    игнорируемого (там бывают .env и ключи) — и только обычные файлы внутри неё. Пока идёт
+    скан, рабочую копию могут править, а снимок неподвижен: все участники и все проходы читают
+    один и тот же код. Правили, пока он делался, — снимок был бы смесью старого и нового:
+    RepositoryError. Отпечаток — по содержимому снимка и битам исполняемости: им ключуются
+    оплаченные ответы, и тот же код в другой копии — тот же ключ. Вернёт отпечаток и какие
+    файлы в снимок легли."""
     digest = hashlib.sha256()
-    copied = []
+    taken: dict[str, tuple[int, int]] = {}
     for name in found.files:
-        part = copied_file(found.root / name, into / name)
-        if part is not None:
+        copied = copied_file(found.root, name, into / name)
+        if copied is not None:
+            part, stamp = copied
             digest.update(name.encode() + b"\0" + part + b"\0")
-            copied.append(name)
-    return digest.hexdigest(), frozenset(copied)
+            taken[name] = stamp
+    if state_of(found.root) != found.state or any(
+            stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
+        raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
+                              "снова, когда правки закончатся")
+    return digest.hexdigest(), frozenset(taken)
 
 
-def copied_file(source: Path, target: Path) -> bytes | None:
-    """Копия одного файла кусками — и хеш его содержимого. Ссылку не открываем (O_NOFOLLOW там,
-    где он есть, и проверка, что открыт обычный файл); пропал или не читается — None."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-    if not regular(source):
-        return None
+def stamp_of(path: Path) -> tuple[int, int] | None:
+    """Размер и время правки: поменялись после копирования — файл правили."""
     try:
-        handle = os.open(source, flags)
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_size, info.st_mtime_ns
+
+
+def open_inside(root: Path, name: str) -> int:
+    """Файл рабочей копии, открытый так, чтобы ни один каталог по дороге не был ссылкой: каждый
+    — относительно предыдущего и без перехода по ссылке (O_NOFOLLOW). Где так нельзя (Windows),
+    — по пути без ссылок (realpath) и только внутри рабочей копии. FIFO не ждём: O_NONBLOCK."""
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_BINARY", 0))
+    folder_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY"):
+        *folders, file = name.split("/")
+        handle = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for folder in folders:
+                inner = os.open(folder, folder_flags, dir_fd=handle)
+                os.close(handle)
+                handle = inner
+            return os.open(file, flags, dir_fd=handle)
+        finally:
+            os.close(handle)
+    real = os.path.realpath(root / name)
+    if not Path(real).is_relative_to(os.path.realpath(root)):
+        raise OSError(f"{name}: вне рабочей копии")
+    return os.open(real, flags)
+
+
+def copied_file(root: Path, name: str, target: Path) -> tuple[bytes, tuple[int, int]] | None:
+    """Копия одного файла кусками — и хеш его содержимого с битом исполняемости, и его размер
+    и время правки на момент копирования. Пропал, не читается, не обычный файл — None."""
+    try:
+        handle = open_inside(root, name)
     except OSError:
         return None
     with os.fdopen(handle, "rb") as read:
-        if not stat.S_ISREG(os.fstat(read.fileno()).st_mode):
+        info = os.fstat(read.fileno())
+        if not stat.S_ISREG(info.st_mode):
             return None
         target.parent.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256()
@@ -186,7 +244,10 @@ def copied_file(source: Path, target: Path) -> bytes | None:
             for chunk in iter(lambda: read.read(1 << 16), b""):
                 digest.update(chunk)
                 write.write(chunk)
-    return digest.digest()
+    executable = bool(info.st_mode & 0o111) and os.name != "nt"
+    if executable:
+        target.chmod(0o755)   # исполняемый — и в снимке: модели видят, что это запускают
+    return digest.digest() + (b"x" if executable else b"-"), (info.st_size, info.st_mtime_ns)
 
 
 def inventory_prompt(found: Inventory) -> str:
@@ -198,6 +259,8 @@ def inventory_prompt(found: Inventory) -> str:
 
 
 def sha_prompt(found: Inventory) -> str:
+    if not found.commit_sha:
+        return "нет коммитов: репозиторий новый, есть только рабочая копия"
     return found.commit_sha + (" (в рабочей копии есть незакоммиченные изменения: читайте её)"
                                if found.dirty else "")
 
@@ -277,13 +340,16 @@ def ids_in(value: object, known: set[str]) -> list[str]:
 
 
 def entry_of(value: object, context: Context) -> str:
-    """Точка входа потока — файл репозитория (можно с символом: «api/routes.py:handler»).
-    Файла нет — точки входа нет: следующие шаги поверили бы несуществующему компоненту."""
+    """Точка входа потока — файл репозитория, можно с символом: «api/routes.py:handler». Путь —
+    самое длинное начало, которое есть в inventory: в именах бывают и пробелы. Файла нет — точки
+    входа нет: следующие шаги поверили бы несуществующему компоненту."""
     text = text_of(value)
-    path = context.path_of(text.split(":", 1)[0].split(" ", 1)[0])
-    if path not in context.files:
-        return ""
-    return path + text[len(text.split(":", 1)[0].split(" ", 1)[0]):]
+    ends = [len(text), *sorted({i for i, char in enumerate(text) if char in ": ("}, reverse=True)]
+    for end in ends:
+        path = context.path_of(text[:end])
+        if path in context.files:
+            return path + text[end:]
+    return ""
 
 
 def flows_of(value: object, known: set[str], context: Context) -> list[RepositoryFlow]:

@@ -124,6 +124,7 @@ from .questions import (
 from .repository import Context as RepositoryContext
 from .repository import (
     Inventory,
+    RepositoryError,
     context_prompt,
     inventory_prompt,
     judged_map,
@@ -991,7 +992,10 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
     def work(self) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="council-scan-") as place:
             folder = Path(place)
-            self.fingerprint, copied = self.copy(self.found, folder)
+            try:
+                self.fingerprint, copied = self.copy(self.found, folder)
+            except RepositoryError as exc:
+                raise StageFailed(str(exc)) from exc
             self.workspace = folder
             try:
                 return self._rounds(RepositoryContext(copied, (folder,)))

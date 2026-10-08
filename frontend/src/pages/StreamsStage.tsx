@@ -619,7 +619,8 @@ function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
   return (
     <>
       <p className="repo-summary">
-        {t('repository.summary', { path: scan.path, sha: scan.commit_sha.slice(0, 8), files: scan.files, rounds: scan.rounds })}
+        {t('repository.summary', {
+          path: scan.path, sha: scan.commit_sha.slice(0, 8) || '—', files: scan.files, rounds: scan.rounds })}
       </p>
       {scan.dirty && <p className="fragment-note">{t('repository.dirty')}</p>}
       {scan.state === 'done' && scan.complete && <p className="check ok">{t('repository.complete')}</p>}

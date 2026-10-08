@@ -215,11 +215,6 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     участники и судья исследуют код, только читая его. Скан заново — шаг «Репозиторий» заново:
     утверждённая карта, вопросы и всё ниже сбрасываются. Повтор после сбоя берёт уже
     оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной."""
-    try:
-        found = working_copy(edit.path, repositories)
-    except RepositoryError as exc:
-        raise HTTPException(422, str(exc)) from None
-
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -233,6 +228,15 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
             raise HTTPException(
                 409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
         return council, True
+
+    # Сначала дешёвое: устаревший или лишний запрос не должен ждать git на большой рабочей
+    # копии ради 404 и 409. Под замком всё проверится ещё раз.
+    with council_lock:
+        plan()
+    try:
+        found = working_copy(edit.path, repositories)
+    except RepositoryError as exc:
+        raise HTTPException(422, str(exc)) from None
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
