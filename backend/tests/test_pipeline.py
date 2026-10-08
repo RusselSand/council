@@ -478,8 +478,10 @@ def offered(*texts, constraints=(), depends=()):
 
 
 def by_question(on_search, on_where):
-    """Ответ модели — по тому, о каком вопросе её спросили."""
-    return lambda prompt: on_search if SEARCH.text in prompt else on_where
+    """Ответ модели — по тому, о каком вопросе её спросили: по номеру вопроса верхнего уровня.
+    Текст не годится: другие вопросы потока тоже в промпте, в other_open_questions."""
+    top = f'\n  "id": "{SEARCH.id}"'   # отступ верхнего уровня: вложенные — глубже
+    return lambda prompt: on_search if top in prompt else on_where
 
 
 def propose(replies, scope=(SEARCH, WHERE)):
@@ -531,3 +533,48 @@ def test_a_question_nobody_could_answer_fails_the_search_and_keeps_what_was_foun
                             ("proposal_judge", "fable"): recommended})
     assert result.state == "failed"
     assert [o.question_id for o in result.options] == ["Q1"]
+
+
+def test_a_repeat_of_a_group_proposal_is_not_a_new_option():
+    # F3 «Или бот в Slack.» — участник повторил его иначе написанным, судья его же рекомендовал.
+    repeat = "ИЛИ БОТ В SLACK"
+    discovery = offered(HYBRID, repeat)
+    judge = {"status": "recommended", "proposal": offered("или бот в  slack!")["proposals"][0]}
+    result, runner, _ = propose({("proposal_discovery", "sol"): discovery,
+                                 ("proposal_discovery", "fable"): discovery,
+                                 ("proposal_judge", "fable"): judge}, scope=[SEARCH])
+    [found] = result.options
+    assert (found.verdict, found.proposals) == ("none", [])
+    assert "F3" in found.reason
+    assert repeat not in runner.asked["proposal_judge", "fable"]   # судье — только новое
+
+    only_repeats = offered(repeat)
+    result, _, _ = propose({("proposal_discovery", "sol"): only_repeats,
+                            ("proposal_discovery", "fable"): only_repeats}, scope=[SEARCH])
+    assert result.options[0].verdict == "none"
+    assert {s.name.value: s.state for s in result.steps}["proposal_judge"] == "skipped"
+
+
+def test_the_other_questions_of_the_scope_are_in_both_prompts():
+    discovery = by_question(offered(HYBRID), offered("Notion"))
+    judge = {"status": "recommended", "proposal": offered(HYBRID)["proposals"][0]}
+    _, runner, _ = propose({("proposal_discovery", "sol"): discovery,
+                            ("proposal_discovery", "fable"): discovery,
+                            ("proposal_judge", "fable"): judge})
+    for step in ("proposal_discovery", "proposal_judge"):
+        prompt = runner.asked[step, "fable"]                     # последний — про Q2
+        assert '"id": "Q1"' in prompt and SEARCH.text in prompt  # Q1 — среди других вопросов
+
+
+def test_a_model_that_failed_on_one_question_stays_failed_after_the_next():
+    sol = by_question(ModelFailed("лимит"), offered("Своя база"))
+    fable = by_question(offered(HYBRID), offered("Notion"))
+    judge = by_question({"status": "recommended", "proposal": offered(HYBRID)["proposals"][0]},
+                        {"status": "alternatives", "reason": "по бюджету",
+                         "proposals": offered("Своя база", "Notion")["proposals"]})
+    result, _, _ = propose({("proposal_discovery", "sol"): sol,
+                            ("proposal_discovery", "fable"): fable,
+                            ("proposal_judge", "fable"): judge})
+    assert result.state == "done"
+    runs = {run.model: (run.state, run.error) for run in result.steps[0].runs}
+    assert runs == {"sol": ("failed", "Q1: лимит"), "fable": ("done", None)}

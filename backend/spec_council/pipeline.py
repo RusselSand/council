@@ -75,7 +75,14 @@ from .prompts import PromptError, render
 from .proposals import Context, Verdict, judged_proposals, proposal_list
 from .proposals import as_prompt as proposal_prompt
 from .proposals import merged as merged_proposals
-from .questions import as_prompt, numbered, question_list, same_lists, with_user_questions
+from .questions import (
+    as_prompt,
+    numbered,
+    question_list,
+    same_lists,
+    same_question,
+    with_user_questions,
+)
 from .slicing import (
     BadAnswer,
     BoundaryNote,
@@ -555,7 +562,12 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
     равно отвечает по одному запросу за раз. По каждому участники ищут варианты, которых нет
     среди предложений группы, судья сводит их и решает, что показать. Готовый вопрос сразу
     в отчёте: человек видит варианты по мере поиска. Варианты нумеруются сквозь поток: P1, P2…
-    Принятых решений на этом шаге ещё нет — их фиксирует следующий."""
+    Принятых решений на этом шаге ещё нет — их фиксирует следующий.
+
+    Вопрос модели видят вместе с другими вопросами потока (other_open_questions): без них не
+    указать, от какого вопроса вариант зависит. Повтор предложения группы, как бы его ни
+    написали, — не новый вариант: он отсеивается и у участников, и у судьи. Модель, упавшая
+    на одном вопросе, так и числится упавшей, хоть следующие она и ответила."""
 
     what = "поиск вариантов"
 
@@ -572,6 +584,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
         limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
         known = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in limits])
         numbers = iter(range(1, 10_000))
+        failures: dict[str, list[str]] = {}
         judged = False
         for question in self.scope:
             context = Context(
@@ -580,7 +593,10 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                 frozenset(q.id for q in self.scope if q.id != question.id))
             values = {
                 "idea": self.idea,
-                "question": as_json({"id": question.id, "text": question.text}),
+                "question": as_json({
+                    "id": question.id, "text": question.text,
+                    "other_open_questions": [{"id": q.id, "text": q.text}
+                                             for q in self.scope if q.id != question.id]}),
                 "existing_proposals": as_json([{"id": f"F{i}", "text": self.fragments[i].text}
                                                for i in question.proposal_ids
                                                if i in self.fragments]),
@@ -590,15 +606,20 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                 StepName.proposal_discovery,
                 render("proposal_discovery", **values, accepted_decisions="[]"),
                 partial(proposal_list, context=context))
-            candidates = merged_proposals(c for found in answers.values() for c in found)
+            self._keep_failures(question, failures)
+            existing = {same_question(self.fragments[i].text): i for i in question.proposal_ids
+                        if i in self.fragments}
+            offered = merged_proposals(c for found in answers.values() for c in found)
+            candidates = [c for c in offered if same_question(c.text) not in existing]
             if candidates:
                 judged = True
                 variants = shuffled([proposal_prompt(c) for c in candidates])
                 prompt = render("proposal_judge", **values, accepted_adrs="[]",
                                 proposal_candidates=as_json(
                                     [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
-                verdict = self._ask_judge(StepName.proposal_judge, prompt,
-                                          partial(judged_proposals, context=context))
+                verdict = without_repeats(self._ask_judge(
+                    StepName.proposal_judge, prompt, partial(judged_proposals, context=context)),
+                    existing)
             else:
                 verdict = Verdict("none", (), None)
             with self._lock:
@@ -607,6 +628,30 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
         if not judged:
             self._skip(StepName.proposal_judge)
         return {"options": self.state.options}
+
+    def _keep_failures(self, question: OpenQuestion, failures: dict[str, list[str]]) -> None:
+        """Шаг участников один на все вопросы, и каждый следующий перезаписал бы, кто упал на
+        прежнем. Копим: упавшая хоть на одном вопросе модель так и числится упавшей — с тем,
+        на каком и почему."""
+        with self._lock:
+            runs = list(self._step(StepName.proposal_discovery).runs)
+        for run in runs:
+            if run.state == "failed":
+                failures.setdefault(run.model, []).append(f"{question.id}: {run.error}")
+        for model, errors in failures.items():
+            self._set_run(StepName.proposal_discovery, model, "failed", "; ".join(errors))
+
+
+def without_repeats(verdict: Verdict, existing: dict[str, int]) -> Verdict:
+    """Судья вернул повтор предложения группы — это не новый вариант. Рекомендовал повтор —
+    новых вариантов нет, и сказано, с чем он совпал; из альтернатив повтор просто выпадает:
+    выбор между оставшимися и предложением группы остаётся."""
+    kept = tuple(c for c in verdict.proposals if same_question(c.text) not in existing)
+    if kept or verdict.kind == "none":
+        return Verdict(verdict.kind, kept, verdict.reason)
+    repeats = sorted({existing[same_question(c.text)] for c in verdict.proposals})
+    return Verdict("none", (), "рекомендованный вариант уже есть в тексте группы: "
+                   + ", ".join(f"F{i}" for i in repeats))
 
 
 def options_of(question: OpenQuestion, verdict: Verdict, numbers) -> QuestionOptions:
