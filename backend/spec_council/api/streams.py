@@ -329,7 +329,7 @@ def repository_map(stream: Stream) -> str:
     step, scan = stream.repository, stream.scan
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return context_prompt(None)
-    return context_prompt(scan.result, scan.commit_sha)
+    return context_prompt(scan.result, scan.commit_sha, dirty=scan.dirty)
 
 
 def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:

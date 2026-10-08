@@ -80,14 +80,40 @@ def git(root: Path, *args: str) -> str:
     return git_bytes(root, *args).decode("utf-8", errors="replace")
 
 
-def untracked(root: Path, prefix: str = "") -> list[str]:
-    """Новые, не игнорируемые файлы — и внутри checked-out подмодулей: --others в них не
-    заходит, а модели их читают."""
-    found = [prefix + name
-             for name in names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))]
-    for link in gitlinks(root):
-        if (root / link / ".git").exists():
-            found += untracked(root / link, f"{prefix}{link}/")
+def listed(root: Path) -> list[str]:
+    """Отслеживаемые и новые, не игнорируемые файлы — и внутри checked-out подмодулей. В
+    подмодули git сам не заходит (--recurse-submodules споткнулся бы о подмодуль-ссылку, а
+    --others его и вовсе не умеет): обходим их мы, без ссылок и кругов."""
+    found: list[str] = []
+    for folder, prefix in [(root, ""), *submodules(root)]:
+        for args in (("--cached",), ("--others", "--exclude-standard")):
+            found += [prefix + name for name in names(git_bytes(folder, "ls-files", "-z", *args))]
+    return found
+
+
+def submodules(root: Path) -> list[tuple[Path, str]]:
+    """Checked-out подмодули, и вложенные: (каталог, путь от корня с «/» на конце). Подмодуль,
+    подменённый ссылкой, и уже пройденный репозиторий не обходим: ссылка назад на родителя
+    водила бы по кругу, а наружу — за пределы рабочей копии."""
+    top = os.path.realpath(root)
+    seen = {top}
+    found: list[tuple[Path, str]] = []
+    queue = [(root, "")]
+    while queue:
+        folder, prefix = queue.pop(0)
+        for link in gitlinks(folder):
+            path = folder / link
+            real = os.path.realpath(path)
+            try:
+                is_folder = stat.S_ISDIR(path.lstat().st_mode)
+            except OSError:
+                continue
+            if (not is_folder or real != os.path.abspath(path) or real in seen
+                    or not Path(real).is_relative_to(top) or not (path / ".git").exists()):
+                continue
+            seen.add(real)
+            found.append((path, f"{prefix}{link}/"))
+            queue.append((path, f"{prefix}{link}/"))
     return found
 
 
@@ -98,8 +124,9 @@ def gitlinks(root: Path) -> list[str]:
 
 
 def names(output: bytes) -> list[str]:
-    """Пути из вывода с -z: через NUL, без кавычек и восьмеричных escape-кодов."""
-    return [name.decode("utf-8", errors="replace") for name in output.split(b"\0") if name]
+    """Пути из вывода с -z: через NUL, без кавычек и восьмеричных escape-кодов. Байты — как в
+    файловой системе (os.fsdecode): имя не в UTF-8 остаётся тем же файлом, а не «�»."""
+    return [os.fsdecode(name) for name in output.split(b"\0") if name]
 
 
 def located(text: str, base: Path | None) -> Path:
@@ -138,12 +165,25 @@ def head(root: Path) -> str:
         return ""
 
 
-def state_of(root: Path) -> bytes:
-    """Коммит и git status — с каждым новым файлом и подмодулями: поменялись — рабочую копию
+def levels(root: Path) -> list[tuple[str, str, bytes]]:
+    """Корень и каждый подмодуль: (путь от корня, коммит, git status с каждым новым файлом).
+    В подмодули git status сам не заходит: обходим их мы, без ссылок и кругов, — и у каждого
+    свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в нём ни
     правили."""
-    status = git_bytes(root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-                       "--ignore-submodules=none")
-    return head(root).encode() + b"\0" + status
+    found = [("", head(root), status_of(root))]
+    found += [(prefix, head(folder), status_of(folder)) for folder, prefix in submodules(root)]
+    return found
+
+
+def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
+    """Состояние рабочей копии одной строкой байтов: поменялось — её правили."""
+    return b"\0\0".join(os.fsencode(prefix) + b"\0" + sha.encode() + b"\0" + status
+                         for prefix, sha, status in found)
+
+
+def status_of(root: Path) -> bytes:
+    return git_bytes(root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                     "--ignore-submodules=all")
 
 
 def inventory(path: Path) -> Inventory:
@@ -151,12 +191,10 @@ def inventory(path: Path) -> Inventory:
     что на диске есть, это обычные файлы и лежат в рабочей копии (удалённый, но отслеживаемый,
     вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
-    state = state_of(root)
-    sha, status = state.split(b"\0", 1)
-    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")),
-              *untracked(root)]
-    files = tuple(sorted({name for name in listed if plain(root, name)}))
-    return Inventory(root, sha.decode(), bool(status.strip(b"\0 ")), files, state)
+    found = levels(root)
+    files = tuple(sorted({name for name in listed(root) if plain(root, name)}))
+    return Inventory(root, found[0][1], any(status for _, _, status in found), files,
+                     state_of(found))
 
 
 def plain(root: Path, name: str) -> bool:
@@ -185,9 +223,9 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
         copied = copied_file(found.root, name, into / name)
         if copied is not None:
             part, stamp = copied
-            digest.update(name.encode() + b"\0" + part + b"\0")
+            digest.update(os.fsencode(name) + b"\0" + part + b"\0")
             taken[name] = stamp
-    if state_of(found.root) != found.state or any(
+    if state_of(levels(found.root)) != found.state or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")
@@ -251,7 +289,9 @@ def copied_file(root: Path, name: str, target: Path) -> tuple[bytes, tuple[int, 
 
 
 def inventory_prompt(found: Inventory) -> str:
-    shown = found.files[:INVENTORY_MAX]
+    # Имя не в UTF-8 в промпт не положить как есть — его байты видны как \xNN.
+    shown = [name.encode("utf-8", "backslashreplace").decode("utf-8")
+             for name in found.files[:INVENTORY_MAX]]
     text = "\n".join(shown)
     if len(found.files) > len(shown):
         text += f"\n… и ещё {len(found.files) - len(shown)} файлов: ищите по репозиторию сами"
@@ -440,10 +480,12 @@ def as_prompt(result: RepositoryMap) -> dict:
     return result.model_dump(mode="json")
 
 
-def context_prompt(result: RepositoryMap | None, commit_sha: str = "") -> str:
+def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
+                   dirty: bool = False) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
-    сканировали»."""
+    сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
+    правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
-    return json.dumps({"commit_sha": commit_sha, **as_prompt(result)}, ensure_ascii=False,
-                      indent=2)
+    return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
+                       **as_prompt(result)}, ensure_ascii=False, indent=2)

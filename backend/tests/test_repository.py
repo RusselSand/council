@@ -1,5 +1,6 @@
 """Репозиторий: inventory рабочей копии, путь к ней, разбор находок и вердикта судьи."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -340,3 +341,52 @@ def test_the_executable_bit_is_copied_and_counts_in_the_fingerprint(repo, tmp_pa
     into, executable, _ = copy(inventory(repo), tmp_path, "two")
     assert os.access(into / "tool", os.X_OK)
     assert executable != plain
+
+
+def test_the_next_steps_know_the_map_is_of_a_working_copy_with_uncommitted_changes():
+    """Коммит — не вся правда о грязной копии: следующие шаги не должны приписать ему её правки."""
+    result = map_of({"findings": [finding()]}, CONTEXT)
+    dirty = json.loads(context_prompt(result, "abc", dirty=True))
+    assert (dirty["commit_sha"], dirty["uncommitted_changes"]) == ("abc", True)
+    assert json.loads(context_prompt(result, "abc"))["uncommitted_changes"] is False
+
+
+def test_a_new_file_swapped_inside_a_submodule_while_copying_is_caught(with_submodule, tmp_path,
+                                                                      monkeypatch):
+    """Подмодуль и так грязный — его общая пометка не меняется; сверять надо и его содержимое."""
+    sub = with_submodule / "vendor" / "lib"
+    (sub / "a.txt").write_text("a\n", encoding="utf-8")
+    found = inventory(with_submodule)
+    copy_one = repository.copied_file
+
+    def swap(root, name, target):
+        copied = copy_one(root, name, target)
+        if name == ".gitignore":                       # копируется первым — дальше подмена
+            (sub / "a.txt").unlink()
+            (sub / "b.txt").write_text("b\n", encoding="utf-8")
+        return copied
+
+    monkeypatch.setattr(repository, "copied_file", swap)
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path)
+
+
+def test_a_submodule_replaced_by_a_link_to_its_parent_is_not_walked_in_circles(with_submodule):
+    """Подмодуль подменили ссылкой на сам репозиторий: обход не должен ходить по кругу."""
+    shutil.rmtree(with_submodule / "vendor" / "lib")
+    link_folder(with_submodule / "vendor" / "lib", with_submodule)
+    found = inventory(with_submodule)
+    assert not any(name.startswith("vendor/lib/") for name in found.files)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="на Windows имена файлов всегда Unicode")
+def test_a_file_name_that_is_not_utf8_is_scanned_as_it_is(repo, tmp_path):
+    raw = os.fsencode(repo) + b"/bad-\xff.py"
+    with open(raw, "wb") as file:
+        file.write(b"x = 1\n")
+    name = os.fsdecode(b"bad-\xff.py")
+    found = inventory(repo)
+    assert name in found.files
+    into, _, copied = copy(found, tmp_path)
+    assert name in copied
+    assert os.path.exists(os.fsencode(into) + b"/bad-\xff.py")
