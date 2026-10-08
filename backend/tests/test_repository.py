@@ -281,9 +281,10 @@ def test_a_file_reached_through_a_linked_folder_is_neither_listed_nor_copied(rep
     link_folder(repo / "conf", outside)
     found = inventory(repo)
     assert "conf/app.ini" not in found.files
-    copied = snapshot(Inventory(found.root, found.commit_sha, found.dirty,
-                                (*found.files, "conf/app.ini"), found.state), tmp_path / "snap")[1]
-    assert "conf/app.ini" not in copied
+    forged = Inventory(found.root, found.commit_sha, found.dirty, (*found.files, "conf/app.ini"),
+                       found.state)
+    with pytest.raises(RepositoryError, match="conf/app.ini"):
+        snapshot(forged, tmp_path / "snap")
     assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
 
 
@@ -388,6 +389,39 @@ def test_a_submodule_checked_out_at_another_commit_marks_the_copy_dirty(with_sub
     assert inventory(with_submodule).dirty
     git(with_submodule, "add", "vendor/lib")                    # и записан, но не закоммичен
     assert inventory(with_submodule).dirty
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_an_edit_hidden_by_an_index_flag_still_marks_the_copy_dirty(repo, flag):
+    """С этим флагом git status правку не покажет, а модели прочтут уже не коммит."""
+    git(repo, "update-index", flag, "api/deps.py")
+    assert not inventory(repo).dirty                         # сам флаг — ещё не правка
+    (repo / "api" / "deps.py").write_text("def get_context(): return 2\n", encoding="utf-8")
+    assert inventory(repo).dirty
+
+
+def test_a_flagged_file_edited_after_the_inventory_is_caught_by_the_snapshot(repo, tmp_path):
+    git(repo, "update-index", "--assume-unchanged", "api/deps.py")
+    found = inventory(repo)
+    (repo / "api" / "deps.py").write_text("def get_context(): return 2\n", encoding="utf-8")
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path)
+
+
+def test_a_file_that_cannot_be_read_fails_the_snapshot_instead_of_vanishing(repo, tmp_path,
+                                                                            monkeypatch):
+    """Inventory и промпт файл называют: без него карта вышла бы «полной», а его никто не читал."""
+    open_one = repository.open_inside
+
+    def locked(root, name):
+        if name == "api/deps.py":
+            raise PermissionError(13, "Permission denied")
+        return open_one(root, name)
+
+    monkeypatch.setattr(repository, "open_inside", locked)
+    found = inventory(repo)
+    with pytest.raises(RepositoryError, match="api/deps.py"):
+        copy(found, tmp_path)
 
 
 def test_a_backslash_in_a_posix_file_name_is_a_letter_of_the_name():

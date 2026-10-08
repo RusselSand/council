@@ -170,8 +170,8 @@ def levels(root: Path) -> list[tuple[str, str, bytes]]:
     В подмодули git status сам не заходит: обходим их мы, без ссылок и кругов, — и у каждого
     свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в нём ни
     правили."""
-    found = [("", head(root), status_of(root))]
-    found += [(prefix, head(folder), status_of(folder)) for folder, prefix in submodules(root)]
+    found = [("", head(root), changes_of(root))]
+    found += [(prefix, head(folder), changes_of(folder)) for folder, prefix in submodules(root)]
     return found
 
 
@@ -179,6 +179,35 @@ def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
     """Состояние рабочей копии одной строкой байтов: поменялось — её правили."""
     return b"\0\0".join(os.fsencode(prefix) + b"\0" + sha.encode() + b"\0" + status
                          for prefix, sha, status in found)
+
+
+def changes_of(root: Path) -> bytes:
+    """git status с каждым новым файлом — и правки, которых он не покажет."""
+    hidden = hidden_of(root)
+    return status_of(root) + (b"\0\0hidden\0" + hidden if hidden else b"")
+
+
+def hidden_of(root: Path) -> bytes:
+    """Правки в файлах с assume-unchanged или skip-worktree: их содержимое git status не
+    сверяет, а модели читают уже не коммит. Такие файлы на диске сверяем сами — с индексом
+    (hash-object — с теми же фильтрами, что и git add)."""
+    flagged: dict[str, str] = {}
+    for entry in git_bytes(root, "ls-files", "-z", "-v", "--stage").split(b"\0"):
+        if not entry:
+            continue
+        tag, _, rest = entry.partition(b" ")      # «h 100644 <sha> 0\t<имя>»
+        meta, _, raw = rest.partition(b"\t")
+        mode, sha = meta.split(b" ")[:2]
+        name = os.fsdecode(raw)
+        if (tag.islower() or tag == b"S") and mode != b"160000" and plain(root, name):
+            flagged[name] = sha.decode()
+    names = list(flagged)
+    changed = []
+    for start in range(0, len(names), 100):        # по сотне — командная строка не бесконечна
+        chunk = names[start:start + 100]
+        shas = git(root, "hash-object", "--", *chunk).split()
+        changed += [name for name, sha in zip(chunk, shas, strict=True) if sha != flagged[name]]
+    return b"\0".join(os.fsencode(name) for name in changed)
 
 
 def status_of(root: Path) -> bytes:
@@ -217,20 +246,28 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
     скан, рабочую копию могут править, а снимок неподвижен: все участники и все проходы читают
     один и тот же код. Правили, пока он делался, — снимок был бы смесью старого и нового:
     RepositoryError. Отпечаток — по содержимому снимка и битам исполняемости: им ключуются
-    оплаченные ответы, и тот же код в другой копии — тот же ключ. Вернёт отпечаток и какие
-    файлы в снимок легли."""
+    оплаченные ответы, и тот же код в другой копии — тот же ключ. Файл inventory не прочитать —
+    тоже RepositoryError: промпт его называет, и карта без него вышла бы «полной», хотя его никто
+    не читал. Вернёт отпечаток и какие файлы в снимок легли."""
     digest = hashlib.sha256()
     taken: dict[str, tuple[int, int]] = {}
+    missed: list[str] = []
     for name in found.files:
         copied = copied_file(found.root, name, into / name)
-        if copied is not None:
-            part, stamp = copied
-            digest.update(os.fsencode(name) + b"\0" + part + b"\0")
-            taken[name] = stamp
+        if copied is None:
+            missed.append(name)
+            continue
+        part, stamp = copied
+        digest.update(os.fsencode(name) + b"\0" + part + b"\0")
+        taken[name] = stamp
     if state_of(levels(found.root)) != found.state or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")
+    if missed:
+        shown = ", ".join(missed[:5]) + (f" и ещё {len(missed) - 5}" if len(missed) > 5 else "")
+        raise RepositoryError(f"Не прочитать файлы рабочей копии: {shown} — без них карта вышла "
+                              "бы неполной; дайте серверу права на чтение и запустите скан снова")
     return digest.hexdigest(), frozenset(taken)
 
 
