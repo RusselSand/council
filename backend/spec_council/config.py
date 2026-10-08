@@ -98,12 +98,18 @@ def config_of(first: str = "", second: str = "", judge: str = "") -> AppConfig:
 
 
 def fitted(council: Council, config: AppConfig) -> Council:
-    """Совет под нынешнюю настройку: участники — те двое, что заданы, судья — свой, если он
-    ещё среди моделей, иначе заданный. Поменяли модели в .env — старые советы работают на
-    новых, а не падают на «нет подключения» к тем, кого больше нет. Подгонять нечего — тот же
-    совет."""
-    participants = config.default_participants
+    """Совет под нынешнюю настройку. Участник, которого больше нет среди моделей, уходит, и
+    до двух его место занимают заданные; выбранные в совете и всё ещё настроенные остаются.
+    Судья — свой, если он среди моделей, иначе заданный. Поменяли модели в .env — старые
+    советы работают на новых, а не падают на «нет подключения» к тем, кого больше нет.
+    Подгонять нечего — тот же совет."""
     aliases = {model.alias for model in config.models}
+    participants = [alias for alias in council.participants if alias in aliases]
+    for alias in config.default_participants:
+        if len(participants) >= MIN_PARTICIPANTS:
+            break
+        if alias not in participants:
+            participants.append(alias)
     judge = council.judge if council.judge in aliases else config.default_judge
     if council.participants == participants and council.judge == judge:
         return council

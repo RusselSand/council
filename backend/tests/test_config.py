@@ -77,3 +77,14 @@ def test_account_folders_live_in_one_place_unless_a_model_has_its_own(tmp_path, 
     monkeypatch.setenv("COUNCIL_SOL_HOME", str(tmp_path / "своя"))
     assert runner.home("opus") == (tmp_path / "accounts" / "opus").resolve()
     assert runner.home("sol") == (tmp_path / "своя").resolve()
+
+
+def test_a_lineup_of_models_still_configured_is_kept():
+    """Выбранный в совете состав — из моделей, что и сейчас есть, — перезапуск не трогает."""
+    config = config_of("fable=claude/claude-fable-5-1", "opus=claude/claude-opus-5-5",
+                       "sol=codex/gpt-5.6-sol")
+    chosen = council(["fable", "sol"], "opus")
+    assert fitted(chosen, config) is chosen
+    # Ушла одна — на её место встаёт заданная, остальные остаются.
+    partly = fitted(council(["astra", "sol"], "sol"), config)
+    assert (partly.participants, partly.judge) == (["sol", "fable"], "sol")
