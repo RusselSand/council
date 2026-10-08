@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from spec_council import repository
 from spec_council.repository import (
     Context,
     RepositoryError,
@@ -207,6 +208,30 @@ def test_files_of_a_checked_out_submodule_are_in_the_inventory(with_submodule):
     files = inventory(with_submodule).files
     assert "vendor/lib/lib.py" in files
     assert "vendor/lib" not in files                                  # не сам gitlink
+
+
+def test_a_new_file_inside_a_submodule_is_in_the_inventory_and_the_fingerprint(with_submodule):
+    """--others в подмодули не заходит: их новые файлы модели читают, значит, и мы их видим."""
+    fresh = with_submodule / "vendor" / "lib" / "fresh.py"
+    fresh.write_text("a = 1\n", encoding="utf-8")
+    found = inventory(with_submodule)
+    assert "vendor/lib/fresh.py" in found.files
+    fresh.write_text("a = 2\n", encoding="utf-8")
+    assert inventory(with_submodule).fingerprint != found.fingerprint
+
+
+def test_the_tracked_diff_is_hashed_as_a_stream_not_held_in_memory(repo, monkeypatch):
+    """Большой изменённый бинарник дал бы такой же большой патч: его не держим целиком."""
+    (repo / "api" / "deps.py").write_text("def get_context(): return 1\n", encoding="utf-8")
+    streamed = inventory(repo).fingerprint
+    held = repository.git_bytes
+
+    def no_diff(root, *args):
+        assert args[0] != "diff", "патч целиком в памяти"
+        return held(root, *args)
+
+    monkeypatch.setattr(repository, "git_bytes", no_diff)
+    assert inventory(repo).fingerprint == streamed
 
 
 def test_an_edit_inside_a_submodule_changes_the_fingerprint(with_submodule):

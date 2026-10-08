@@ -19,8 +19,10 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from .ideas import reason_of
 from .models import (
@@ -58,9 +60,19 @@ class Inventory:
     fingerprint: str = ""
 
 
-def git_bytes(root: Path, *args: str) -> bytes:
+class Digest(Protocol):
+    """Куда складывать вывод: хеш, который принимает его кусками."""
+
+    def update(self, data: bytes, /) -> None: ...
+
+
+def git_command(root: Path, *args: str) -> list[str]:
     # --no-optional-locks: status не пытается обновить индекс — каталог может быть read-only.
-    command = ["git", "-c", "safe.directory=*", "--no-optional-locks", "-C", str(root), *args]
+    return ["git", "-c", "safe.directory=*", "--no-optional-locks", "-C", str(root), *args]
+
+
+def git_bytes(root: Path, *args: str) -> bytes:
+    command = git_command(root, *args)
     try:
         result = subprocess.run(command, capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -73,6 +85,42 @@ def git_bytes(root: Path, *args: str) -> bytes:
 
 def git(root: Path, *args: str) -> str:
     return git_bytes(root, *args).decode("utf-8", errors="replace")
+
+
+def git_stream(root: Path, digest: Digest, *args: str) -> None:
+    """Вывод git — прямо в хеш, кусками: патч большого бинарника целиком в памяти не держим.
+    stderr — во временный файл: в трубе он мог бы заполнить её и остановить git."""
+    with tempfile.TemporaryFile() as errors:
+        try:
+            process = subprocess.Popen(git_command(root, *args), stdout=subprocess.PIPE,
+                                       stderr=errors)
+        except OSError as exc:
+            raise RepositoryError(f"git не запускается: {exc}") from exc
+        with process:
+            for chunk in iter(lambda: process.stdout.read(1 << 16), b""):
+                digest.update(chunk)
+            code = process.wait(timeout=120)
+        if code != 0:
+            errors.seek(0)
+            detail = errors.read().decode("utf-8", errors="replace").strip()
+            raise RepositoryError(detail or f"git {args[0]} не удался")
+
+
+def untracked(root: Path, prefix: str = "") -> list[str]:
+    """Новые, не игнорируемые файлы — и внутри checked-out подмодулей: --others в них не
+    заходит, а модели их читают."""
+    found = [prefix + name
+             for name in names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))]
+    for link in gitlinks(root):
+        if (root / link / ".git").exists():
+            found += untracked(root / link, f"{prefix}{link}/")
+    return found
+
+
+def gitlinks(root: Path) -> list[str]:
+    """Пути подмодулей: записи индекса с режимом 160000 («<режим> <sha> <стадия>\t<путь>»)."""
+    entries = names(git_bytes(root, "ls-files", "-z", "--stage"))
+    return [entry.split("\t", 1)[1] for entry in entries if entry.startswith("160000 ")]
 
 
 def names(output: bytes) -> list[str]:
@@ -117,18 +165,19 @@ def inventory(path: Path) -> Inventory:
     dirty = bool(git(root, "status", "--porcelain").strip())
     # Отслеживаемые — и в checked-out подмодулях (их файлы модели тоже читают), новые — отдельно:
     # --recurse-submodules с --others git не умеет.
-    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")),
-              *names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))]
+    fresh = untracked(root)
+    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")), *fresh]
     files = tuple(sorted({name for name in listed if (root / name).exists()}))
-    return Inventory(root, sha, dirty, files, fingerprint(root, sha))
+    return Inventory(root, sha, dirty, files, fingerprint(root, sha, fresh))
 
 
-def fingerprint(root: Path, sha: str) -> str:
+def fingerprint(root: Path, sha: str, fresh: list[str]) -> str:
     """Состояние рабочей копии: путь, коммит, правки отслеживаемых файлов — и внутри
-    подмодулей — и новые файлы. Одинаковый у одного и того же кода в одной и той же копии."""
+    подмодулей — и новые файлы (fresh), и в подмодулях тоже. Одинаковый у одного и того же
+    кода в одной и той же копии."""
     digest = hashlib.sha256(f"{root}\0{sha}\0".encode())
-    digest.update(git_bytes(root, "diff", "HEAD", "--binary", "--no-ext-diff", "--submodule=diff"))
-    for name in sorted(names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))):
+    git_stream(root, digest, "diff", "HEAD", "--binary", "--no-ext-diff", "--submodule=diff")
+    for name in sorted(fresh):
         digest.update(name.encode() + b"\0" + file_state(root / name) + b"\0")
     return digest.hexdigest()
 
