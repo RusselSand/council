@@ -766,3 +766,14 @@ def test_a_judge_answer_without_a_list_fails_the_assembly():
                           ("outcome_judge", "fable"): {"coverage": {}}})
     assert result.state == "failed"
     assert "outcomes" in result.error
+
+
+def test_the_same_outcomes_in_another_order_need_no_judge():
+    search, store = result_of("Поиск", blocked=["Q2"]), result_of("Хранение", criteria=("Б.", "А."))
+    result, _ = assemble({
+        ("outcome_discovery", "sol"): {"outcomes": [search, store]},
+        ("outcome_discovery", "fable"): {"outcomes": [result_of("Хранение", criteria=("А.", "Б.")),
+                                                      search]}})
+    assert result.state == "done"
+    assert {s.name.value: s.state for s in result.steps}["outcome_judge"] == "skipped"
+    assert [o.title for o in result.outcomes] == ["Поиск", "Хранение"]

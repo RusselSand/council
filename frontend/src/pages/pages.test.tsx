@@ -916,6 +916,18 @@ describe('Поток: решения и итоги', () => {
     expect(fix().disabled).toBe(true)
   })
 
+  it('пробел из итога — в вопросы: он в отборе, утверждённый отбор уходит на сервер с ним', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }), () => json(deciding()))
+    const blocked = await card('Замер потерь')
+    fireEvent.click(within(blocked).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
+    expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.approve'] }))
+    await waitFor(() => expect(streamCalls).toEqual([{ group: 'A', action: 'questions', body: {
+      run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1', 'Q2'], added: ['Где хранить отчёт?'] } }]))
+  })
+
   it('сборка итогов упала — причина видна, её запускают снова', async () => {
     const failed: OutcomeDiscovery = { ...ASSEMBLED, state: 'failed', outcomes: [], error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     openStream(() => deciding({ decisions: FIXED, outcomes: failed }),

@@ -6,6 +6,7 @@
 вопрос: решённый уже не держит. Список итогов может быть и пустым: фиктивный итог хуже.
 """
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -118,3 +119,14 @@ def as_prompt(candidate: Candidate) -> dict:
             "acceptance_criteria": list(candidate.criteria),
             "blocked_by": list(candidate.blocked_by),
             "gaps": [{"question": gap.question, "reason": gap.reason} for gap in candidate.gaps]}
+
+
+def same_outcomes(candidates: list[Candidate]) -> str:
+    """Набор итогов для сравнения: порядок итогов, их критериев и пробелов модели не держат —
+    одинаковые наборы в разном порядке — один набор."""
+    def one(candidate: Candidate) -> str:
+        data = as_prompt(candidate)
+        data["acceptance_criteria"] = sorted(data["acceptance_criteria"])
+        data["gaps"] = sorted(data["gaps"], key=lambda gap: (gap["question"], gap["reason"]))
+        return json.dumps(data, ensure_ascii=False, sort_keys=True)
+    return json.dumps(sorted(one(candidate) for candidate in candidates), ensure_ascii=False)

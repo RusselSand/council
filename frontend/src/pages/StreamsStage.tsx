@@ -51,6 +51,8 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
   const fixing = useAction(onChange, 'decisions.approveFailed')
   // Открытый вопрос, к которому вернулись из итогов: шаг «Решения» прокрутит к нему.
   const [focus, setFocus] = useState<string | null>(null)
+  // Пробел из итога, который человек понёс в вопросы: шаг «Вопросы» добавит его в отбор.
+  const [gap, setGap] = useState<string | null>(null)
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
@@ -61,6 +63,7 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
   const run = runs[view]
   const open = (step: ChainStep) => {
     setFocus(null)
+    setGap(null)
     setView(step)
   }
 
@@ -87,8 +90,8 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         {view === 'questions' && (
           // Новый поиск вопросов — и отбор заново, к его вопросам.
           <QuestionsStep key={stream.questions?.run ?? ''} council={council} structure={structure}
-                         stream={stream} group={group} onChange={onChange} approve={choosing}
-                         onBack={() => setView('group')} onApproved={() => setView('options')} />
+                         stream={stream} group={group} onChange={onChange} approve={choosing} proposed={gap}
+                         onBack={() => open('group')} onApproved={() => open('options')} />
         )}
         {view === 'options' && (
           // Новый поиск вариантов — и выбор заново, к его вариантам.
@@ -105,7 +108,8 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         {view === 'outcomes' && (
           <OutcomesStep council={council} stream={stream} group={group} onChange={onChange}
                         onBack={() => open('decisions')}
-                        onQuestion={question => { setFocus(question); setView('decisions') }} />
+                        onQuestion={question => { setFocus(question); setView('decisions') }}
+                        onGap={question => { setGap(question); setView('questions') }} />
         )}
       </div>
       <aside className="streams-side">
@@ -497,9 +501,11 @@ function IdeaOptions({ search, draft, models, busy, onTake }: Readonly<{
  * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
  * выбирают. Черновик отбора — к нынешнему поиску; утверждённый отбор — его начало.
  */
-function QuestionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
+function QuestionsStep({ council, structure, stream, group, onChange, approve, proposed, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
   onChange: (council: Council) => void; approve: ReturnType<typeof useAction>
+  /** Пробел из итогов: его добавить в отбор своим вопросом, если такого там ещё нет. */
+  proposed: string | null
   onBack: () => void; onApproved: () => void
 }>) {
   const { t } = useTranslation()
@@ -508,8 +514,12 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
   const scope = stream.scope
   const [removed, setRemoved] = useState<ReadonlySet<string>>(
     () => new Set(scope ? found.filter(q => !scope.some(s => s.id === q.id)).map(q => q.id) : []))
-  const [added, setAdded] = useState<string[]>(
-    () => scope?.filter(q => q.source === 'added').map(q => q.text) ?? [])
+  const [added, setAdded] = useState<string[]>(() => {
+    const own = scope?.filter(q => q.source === 'added').map(q => q.text) ?? []
+    const there = [...found.filter(q => !scope || scope.some(s => s.id === q.id)).map(q => q.text), ...own]
+    const gap = squash(proposed ?? '')
+    return gap && !there.some(text => sameQuestion(text) === sameQuestion(gap)) ? [...own, gap] : own
+  })
   const [draft, setDraft] = useState('')
   const [twice, setTwice] = useState(false)   // свой вопрос совпал с тем, что уже в отборе
   const retry = useAction(onChange)
@@ -608,6 +618,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
         </button>
       </form>
       {twice && <p className="fragment-note question-twice">{t('questions.twice')}</p>}
+      {proposed && added.includes(squash(proposed)) && <p className="fragment-note">{t('questions.fromGap')}</p>}
     </>
   )
 
@@ -1067,9 +1078,11 @@ function consequences(said: QuestionAnalysis, t: T): string {
  * которому не хватает решения открытого вопроса, заблокирован им, а не додуман: из него можно
  * вернуться к вопросу. Человеку здесь утверждать нечего — менять можно решения.
  */
-function OutcomesStep({ council, stream, group, onChange, onBack, onQuestion }: Readonly<{
+function OutcomesStep({ council, stream, group, onChange, onBack, onQuestion, onGap }: Readonly<{
   council: Council; stream: Stream; group: Group; onChange: (council: Council) => void
   onBack: () => void; onQuestion: (question: string) => void
+  /** Пробел — в вопросы: его добавляют в отбор, и цепочка ниже идёт заново. */
+  onGap: (question: string) => void
 }>) {
   const { t } = useTranslation()
   const run = stream.outcomes
@@ -1119,7 +1132,7 @@ function OutcomesStep({ council, stream, group, onChange, onBack, onQuestion }: 
       {run?.state === 'done' && run.outcomes.length === 0 && <p className="muted">{t('outcomes.none')}</p>}
       {run?.outcomes.map((outcome, n) => (
         <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
-                     fragments={fragments} onQuestion={onQuestion} />
+                     fragments={fragments} onQuestion={onQuestion} onGap={onGap} />
       ))}
       {run && run.uncovered_adr_ids.length > 0 && (
         <p className="fragment-note">{t('outcomes.uncovered', { ids: run.uncovered_adr_ids.join(', ') })}</p>
@@ -1132,9 +1145,10 @@ function OutcomesStep({ council, stream, group, onChange, onBack, onQuestion }: 
 }
 
 /** Итог: что меняется, на каких решениях стоит, что соблюдать, когда готово — и чего не хватает. */
-function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion }: Readonly<{
+function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap }: Readonly<{
   outcome: Outcome; n: number; adrs: Map<string, { question: string; text: string }>
-  questions: Map<string, string>; fragments: Map<number, LabeledFragment>; onQuestion: (question: string) => void
+  questions: Map<string, string>; fragments: Map<number, LabeledFragment>
+  onQuestion: (question: string) => void; onGap: (question: string) => void
 }>) {
   const { t } = useTranslation()
   const name = `outcome-${outcome.id}`
@@ -1194,7 +1208,10 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion }: Rea
             <dt>{t('outcomes.gaps')}</dt>
             <dd>
               <ul>{outcome.gaps.map(gap => (
-                <li key={gap.question}>{gap.reason ? `${gap.question} — ${gap.reason}` : gap.question}</li>
+                <li key={gap.question} className="outcome-gap">
+                  <span>{gap.reason ? `${gap.question} — ${gap.reason}` : gap.question}</span>
+                  <button className="btn-link" onClick={() => onGap(gap.question)}>{t('outcomes.toQuestions')}</button>
+                </li>
               ))}</ul>
             </dd>
           </>

@@ -96,7 +96,7 @@ from .models import (
 )
 from .outcomes import Context as OutcomeContext
 from .outcomes import as_prompt as outcome_prompt
-from .outcomes import outcome_list
+from .outcomes import outcome_list, same_outcomes
 from .prompts import PromptError, render
 from .proposals import Context, Verdict, judged_proposals, proposal_list
 from .proposals import as_prompt as proposal_prompt
@@ -883,7 +883,10 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         }
         answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
                                 partial(outcome_list, context=context))
-        sets = {as_json([outcome_prompt(c) for c in found]): found for found in answers.values()}
+        # Одинаковые наборы — один; порядок итогов — как у первого, кто его прислал.
+        sets: dict[str, list] = {}
+        for found in answers.values():
+            sets.setdefault(same_outcomes(found), found)
         if len(answers) > 1 and len(sets) == 1:
             self._skip(StepName.outcome_judge)
             chosen = next(iter(sets.values()))
