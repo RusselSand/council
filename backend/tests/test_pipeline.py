@@ -4,8 +4,17 @@ import json
 
 import pytest
 
-from spec_council.models import LabeledFragment, OpenQuestion, StepName
+from spec_council.models import (
+    Choice,
+    LabeledFragment,
+    OpenQuestion,
+    Proposal,
+    ProposalDiscovery,
+    QuestionOptions,
+    StepName,
+)
 from spec_council.pipeline import (
+    DecisionRun,
     GroupingRun,
     IdeaRun,
     ModelFailed,
@@ -576,5 +585,120 @@ def test_a_model_that_failed_on_one_question_stays_failed_after_the_next():
                             ("proposal_discovery", "fable"): fable,
                             ("proposal_judge", "fable"): judge})
     assert result.state == "done"
+    runs = {run.model: (run.state, run.error) for run in result.steps[0].runs}
+    assert runs == {"sol": ("failed", "Q1: лимит"), "fable": ("done", None)}
+
+
+# --- проверка выбора
+
+FOUND = ProposalDiscovery(state="done", run="p1", steps=[], options=[
+    QuestionOptions(question_id="Q1", verdict="recommended",
+                    proposals=[Proposal(id="P1", text=HYBRID, reason="точно", constraint_ids=[5])]),
+    QuestionOptions(question_id="Q2", verdict="recommended",
+                    proposals=[Proposal(id="P2", text="Notion", reason="уже есть")])])
+
+
+def checked_by(proposal, depends=(), valid=True):
+    return {"status": "user_selected", "selected_proposal_id": proposal,
+            "validation": {"valid": valid, "constraint_conflicts": [], "risk_ids": [],
+                           "depends_on_question_ids": list(depends)},
+            "summary": "Противоречий нет.",
+            "adr_draft": {"rationale": "Точный поиск без новой базы.",
+                          "rationale_source": "ai_suggested"}}
+
+
+def recommends(proposal, reason="дешевле"):
+    return {"status": "unresolved", "recommendation": {"proposal_id": proposal, "reason": reason}}
+
+
+def section(prompt, title):
+    """Раздел промпта под заголовком «## title» — до следующего заголовка."""
+    return prompt.split(f"## {title}\n")[1].split("\n## ")[0].strip()
+
+
+def check(replies, choices=(("Q1", "P1"), ("Q2", None)), scope=(SEARCH, WHERE), found=FOUND):
+    runner, reports = FakeRunner(replies), []
+    result = DecisionRun("c1", FIND, list(scope),
+                         [Choice(question_id=q, proposal=p) for q, p in choices], found,
+                         GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner, reports.append).run()
+    return result, runner, reports
+
+
+def test_a_choice_is_checked_and_an_unresolved_question_gets_a_recommendation():
+    analysis = by_question(checked_by("P1", depends=["Q2"]), recommends("P2"))
+    judge = by_question(
+        {"status": "validated", "proposal_id": "P1",
+         "validation": {"constraint_conflicts": [], "risk_ids": [],
+                        "depends_on_question_ids": ["Q2"]},
+         "rationale": {"text": "Точный поиск без новой базы.", "source": "ai"}},
+        {"status": "recommended", "proposal_id": "P2", "reason": "уже есть у команды",
+         "rationale": {"text": "Ничего не разворачивать.", "source": "ai"}})
+    result, runner, reports = check({("decision_analysis", "sol"): analysis,
+                                     ("decision_analysis", "fable"): analysis,
+                                     ("decision_judge", "fable"): judge})
+    assert result.state == "done"
+    assert [(a.question_id, a.verdict, a.proposal, a.depends_on, a.reason, a.rationale)
+            for a in result.analyses] == [
+        ("Q1", "validated", "P1", ["Q2"], None, "Точный поиск без новой базы."),
+        ("Q2", "recommended", "P2", [], "уже есть у команды", "Ничего не разворачивать.")]
+    assert result.choices == ["Q1: P1", "Q2: -"]
+    assert any(len(r.analyses) == 1 and r.state == "running" for r in reports)
+    prompt = runner.asked["decision_analysis", "sol"]           # последний — про Q2
+    assert "Notion" in section(prompt, "PROPOSALS")
+    assert section(prompt, "USER SELECTION") == "null"                  # Q2 — unresolved
+    related = section(prompt, "RELATED QUESTIONS")
+    assert '"status": "selected"' in related and HYBRID in related   # по Q1 выбран P1
+    judge_prompt = runner.asked["decision_judge", "fable"]
+    assert '"sol"' not in judge_prompt and '"fable"' not in judge_prompt
+    assert '"recommendation"' in judge_prompt
+
+
+def test_the_options_of_a_question_are_its_group_proposals_and_what_the_council_found():
+    analysis = checked_by("P1")
+    judge = {"status": "validated", "proposal_id": "P1", "validation": {}}
+    _, runner, _ = check({("decision_analysis", "sol"): analysis,
+                          ("decision_analysis", "fable"): analysis,
+                          ("decision_judge", "fable"): judge}, choices=[("Q1", "P1")],
+                         scope=[SEARCH])
+    prompt = runner.asked["decision_analysis", "sol"]
+    options = section(prompt, "PROPOSALS")
+    assert '"id": "F2"' in options and '"id": "F3"' in options and HYBRID in options
+    assert '"proposal_id": "P1"' in section(prompt, "USER SELECTION")
+    # Одинаковые анализы судья видит одним.
+    analyses = section(runner.asked["decision_judge", "fable"], "INDEPENDENT DECISION ANALYSES")
+    assert '"analysis": 1' in analyses and '"analysis": 2' not in analyses
+
+
+def test_an_unresolved_question_without_options_goes_to_nobody():
+    result, runner, _ = check({}, choices=[("Q2", None)], scope=[WHERE], found=None)
+    assert result.state == "done"
+    assert [(a.question_id, a.verdict, a.proposal) for a in result.analyses] == [
+        ("Q2", "none", None)]
+    assert runner.keys == []
+    assert {s.name.value: s.state for s in result.steps} == {
+        "decision_analysis": "skipped", "decision_judge": "skipped"}
+
+
+def test_a_judge_that_checks_another_option_fails_the_check():
+    analysis = checked_by("P1")
+    result, _, _ = check({("decision_analysis", "sol"): analysis,
+                          ("decision_analysis", "fable"): analysis,
+                          ("decision_judge", "fable"): {"status": "validated",
+                                                        "proposal_id": "F2"}},
+                         choices=[("Q1", "P1")], scope=[SEARCH])
+    assert result.state == "failed"
+    assert "проверен F2, а выбран P1" in result.error
+
+
+def test_a_model_that_failed_one_check_stays_failed_after_the_next():
+    sol = by_question(ModelFailed("лимит"), recommends("P2"))
+    fable = by_question(checked_by("P1"), recommends("P2"))
+    judge = by_question({"status": "validated", "proposal_id": "P1"},
+                        {"status": "no_recommendation", "reason": "мало данных"})
+    result, _, _ = check({("decision_analysis", "sol"): sol,
+                          ("decision_analysis", "fable"): fable,
+                          ("decision_judge", "fable"): judge})
+    assert result.state == "done"
+    assert result.analyses[1].verdict == "none"
     runs = {run.model: (run.state, run.error) for run in result.steps[0].runs}
     assert runs == {"sol": ("failed", "Q1: лимит"), "fable": ("done", None)}

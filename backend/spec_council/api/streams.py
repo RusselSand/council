@@ -3,7 +3,9 @@
 найденную советом, свою или записанную в тексте, — и совет сразу ищет к ней открытые
 вопросы. Человек отбирает, какие из них решать, и добавляет свои, — и совет сразу ищет к
 ним новые варианты ответа. Человек выбирает по варианту на вопрос или оставляет его
-unresolved. Каждый шаг утверждают заново — то, что ниже по цепочке, ищется заново."""
+unresolved — и совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что
+есть. Человек фиксирует решения. Каждый шаг утверждают заново — то, что ниже по цепочке,
+ищется заново."""
 
 from collections.abc import Callable
 
@@ -11,15 +13,21 @@ from fastapi import APIRouter, HTTPException
 
 from ..agents import AgentRunner
 from ..config import AppConfig
+from ..decisions import RATIONALE_MAX
 from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, Store, StoreDep
 from ..ideas import IDEA_MAX
 from ..models import (
+    STREAM_RUNS,
     ApproveChoices,
+    ApproveDecisions,
     ApproveIdea,
     ApproveScope,
     Choice,
     Council,
     CouncilStatus,
+    Decision,
+    DecisionAnalysis,
+    DecisionDraft,
     Group,
     GroupsEdit,
     IdeaDiscovery,
@@ -32,11 +40,14 @@ from ..models import (
 )
 from ..pipeline import (
     CouncilRun,
+    DecisionRun,
     IdeaRun,
     ProposalRun,
     QuestionRun,
     Runner,
+    choices_key,
     scope_key,
+    start_analysis,
     start_idea,
     start_proposals,
     start_questions,
@@ -132,8 +143,8 @@ def start_discovery(council_id: str, group: str, store: StoreDep, config: Config
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         422: {"description": "Пустая или слишком длинная идея, или идею из "
                                              "текста пытаются править"},
-                        423: {"description": "Совет ещё ищет вопросы или варианты к прежней "
-                                             "идее"}})
+                        423: {"description": "Совет ещё ищет вопросы, варианты или проверяет "
+                                             "выбор к прежней идее"}})
 def approve_idea(council_id: str, group: str, edit: ApproveIdea, store: StoreDep,
                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек утверждает идею потока, и совет сразу ищет к ней открытые вопросы. Утвердить
@@ -144,12 +155,12 @@ def approve_idea(council_id: str, group: str, edit: ApproveIdea, store: StoreDep
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         idea = idea_for(council, stream, group, edit.text)
-        # Другую идею, пока к нынешней ищут вопросы или варианты, не утвердить: их поиск
-        # пришлось бы бросить. Ту же — можно: ничего не меняется, это повтор (другая вкладка,
+        # Другую идею, пока ниже по цепочке совет ещё работает, не утвердить: его ход пришлось
+        # бы бросить. Ту же — можно: ничего не меняется, это повтор (другая вкладка,
         # потерянный ответ).
-        if asks_anew(stream, idea) and (running(stream.questions) or running(stream.proposals)):
+        if asks_anew(stream, idea) and below_running(stream, "questions"):
             raise HTTPException(
-                423, "Совет ещё ищет вопросы или варианты к прежней идее — дождитесь его")
+                423, "Совет ещё работает с прежней идеей — дождитесь его")
         return council, asks_anew(stream, idea)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -165,7 +176,7 @@ def approve_idea(council_id: str, group: str, edit: ApproveIdea, store: StoreDep
                 runs = [question_run(council, group, idea.text, agents, store)]
                 questions = runs[0].state.model_copy(deep=True)
             changes |= {"questions": questions, "scope": None, "proposals": None,
-                        "choices": None}
+                        "choices": None, "analysis": None, "decisions": None}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -239,7 +250,8 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         422: {"description": "Нет таких вопросов, пустой или слишком длинный "
                                              "свой вопрос, или не осталось ни одного"},
-                        423: {"description": "Совет ещё ищет варианты к прежнему отбору"}})
+                        423: {"description": "Совет ещё ищет варианты или проверяет выбор "
+                                             "к прежнему отбору"}})
 def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreDep,
                   config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных и свои, — и
@@ -252,9 +264,9 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
         stream = stream_in(council, group)
         scope = scope_for(stream, edit)
         anew = proposes_anew(stream, scope)
-        if anew and running(stream.proposals):
+        if anew and below_running(stream, "proposals"):
             raise HTTPException(
-                423, "Совет ещё ищет варианты к прежнему отбору — дождитесь его")
+                423, "Совет ещё работает с прежним отбором — дождитесь его")
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -269,7 +281,8 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
             else:
                 runs = [proposal_run(council, group, stream.idea.text, scope, agents, store)]
                 proposals = runs[0].state.model_copy(deep=True)
-            changes |= {"proposals": proposals, "choices": None}
+            changes |= {"proposals": proposals, "choices": None, "analysis": None,
+                        "decisions": None}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -320,56 +333,181 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
 
 
 @router.post("/{council_id}/streams/{group}/choices",
-             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM,
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         422: {"description": "Не по каждому вопросу один выбор, или такого "
-                                             "варианта у вопроса нет"}})
-def approve_choices(council_id: str, group: str, edit: ApproveChoices,
-                    store: StoreDep) -> Council:
+                                             "варианта у вопроса нет"},
+                        423: {"description": "Совет ещё проверяет прежний выбор"}})
+def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: StoreDep,
+                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек утверждает выбор: по каждому отобранному вопросу — вариант из текста группы
     (Fn) или найденный советом (Pn), либо None — пока не решает, вопрос уходит как unresolved.
-    Выбор — к тому поиску вариантов, что был на экране: нашли заново — 409. Если поиск упал,
-    выбирать можно из того, что есть: предложений группы и уже найденного."""
-    with council_lock:
+    И совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что есть.
+    Утвердить заново — поменять выбор: проверка прежнего и решения по ней уже ни к чему; тот
+    же выбор их не трогает. Выбор — к тому поиску вариантов, что был на экране: нашли заново —
+    409. Если поиск упал, выбирать можно из того, что есть: предложений группы и уже
+    найденного."""
+    def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
-        search = stream.proposals
-        if stream.scope is None or search is None:
-            raise HTTPException(409, "Вариантов ещё нет: сначала утвердите вопросы потока")
-        if running(search):
-            raise HTTPException(409, "Совет ещё ищет варианты — дождитесь его")
-        if search.run != edit.proposals_run:
-            raise HTTPException(409, "Варианты уже нашли заново — выбор был к прежним")
-        choices = chosen(stream.scope, search, edit.choices)
-        council = store.update_council(council_id, {
-            "streams": replaced(council, stream.model_copy(update={"choices": choices}))})
-    if council is None:
-        raise HTTPException(404, MISSING)
-    return council
+        anew = analyzes_anew(stream, choices_for(stream, edit))
+        if anew and running(stream.analysis):
+            raise HTTPException(423, "Совет ещё проверяет прежний выбор — дождитесь его")
+        return council, anew
+
+    def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
+        stream = stream_in(council, group)
+        choices = choices_for(stream, edit)
+        changes: dict = {"choices": choices}
+        runs: list[CouncilRun] = []
+        if analyzes_anew(stream, choices):
+            if missing:
+                analysis = unconnected(
+                    start_analysis(council.participants, council.judge, choices), missing)
+            else:
+                runs = [decision_run(council, group, stream.model_copy(
+                    update={"choices": choices}), agents, store)]
+                analysis = runs[0].state.model_copy(deep=True)
+            changes |= {"analysis": analysis, "decisions": None}
+        return store.update_council(council_id, {
+            "streams": replaced(council, stream.model_copy(update=changes))}), runs
+
+    return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
+
+
+def choices_for(stream: Stream, edit: ApproveChoices) -> list[Choice]:
+    """Выбор, который утверждают: к нынешнему поиску вариантов, когда тот закончился."""
+    search = stream.proposals
+    if stream.scope is None or search is None:
+        raise HTTPException(409, "Вариантов ещё нет: сначала утвердите вопросы потока")
+    if running(search):
+        raise HTTPException(409, "Совет ещё ищет варианты — дождитесь его")
+    if search.run != edit.proposals_run:
+        raise HTTPException(409, "Варианты уже нашли заново — выбор был к прежним")
+    return chosen(stream.scope, search, edit.choices)
+
+
+def analyzes_anew(stream: Stream, choices: list[Choice]) -> bool:
+    """Выбор проверяется заново, если его ещё не проверяли или проверяли другой."""
+    return stream.analysis is None or stream.analysis.choices != choices_key(choices)
 
 
 def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
            choices: list[Choice]) -> list[Choice]:
     """Выбор — по одному на каждый отобранный вопрос, в порядке отбора; вариант — из тех, что
     у этого вопроса есть: его предложения из текста и найденные к нему советом."""
-    given = {}
-    for choice in choices:
-        if choice.question_id in given:
-            raise HTTPException(422, f"Вопрос {choice.question_id} выбран дважды")
-        given[choice.question_id] = choice
-    asked = {question.id for question in scope}
-    unknown = sorted(set(given) - asked)
+    given = per_question(scope, choices, "выбора")
+    for question in scope:
+        proposal = given[question.id].proposal
+        if proposal is not None and proposal not in offered_for(question, search):
+            raise HTTPException(422, f"У вопроса {question.id} нет варианта {proposal}")
+    return [given[question.id] for question in scope]
+
+
+def per_question[T: (Choice, DecisionDraft)](scope: list[OpenQuestion], items: list[T],
+                                            what: str) -> dict[str, T]:
+    """По одному на каждый отобранный вопрос: ни дважды, ни лишних, ни пропущенных."""
+    given: dict[str, T] = {}
+    for item in items:
+        if item.question_id in given:
+            raise HTTPException(422, f"Вопрос {item.question_id} выбран дважды")
+        given[item.question_id] = item
+    unknown = sorted(set(given) - {question.id for question in scope})
     if unknown:
         raise HTTPException(422, f"Нет таких вопросов: {', '.join(unknown)}")
     missed = [question.id for question in scope if question.id not in given]
     if missed:
-        raise HTTPException(422, f"Нет выбора по вопросам: {', '.join(missed)}")
-    found = {options.question_id: {p.id for p in options.proposals} for options in search.options}
+        raise HTTPException(422, f"Нет {what} по вопросам: {', '.join(missed)}")
+    return given
+
+
+def offered_for(question: OpenQuestion, search: ProposalDiscovery | None) -> set[str]:
+    """Варианты вопроса: его предложения из текста и найденные к нему советом."""
+    found = next((options.proposals for options in (search.options if search else [])
+                  if options.question_id == question.id), [])
+    return {f"F{i}" for i in question.proposal_ids} | {proposal.id for proposal in found}
+
+
+@router.post("/{council_id}/streams/{group}/analysis", status_code=202,
+             responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
+def start_decision_analysis(council_id: str, group: str, store: StoreDep, config: ConfigDep,
+                            agents: AgentsDep, launch: LauncherDep) -> Council:
+    """Проверяет выбор заново: после сбоя или если при утверждении выбора не было подключения
+    к моделям. Повтор не платит второй раз за уже данные ответы."""
+    def ready(council: Council) -> None:
+        stream = stream_in(council, group)
+        if stream.choices is None:
+            raise HTTPException(409, "Сначала утвердите выбор по вопросам")
+        if stream.decisions is not None:
+            raise HTTPException(409, "Решения уже зафиксированы")
+        if outdated(council.slicing, council.structure):
+            raise HTTPException(
+                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+
+    def build(council: Council, report: Callable) -> DecisionRun:
+        stream = stream_in(council, group)
+        return DecisionRun(council.id, stream.idea.text, stream.scope, stream.choices,
+                           stream.proposals, fragments_of(council, group_of(council, group)),
+                           council.participants, council.judge, agents, report)
+
+    return start_run(council_id, store, config, agents, launch, checking(group), ready, None,
+                     build)
+
+
+@router.post("/{council_id}/streams/{group}/decisions",
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM,
+                        422: {"description": "Не по каждому вопросу одно решение, такого "
+                                             "варианта у вопроса нет или у решения нет "
+                                             "обоснования"}})
+def approve_decisions(council_id: str, group: str, edit: ApproveDecisions,
+                      store: StoreDep) -> Council:
+    """Человек фиксирует решения: по каждому отобранному вопросу — вариант с обоснованием (ADR)
+    или открытый вопрос. Вариант — любой из тех, что у вопроса есть, а не только проверенный
+    советом: решает человек, и проблема, которую нашёл совет, решению не мешает. Обоснование
+    совета, оставленное как есть, — подтверждённое человеком (ai), своё или поправленное —
+    human. Решения — к той проверке, что была на экране: проверили заново — 409. Если проверка
+    упала, решать можно и без неё — со своим обоснованием."""
+    with council_lock:
+        council = current(council_id, store, edit)
+        stream = stream_in(council, group)
+        analysis = stream.analysis
+        if stream.choices is None or analysis is None:
+            raise HTTPException(409, "Решать ещё рано: сначала утвердите выбор по вопросам")
+        if running(analysis):
+            raise HTTPException(409, "Совет ещё проверяет выбор — дождитесь его")
+        if analysis.run != edit.analysis_run:
+            raise HTTPException(409, "Выбор уже проверили заново — решения были к прежней проверке")
+        decisions = decided(stream.scope, stream.proposals, analysis, edit.decisions)
+        council = store.update_council(council_id, {
+            "streams": replaced(council, stream.model_copy(update={"decisions": decisions}))})
+    if council is None:
+        raise HTTPException(404, MISSING)
+    return council
+
+
+def decided(scope: list[OpenQuestion], search: ProposalDiscovery | None,
+            analysis: DecisionAnalysis, drafts: list[DecisionDraft]) -> list[Decision]:
+    """Решения — по одному на каждый отобранный вопрос, в порядке отбора. У решения есть
+    обоснование: ADR без него не бывает. У открытого вопроса его нет."""
+    given = per_question(scope, drafts, "решения")
+    suggested = {found.question_id: found for found in analysis.analyses}
+    decisions = []
     for question in scope:
         proposal = given[question.id].proposal
-        offered = {f"F{i}" for i in question.proposal_ids} | found.get(question.id, set())
-        if proposal is not None and proposal not in offered:
+        if proposal is None:
+            decisions.append(Decision(question_id=question.id))
+            continue
+        if proposal not in offered_for(question, search):
             raise HTTPException(422, f"У вопроса {question.id} нет варианта {proposal}")
-    return [given[question.id] for question in scope]
+        rationale = " ".join((given[question.id].rationale or "").split())
+        if not rationale:
+            raise HTTPException(422, f"У решения по {question.id} нет обоснования")
+        if len(rationale) > RATIONALE_MAX:
+            raise HTTPException(422, f"Обоснование по {question.id} длиннее {RATIONALE_MAX} знаков")
+        ai = suggested.get(question.id)
+        by_ai = ai is not None and ai.proposal == proposal and ai.rationale == rationale
+        decisions.append(Decision(question_id=question.id, proposal=proposal, rationale=rationale,
+                                  rationale_by="ai" if by_ai else "human"))
+    return decisions
 
 
 def scoped(search: QuestionDiscovery, keep: list[str], added: list[str]) -> list[OpenQuestion]:
@@ -428,8 +566,8 @@ def launched_all(store: Store, council_id: str, launch: Launcher, council: Counc
     return (store.get_council(council_id) or council) if failed else council
 
 
-def unconnected[S: (IdeaDiscovery, QuestionDiscovery, ProposalDiscovery)](state: S,
-                                                                          missing: list[str]) -> S:
+def unconnected[S: (IdeaDiscovery, QuestionDiscovery, ProposalDiscovery, DecisionAnalysis)](
+        state: S, missing: list[str]) -> S:
     """Ход, который не запустить: к моделям нет подключения. Записан упавшим с причиной."""
     return state.model_copy(update={
         "state": "failed", "error": f"Нет подключения к моделям: {', '.join(missing)}"})
@@ -448,6 +586,16 @@ def asking(group: str) -> Slot:
 def proposing(group: str) -> Slot:
     """Поиск вариантов потока как место хода."""
     return stream_slot(group, "proposals")
+
+
+def checking(group: str) -> Slot:
+    """Проверка выбора потока как место хода."""
+    return stream_slot(group, "analysis")
+
+
+def below_running(stream: Stream, field: str) -> bool:
+    """Совет работает над этим звеном цепочки потока или над тем, что ниже него."""
+    return any(running(getattr(stream, name)) for name in STREAM_RUNS[STREAM_RUNS.index(field):])
 
 
 def stream_slot(group: str, field: str) -> Slot:
@@ -479,6 +627,14 @@ def proposal_run(council: Council, group: str, idea: str, scope: list[OpenQuesti
     return ProposalRun(council.id, idea, scope, fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, proposing(group)))
+
+
+def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
+                 store: Store) -> DecisionRun:
+    return DecisionRun(council.id, stream.idea.text, stream.scope, stream.choices,
+                       stream.proposals, fragments_of(council, group_of(council, group)),
+                       council.participants, council.judge, runner,
+                       reporter(store, council.id, checking(group)))
 
 
 def find_stream(council: Council, group: str) -> Stream | None:

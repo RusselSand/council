@@ -5,7 +5,7 @@ export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
   | 'idea_discovery' | 'idea_judge' | 'question_discovery' | 'question_judge'
-  | 'proposal_discovery' | 'proposal_judge'
+  | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -111,14 +111,41 @@ export interface ProposalDiscovery {
 /** Выбор по вопросу: Fn — вариант из текста, Pn — найденный советом, null — пока не решает (unresolved). */
 export interface Choice { question_id: string; proposal: string | null }
 /**
+ * Что совет сказал по вопросу перед решением. validated — выбор человека проверен, проблем нет;
+ * conflict — с ним проблема (решать всё равно человеку); recommended — для unresolved совет
+ * предлагает вариант из тех, что есть; none — обоснованно выбрать нельзя. proposal — проверенный
+ * или рекомендованный вариант; rationale — обоснование совета: в ADR — если человек его оставит.
+ */
+export interface QuestionAnalysis {
+  question_id: string; verdict: 'validated' | 'conflict' | 'recommended' | 'none'; proposal: string | null
+  constraint_conflicts: number[]; risk_ids: number[]; depends_on: string[]
+  reason: string | null; rationale: string | null
+}
+/** Проверка выбора: по вопросу за раз, готовые — в analyses по мере проверки; choices — к какому выбору. */
+export interface DecisionAnalysis {
+  state: 'running' | 'done' | 'failed'; run: string; choices: string[]; steps: Step[]
+  analyses: QuestionAnalysis[]; error: string | null
+}
+/**
+ * Решение человека по вопросу — ADR: вариант и почему он; proposal null — вопрос оставлен открытым.
+ * rationale_by: ai — обоснование совета, подтверждённое как есть; human — своё или поправленное.
+ */
+export interface Decision {
+  question_id: string; proposal: string | null; rationale: string | null; rationale_by: 'ai' | 'human' | null
+}
+/** Решение, как его фиксирует человек: у открытого вопроса proposal и rationale — null. */
+export interface DecisionDraft { question_id: string; proposal: string | null; rationale: string | null }
+/**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
  * тексте; questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
- * proposals — поиск вариантов к ним; choices — выбор по каждому.
+ * proposals — поиск вариантов к ним; choices — выбор по каждому; analysis — его проверка;
+ * decisions — решения, которые зафиксировал человек.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
+  analysis: DecisionAnalysis | null; decisions: Decision[] | null
 }
 
 /** Правка с экрана: меняются только присланные поля. */
@@ -206,11 +233,23 @@ export const api = {
   /** Искать варианты к отобранным вопросам заново: после сбоя или без подключения к моделям. */
   seekProposals: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/proposals/discovery`, { method: 'POST' }),
-  /** Выбор по каждому отобранному вопросу. proposalsRun — к какому поиску: у каждого свои номера Pn. */
+  /**
+   * Выбор по каждому отобранному вопросу; совет сразу его проверяет. proposalsRun — к какому
+   * поиску: у каждого свои номера Pn.
+   */
   approveChoices: (id: string, at: GroupsVersion, group: string, proposalsRun: string, choices: Choice[]) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/choices`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, proposals_run: proposalsRun, choices }),
+    }),
+  /** Проверить выбор заново: после сбоя или без подключения к моделям. */
+  checkChoices: (id: string, group: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/analysis`, { method: 'POST' }),
+  /** Решения по каждому отобранному вопросу. analysisRun — к какой проверке выбора. */
+  approveDecisions: (id: string, at: GroupsVersion, group: string, analysisRun: string, decisions: DecisionDraft[]) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/decisions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, analysis_run: analysisRun, decisions }),
     }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
@@ -266,10 +305,10 @@ export const structureIsStale = (council: Council): boolean => {
 export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
-/** Поиск идеи, вопросов или вариантов, что идёт в потоке. */
-export const searchesOf = (stream: Stream) => [stream.discovery, stream.questions, stream.proposals]
+/** Ходы потока: поиск идеи, вопросов, вариантов и проверка выбора. */
+export const searchesOf = (stream: Stream) => [stream.discovery, stream.questions, stream.proposals, stream.analysis]
 
-/** Совет ищет идею, вопросы или варианты хоть одного потока. */
+/** Совет ищет идею, вопросы, варианты или проверяет выбор хоть одного потока. */
 export const seeking = (council: Council): boolean =>
   council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
 

@@ -16,8 +16,10 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .models import (
+    STREAM_RUNS,
     Council,
     CouncilStatus,
+    DecisionAnalysis,
     IdeaDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
@@ -170,7 +172,7 @@ def interrupted(council: Council) -> Council:
             changes[field] = halted(state)
     streams = [stream.model_copy(update={
         field: halted(getattr(stream, field))
-        for field in ("discovery", "questions", "proposals") if running(getattr(stream, field))
+        for field in STREAM_RUNS if running(getattr(stream, field))
     }) for stream in council.streams or []]
     if streams != (council.streams or []):
         changes["streams"] = streams
@@ -178,12 +180,12 @@ def interrupted(council: Council) -> Council:
 
 
 def running(state: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
-            | None) -> bool:
+            | DecisionAnalysis | None) -> bool:
     return state is not None and state.state == "running"
 
 
-def halted[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery)](
-        state: S) -> S:
+def halted[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
+               DecisionAnalysis)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

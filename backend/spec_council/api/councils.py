@@ -9,10 +9,12 @@ from ..agents import AgentRunner
 from ..config import MIN_PARTICIPANTS, AppConfig
 from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, Store, StoreDep
 from ..models import (
+    STREAM_RUNS,
     Council,
     CouncilCreated,
     CouncilPatch,
     CouncilStatus,
+    DecisionAnalysis,
     IdeaDiscovery,
     Label,
     ProposalDiscovery,
@@ -43,7 +45,8 @@ council_lock = Lock()
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
 
-RunState = Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
+RunState = (Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
+            | DecisionAnalysis)
 
 
 @dataclass(frozen=True)
@@ -248,10 +251,10 @@ def running(state: RunState | None) -> bool:
 
 
 def seeking(council: Council) -> bool:
-    """Совет ищет идею, вопросы или варианты хоть одного потока: новая нарезка, раскладка или
-    другой состав групп стёрли бы потоки из-под него."""
-    return any(running(stream.discovery) or running(stream.questions) or running(stream.proposals)
-               for stream in council.streams or [])
+    """Совет ищет идею, вопросы, варианты или проверяет выбор хоть одного потока: новая
+    нарезка, раскладка или другой состав групп стёрли бы потоки из-под него."""
+    return any(running(getattr(stream, field))
+               for stream in council.streams or [] for field in STREAM_RUNS)
 
 
 def lineup(council: Council) -> frozenset[str]:

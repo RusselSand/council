@@ -28,6 +28,13 @@
 2. proposal_judge — если новые варианты есть, судья сводит их и решает, что показать:
    одну рекомендацию, равноправные альтернативы или ничего (proposal_judge.md).
 
+Проверка выбора (DecisionRun) — по вопросу за раз:
+1. decision_analysis — каждый участник проверяет выбранный человеком вариант, а у unresolved
+   сравнивает варианты вопроса и, если один обоснованно лучше, рекомендует его
+   (decision_analysis.md);
+2. decision_judge — судья сводит их анализы в один итог (decision_judge.md). У unresolved
+   вопроса без вариантов сравнивать нечего — модели его не видят.
+
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
 того же текста один и тот же промпт.
@@ -47,10 +54,15 @@ from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
+from .decisions import Analysis, analysis_of, judged_analysis
+from .decisions import Context as DecisionContext
+from .decisions import as_prompt as analysis_prompt
 from .grouping import StructureOption, judged_structure, structure_options
 from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .models import (
+    Choice,
+    DecisionAnalysis,
     Group,
     GroupRelation,
     IdeaDiscovery,
@@ -61,6 +73,7 @@ from .models import (
     OpenQuestion,
     Proposal,
     ProposalDiscovery,
+    QuestionAnalysis,
     QuestionDiscovery,
     QuestionOptions,
     Slicing,
@@ -170,6 +183,17 @@ def start_proposals(participants: list[str], judge: str,
                                          (StepName.proposal_discovery, StepName.proposal_judge)))
 
 
+def choices_key(choices: list[Choice]) -> list[str]:
+    """Выбор, как его помнит проверка: поменялся — проверять заново."""
+    return [f"{choice.question_id}: {choice.proposal or '-'}" for choice in choices]
+
+
+def start_analysis(participants: list[str], judge: str, choices: list[Choice]) -> DecisionAnalysis:
+    return DecisionAnalysis(state="running", run=uuid4().hex[:8], choices=choices_key(choices),
+                            steps=steps(participants, judge,
+                                        (StepName.decision_analysis, StepName.decision_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -188,7 +212,8 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery)]:
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
+                     DecisionAnalysis)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -290,6 +315,19 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, Propo
         with self._lock:
             self._step(name).state = state
             self._publish()
+
+    def _keep_failures(self, step: StepName, question: OpenQuestion,
+                       failures: dict[str, list[str]]) -> None:
+        """Шаг участников, который зовут по вопросу за раз, один на все вопросы, и каждый
+        следующий перезаписал бы, кто упал на прежнем. Копим: упавшая хоть на одном вопросе
+        модель так и числится упавшей — с тем, на каком и почему."""
+        with self._lock:
+            runs = list(self._step(step).runs)
+        for run in runs:
+            if run.state == "failed":
+                failures.setdefault(run.model, []).append(f"{question.id}: {run.error}")
+        for model, errors in failures.items():
+            self._set_run(step, model, "failed", "; ".join(errors))
 
     def _skip(self, name: StepName) -> None:
         with self._lock:
@@ -606,7 +644,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                 StepName.proposal_discovery,
                 render("proposal_discovery", **values, accepted_decisions="[]"),
                 partial(proposal_list, context=context))
-            self._keep_failures(question, failures)
+            self._keep_failures(StepName.proposal_discovery, question, failures)
             existing = {same_question(self.fragments[i].text): i for i in question.proposal_ids
                         if i in self.fragments}
             offered = merged_proposals(c for found in answers.values() for c in found)
@@ -629,18 +667,6 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
             self._skip(StepName.proposal_judge)
         return {"options": self.state.options}
 
-    def _keep_failures(self, question: OpenQuestion, failures: dict[str, list[str]]) -> None:
-        """Шаг участников один на все вопросы, и каждый следующий перезаписал бы, кто упал на
-        прежнем. Копим: упавшая хоть на одном вопросе модель так и числится упавшей — с тем,
-        на каком и почему."""
-        with self._lock:
-            runs = list(self._step(StepName.proposal_discovery).runs)
-        for run in runs:
-            if run.state == "failed":
-                failures.setdefault(run.model, []).append(f"{question.id}: {run.error}")
-        for model, errors in failures.items():
-            self._set_run(StepName.proposal_discovery, model, "failed", "; ".join(errors))
-
 
 def without_repeats(verdict: Verdict, existing: dict[str, int]) -> Verdict:
     """Судья вернул повтор предложения группы — это не новый вариант. Рекомендовал повтор —
@@ -662,3 +688,108 @@ def options_of(question: OpenQuestion, verdict: Verdict, numbers) -> QuestionOpt
                             depends_on=list(c.depends_on),
                             recommended=verdict.kind == "recommended")
                    for c in verdict.proposals])
+
+
+class DecisionRun(CouncilRun[DecisionAnalysis]):
+    """Проверка выбора по отобранным вопросам потока, по вопросу за раз. Где человек выбрал
+    вариант, участники проверяют его, где оставил unresolved — сравнивают варианты вопроса:
+    из текста группы и найденные советом. Судья сводит их анализы в один итог. Новых вариантов
+    здесь нет, выбор человека не меняется, а решений шаг не принимает — их фиксирует человек.
+    Готовый вопрос сразу в отчёте.
+
+    Модели видят и другие вопросы потока — что по ним выбрано и какие unresolved: без этого не
+    сказать, от какого нерешённого вопроса зависит выбор. Одинаковые анализы судья видит
+    одним: число согласных — не довод."""
+
+    what = "проверка выбора"
+
+    def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
+                 choices: list[Choice], proposals: ProposalDiscovery | None,
+                 fragments: list[LabeledFragment], participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[DecisionAnalysis], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_analysis(participants, judge, choices))
+        self.idea = idea
+        self.scope = scope
+        self.choices = {choice.question_id: choice.proposal for choice in choices}
+        self.found = {options.question_id: options.proposals
+                      for options in (proposals.options if proposals else [])}
+        self.fragments = {fragment.id: fragment for fragment in fragments}
+
+    def work(self) -> dict[str, Any]:
+        limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
+        known = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in limits])
+        failures: dict[str, list[str]] = {}
+        asked = False
+        for question in self.scope:
+            offered = self._offered(question)
+            selected = self.choices.get(question.id)
+            if not offered and selected is None:
+                # Unresolved вопрос без вариантов: сравнивать нечего, рекомендовать — тоже.
+                verdict = Analysis("none", None)
+            else:
+                asked = True
+                verdict = self._analyze(question, offered, selected, known, limits, failures)
+            with self._lock:
+                self.state.analyses.append(analysis_of_question(question, verdict))
+                self._publish()
+        if not asked:
+            self._skip(StepName.decision_analysis)
+            self._skip(StepName.decision_judge)
+        return {"analyses": self.state.analyses}
+
+    def _analyze(self, question: OpenQuestion, offered: list[dict], selected: str | None,
+                 known: str, limits: list[LabeledFragment],
+                 failures: dict[str, list[str]]) -> Analysis:
+        context = DecisionContext(
+            frozenset(f.id for f in limits if f.label == "constraint"),
+            frozenset(f.id for f in limits if f.label == "risk"),
+            frozenset(q.id for q in self.scope if q.id != question.id),
+            frozenset(proposal["id"] for proposal in offered), selected)
+        values = {
+            "idea": self.idea,
+            "question": as_json({"id": question.id, "text": question.text}),
+            "proposals": as_json(offered),
+            "user_selection": as_json(
+                None if selected is None else {"proposal_id": selected, "rationale": None}),
+            "constraints_and_risks": known,
+            "related_questions": as_json([self._related(q) for q in self.scope
+                                          if q.id != question.id]),
+        }
+        answers = self._ask_all(StepName.decision_analysis,
+                                render("decision_analysis", **values, accepted_decisions="[]"),
+                                partial(analysis_of, context=context))
+        self._keep_failures(StepName.decision_analysis, question, failures)
+        distinct = {as_json(analysis_prompt(a)): analysis_prompt(a) for a in answers.values()}
+        variants = shuffled(list(distinct.values()))
+        prompt = render("decision_judge", **values, accepted_adrs="[]",
+                        decision_analyses=as_json(
+                            [{"analysis": n, **v} for n, v in enumerate(variants, 1)]))
+        return self._ask_judge(StepName.decision_judge, prompt,
+                               partial(judged_analysis, context=context))
+
+    def _offered(self, question: OpenQuestion) -> list[dict]:
+        """Варианты вопроса: из текста группы и найденные к нему советом."""
+        group = [{"id": f"F{i}", "source": "group", "text": self.fragments[i].text}
+                 for i in question.proposal_ids if i in self.fragments]
+        found = [{"id": p.id, "source": "council", "text": p.text, "reason": p.reason,
+                  "constraint_ids": as_ids(p.constraint_ids), "risk_ids": as_ids(p.risk_ids),
+                  "depends_on_question_ids": p.depends_on}
+                 for p in self.found.get(question.id, [])]
+        return group + found
+
+    def _related(self, question: OpenQuestion) -> dict:
+        """Другой вопрос потока и что по нему выбрал человек."""
+        selected = self.choices.get(question.id)
+        text = next((p["text"] for p in self._offered(question) if p["id"] == selected), None)
+        return {"id": question.id, "text": question.text,
+                "status": "unresolved" if selected is None else "selected",
+                "selected_proposal": None if selected is None else {"id": selected, "text": text}}
+
+
+def analysis_of_question(question: OpenQuestion, verdict: Analysis) -> QuestionAnalysis:
+    return QuestionAnalysis(
+        question_id=question.id, verdict=verdict.kind, proposal=verdict.proposal,
+        constraint_conflicts=list(verdict.conflicts), risk_ids=list(verdict.risks),
+        depends_on=list(verdict.depends_on), reason=verdict.reason or None,
+        rationale=verdict.rationale)
