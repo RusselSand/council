@@ -81,6 +81,32 @@ def test_a_name_that_is_not_utf8_is_shown_as_its_bytes_and_found_back():
     result.model_dump_json()
 
 
+def test_names_shown_alike_before_are_never_taken_for_each_other():
+    """Байт не из UTF-8 и те же буквы «\\xNN» в имени другого файла показаны по-разному: ссылка
+    на один — не на другой."""
+    raw = "bad-\udcff.py"
+    literal = os.fsencode(raw).decode("utf-8", "backslashreplace")    # буквами — как виден raw
+    context = Context(files=frozenset({raw, literal}))
+    shown_raw = inventory_prompt(Inventory(Path("."), "", False, (raw,)))
+    shown_literal = inventory_prompt(Inventory(Path("."), "", False, (literal,)))
+    assert shown_raw != shown_literal
+    assert context.path_of(shown_raw) == raw
+    assert context.path_of(shown_literal) == literal
+
+
+def test_a_folder_without_its_own_repository_is_refused_before_the_outer_one_is_read(
+        tmp_path, monkeypatch):
+    """Каталог репозиториев сам лежит в рабочей копии git: папку без своего репозитория git
+    отнёс бы к внешней — её не обходим даже ради отказа."""
+    outer = tmp_path / "outer"
+    base = outer / "repos"
+    (base / "plain").mkdir(parents=True)
+    git(outer, "init", "-q")
+    monkeypatch.setattr(repository, "copies_of", lambda root: pytest.fail("внешнюю копию читали"))
+    with pytest.raises(RepositoryError, match="вне каталога репозиториев"):
+        working_copy("plain", base)
+
+
 def test_the_file_cap_holds_across_nested_copies_while_walking_them(with_submodule, monkeypatch):
     """Подмодулей может быть много, у каждого — меньше предела, а вместе — миллионы путей:
     считаем, пока обходим, а не после."""

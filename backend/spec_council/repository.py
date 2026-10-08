@@ -223,12 +223,18 @@ def located(text: str, base: Path | None) -> Path:
 
 def working_copy(text: str, base: Path | None) -> Inventory:
     """Рабочая копия по тексту человека — целиком внутри каталога репозиториев: корень git
-    может оказаться выше выбранной папки."""
-    found = inventory(located(text, base))
-    if base is not None and not found.root.is_relative_to(base.resolve()):
-        raise RepositoryError(f"Корень рабочей копии {found.root} вне каталога репозиториев {base}")
+    может оказаться выше выбранной папки. Корень — одним дешёвым вызовом git, до обхода: чужую
+    рабочую копию не читаем даже ради отказа."""
+    root = top_of(located(text, base))
+    if base is not None and not root.is_relative_to(base.resolve()):
+        raise RepositoryError(f"Корень рабочей копии {root} вне каталога репозиториев {base}")
+    found = inventory(root)
     fits(found)
     return found
+
+
+def top_of(path: Path) -> Path:
+    return Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
 
 
 def fits(found: Inventory) -> None:
@@ -346,7 +352,7 @@ def inventory(path: Path) -> Inventory:
     """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, и список файлов — тех,
     что на диске есть, это обычные файлы и лежат в рабочей копии (удалённый, но отслеживаемый,
     вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
-    root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
+    root = top_of(path)
     copies = copies_of(root)
     found = levels(copies)
     listing = set(listed(copies))
@@ -492,8 +498,10 @@ def inventory_prompt(found: Inventory) -> str:
 
 def shown(name: str) -> str:
     """Имя файла, каким его видят модели и человек: байты не из UTF-8 — как \\xNN (как есть
-    его в промпт не положить и не сохранить). Обратно его переводит Context.path_of."""
-    return os.fsencode(name).decode("utf-8", "backslashreplace")
+    его в промпт не положить и не сохранить), а сама «\\» — как «\\\\»: иначе байт и те же
+    буквы в имени другого файла выглядели бы одинаково. Обратно переводит Context.path_of."""
+    return "\\\\".join(part.decode("utf-8", "backslashreplace")
+                       for part in os.fsencode(name).split(b"\\"))
 
 
 def sha_prompt(found: Inventory) -> str:
@@ -517,14 +525,15 @@ class Context:
     def path_of(self, value: object) -> str:
         """Путь файла, как его назвала модель, — относительный, как в inventory. Сначала как
         есть: в POSIX «\\» — буква имени; «/» вместо «\\» — запасной ход для ссылок в духе
-        Windows. Имя, каким его показали моделям (shown), — тоже этот файл."""
+        Windows. Имя, каким его показали моделям (shown), — прежде всего: модель берёт его
+        из списка."""
         text = text_of(value)
         named = [self.relative(path) for path in dict.fromkeys((text, text.replace("\\", "/")))]
         for path in named:
-            if path in self.files:
-                return path
             if path in self.originals:
                 return self.originals[path]
+            if path in self.files:
+                return path
         return named[-1]
 
     @cached_property
