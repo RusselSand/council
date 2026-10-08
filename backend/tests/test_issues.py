@@ -119,3 +119,17 @@ def test_issues_without_a_number_get_one_nobody_else_has_for_the_judge():
     assert ids[1:] == ["I1", "I2"]
     assert ids[0] not in ("I1", "I2")
     assert len(set(ids)) == 3
+
+
+def test_the_same_gaps_in_another_order_are_one_set():
+    """Номер пробела — его место в ответе: одинаковые пробелы в другом порядке — тот же набор."""
+    history = {"question": "Сколько хранить историю?", "reason": ""}
+    format_ = {"question": "В каком формате отчёт?", "reason": ""}
+    def answer(first, second, gaps):
+        return issue_set({"issues": [issue(blocked_by=[first]),
+                                     issue("I2", "Отчёт", blocked_by=[second])], "gaps": gaps},
+                         CONTEXT)
+
+    one = answer("G1", "G2", [history, format_])
+    assert same_issues(one) == same_issues(answer("G2", "G1", [format_, history]))
+    assert same_issues(one) != same_issues(answer("G2", "G1", [history, format_]))

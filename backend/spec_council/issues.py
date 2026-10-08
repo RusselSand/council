@@ -89,13 +89,13 @@ def text_of(value: object, limit: int, what: str) -> str:
 
 def texts_of(value: object) -> tuple[str, ...]:
     """Пункты списка: пустые и слишком длинные отбрасываются, повторы — тоже."""
-    texts = (reason_of(item) for item in value) if isinstance(value, list) else ()
+    texts = (reason_of(item) for item in as_list(value))
     return tuple(dict.fromkeys(text for text in texts if text and len(text) <= ITEM_MAX))
 
 
 def outcomes_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
-    found = (OUTCOME_ID.fullmatch(item.strip()) for item in value
-             if isinstance(item, str)) if isinstance(value, list) else ()
+    found = (OUTCOME_ID.fullmatch(item.strip()) for item in as_list(value)
+             if isinstance(item, str))
     names = {f"O{int(match.group(1))}" for match in found if match}
     return tuple(sorted(names & allowed, key=lambda name: int(name[1:])))
 
@@ -261,19 +261,23 @@ def as_prompt(answer: Answer) -> dict:
 
 def same_issues(answer: Answer) -> str:
     """Набор задач для сравнения: порядок задач, их пунктов и пробелов модели не держат —
-    одинаковые наборы в разном порядке — один набор. Номера задач в ответах свои, поэтому
-    зависимость сравнивается не номером, а тем, на какую задачу он указывает."""
+    одинаковые наборы в разном порядке — один набор. Номера задач и пробелов в ответах свои
+    (у пробела — его место в списке), поэтому зависимость и блокировка пробелом сравниваются не
+    номером, а тем, на что он указывает."""
     data = as_prompt(answer)
+    gaps = {gap["id"]: json.dumps({key: value for key, value in gap.items() if key != "id"},
+                                  ensure_ascii=False, sort_keys=True) for gap in data["gaps"]}
 
     def content(issue: dict) -> str:
         own = {key: value for key, value in issue.items() if key not in ("id", "depends_on")}
         for key in ("main_entry_points", "scope"):
             own[key] = sorted(own[key])
+        own["blocked_by"] = sorted(gaps.get(name, name) for name in issue["blocked_by"])
         return json.dumps(own, ensure_ascii=False, sort_keys=True)
 
     contents = {issue["id"]: content(issue) for issue in data["issues"]}
     issues = sorted(json.dumps({"issue": contents[issue["id"]],
                                 "after": sorted(contents[name] for name in issue["depends_on"])},
                                ensure_ascii=False, sort_keys=True) for issue in data["issues"])
-    gaps = sorted(json.dumps(gap, ensure_ascii=False, sort_keys=True) for gap in data["gaps"])
-    return json.dumps({"issues": issues, "gaps": gaps}, ensure_ascii=False, sort_keys=True)
+    return json.dumps({"issues": issues, "gaps": sorted(gaps.values())}, ensure_ascii=False,
+                      sort_keys=True)
