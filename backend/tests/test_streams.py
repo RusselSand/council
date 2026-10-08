@@ -19,7 +19,7 @@ from spec_council.models import (
     Structure,
     StructureProposal,
 )
-from spec_council.pipeline import start_idea, start_questions
+from spec_council.pipeline import start_idea, start_proposals, start_questions
 
 client = TestClient(app)
 
@@ -29,6 +29,7 @@ LABELS = {1: "idea", 2: "proposal", 3: "proposal", 4: "constraint", 5: "question
 IDEA_B = "Команда сама находит ответы"
 IDEA_C = "Полезные треды не теряются"
 MEASURE = "Как понять, что идея сработала?"
+OPTION = "Считать долю вопросов, на которые ответила база"
 
 
 def grp(gid, fragments, ideas=()):
@@ -52,6 +53,11 @@ class Agents:
 
     def ask(self, model, prompt, key):
         self.asked.append(key)
+        found = {"text": OPTION, "reason": "мерило идеи", "constraint_ids": ["F4"]}
+        if "-proposal_discovery-" in key:
+            return json.dumps({"proposals": [found]})
+        if "-proposal_judge-" in key:
+            return json.dumps({"status": "recommended", "proposal": found})
         if "-question_discovery-" in key:
             # Участники сходятся: недостающий вопрос и вопрос из текста, если он в группе.
             found = [{"text": MEASURE, "source": "discovered", "proposal_ids": [],
@@ -345,3 +351,130 @@ def test_no_scope_before_the_idea(agents):
     confirm(council_id)
     assert choose(council_id, "C", [], ["Свой"], questions_run="нет").status_code == 409
     assert asks(council_id, "C").status_code == 409
+
+
+# --- варианты и выбор
+
+def chose(council_id, group, choices, revision=0, proposals_run=None):
+    run = proposals_run or streams_of(council_id)[group].proposals.run
+    return client.post(f"/api/councils/{council_id}/streams/{group}/choices",
+                       json={"run": "g1", "revision": revision, "proposals_run": run,
+                             "choices": [{"question_id": q, "proposal": p} for q, p in choices]})
+
+
+def proposes(council_id, group):
+    return client.post(f"/api/councils/{council_id}/streams/{group}/proposals/discovery")
+
+
+def scoped_c(council_id, keep=("Q1", "Q2"), added=()):
+    """Поток C: идея утверждена, вопросы отобраны — и совет уже нашёл к ним варианты."""
+    approve(council_id, "C", IDEA_C)
+    return choose(council_id, "C", list(keep), list(added))
+
+
+def test_an_approved_scope_starts_the_search_for_proposals(agents):
+    council_id = grouped()
+    confirm(council_id)
+    res = scoped_c(council_id)
+    assert res.status_code == 200
+    assert res.json()["streams"][2]["proposals"]["state"] == "running"
+    proposals = streams_of(council_id)["C"].proposals
+    assert proposals.state == "done"
+    assert [(o.question_id, o.verdict, [(p.id, p.text, p.recommended, p.constraint_ids)
+                                         for p in o.proposals]) for o in proposals.options] == [
+        ("Q1", "recommended", [("P1", OPTION, True, [4])]),
+        ("Q2", "recommended", [("P2", OPTION, True, [4])])]
+
+
+def test_the_same_scope_keeps_its_proposals_and_another_one_searches_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    first = streams_of(council_id)["C"].proposals.run
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None)]).status_code == 200
+    choose(council_id, "C", ["Q1", "Q2"])
+    assert streams_of(council_id)["C"].proposals.run == first
+    assert streams_of(council_id)["C"].choices is not None
+
+    choose(council_id, "C", ["Q1"])
+    stream = streams_of(council_id)["C"]
+    assert stream.proposals.run != first and [o.question_id for o in stream.proposals.options] == [
+        "Q1"]
+    assert stream.choices is None
+
+
+def test_another_idea_drops_the_proposals_and_the_choices(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2")])
+    approve(council_id, "C", "Другая идея")
+    stream = streams_of(council_id)["C"]
+    assert (stream.scope, stream.proposals, stream.choices) == (None, None, None)
+
+
+def test_nothing_upstream_changes_while_proposals_are_sought(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    stream = streams_of(council_id)["C"]
+    sought = start_proposals(["sol"], "sol", stream.scope)
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"proposals": sought}) if s.group == "C" else s
+        for s in get_store().get_council(council_id).streams]})
+    assert choose(council_id, "C", ["Q1"]).status_code == 423
+    assert approve(council_id, "C", "Другая идея").status_code == 423
+    assert choose(council_id, "C", ["Q1", "Q2"]).status_code == 200   # тот же отбор — повтор
+    assert chose(council_id, "C", [("Q1", None), ("Q2", None)]).status_code == 409
+    assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
+
+
+def test_a_choice_per_question_from_its_own_options(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    res = chose(council_id, "C", [("Q2", "P2"), ("Q1", None)])
+    assert res.status_code == 200
+    choices = streams_of(council_id)["C"].choices
+    assert [(c.question_id, c.proposal) for c in choices] == [("Q1", None), ("Q2", "P2")]
+    assert proposes(council_id, "C").status_code == 409            # выбор уже утверждён
+
+
+@pytest.mark.parametrize(("choices", "problem"), [
+    ([("Q1", "P1")], "Нет выбора по вопросам: Q2"),
+    ([("Q1", "P2"), ("Q2", None)], "У вопроса Q1 нет варианта P2"),
+    ([("Q1", "F3"), ("Q2", None)], "У вопроса Q1 нет варианта F3"),
+    ([("Q1", None), ("Q1", None), ("Q2", None)], "выбран дважды"),
+    ([("Q1", None), ("Q2", None), ("Q7", None)], "Нет таких вопросов: Q7"),
+])
+def test_a_senseless_choice_is_refused(agents, choices, problem):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    res = chose(council_id, "C", choices)
+    assert res.status_code == 422
+    assert problem in res.json()["detail"]
+    assert streams_of(council_id)["C"].choices is None
+
+
+def test_a_choice_for_an_earlier_search_or_before_proposals_is_refused(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert chose(council_id, "C", [], proposals_run="нет").status_code == 409
+    choose(council_id, "C", ["Q1", "Q2"])
+    res = chose(council_id, "C", [("Q1", None), ("Q2", None)], proposals_run="прежний")
+    assert res.status_code == 409 and "заново" in res.json()["detail"]
+
+
+def test_without_models_the_scope_is_approved_and_the_proposal_search_can_be_retried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    agents.online = set()
+    assert choose(council_id, "C", ["Q1"]).status_code == 200
+    proposals = streams_of(council_id)["C"].proposals
+    assert proposals.state == "failed" and proposals.error.startswith("Нет подключения")
+    agents.online = {"sol", "fable"}
+    assert proposes(council_id, "C").status_code == 202
+    assert streams_of(council_id)["C"].proposals.state == "done"

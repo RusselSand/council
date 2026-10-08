@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, IdeaDiscovery, Label, QuestionDiscovery, Settings, Slicing, Stream, StreamIdea, Structure,
+  Council, CouncilPatch, IdeaDiscovery, Label, ProposalDiscovery, QuestionDiscovery, Settings, Slicing, Stream,
+  StreamIdea, Structure,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -129,8 +130,11 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
                    ideas: Partial<Record<'A' | 'B', StreamIdea>> = {},
                    more: Partial<Record<'A' | 'B', Partial<Stream>>> = {}): Council => ({
   ...COUNCIL, status: 'review', slicing: DONE, structure,
-  streams: [{ group: 'A', discovery: null, idea: ideas.A ?? null, questions: null, scope: null, ...more.A },
-            { group: 'B', discovery: search, idea: ideas.B ?? null, questions: null, scope: null, ...more.B },
+  streams: [
+    { group: 'A', discovery: null, idea: ideas.A ?? null, questions: null, scope: null, proposals: null, choices: null,
+      ...more.A },
+    { group: 'B', discovery: search, idea: ideas.B ?? null, questions: null, scope: null, proposals: null, choices: null,
+      ...more.B },
   ] satisfies Stream[],
 })
 
@@ -180,7 +184,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|questions(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|(?:questions|proposals)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -529,7 +533,7 @@ describe('Поток: группа и идея', () => {
   it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.questionsRunning'])).toBeTruthy()
+    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
     expect(approveButton().disabled).toBe(true)
   })
 
@@ -572,7 +576,7 @@ describe('Поток: группа и идея', () => {
     expect(streamCalls).toEqual([{ group: 'A', action: 'questions',
                                    body: { run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1'],
                                            added: ['Кто платит за хостинг?'] } }])
-    expect(screen.getByText(ru['options.stub'])).toBeTruthy()
+    expect(screen.getByText(ru['options.notSought'], { exact: false })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['options.change'] }))
     expect(await screen.findByText('Решать 2 из 3')).toBeTruthy()      // черновик — от утверждённого отбора
   })
@@ -629,6 +633,93 @@ describe('Поток: группа и идея', () => {
     }
     expect(screen.getByText('Решать 4 из 4')).toBeTruthy()
     expect(screen.queryByText(ru['questions.twice'])).toBeNull()
+  })
+
+  it('варианты: из группы и от ИИ, «пока не решаю»; выбор по каждому вопросу уходит на сервер', async () => {
+    const scope = QUESTIONS_FOUND.questions
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null,
+      steps: [{ name: 'proposal_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+              { name: 'proposal_judge', state: 'done', runs: [run('fable', 'done')] }],
+      options: [
+        { question_id: 'Q1', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Хранить в SQLite', reason: 'один файл, без сервера', constraint_ids: [], risk_ids: [],
+            depends_on: ['Q2'], recommended: true }] },
+        { question_id: 'Q2', verdict: 'none', reason: 'всё уже есть', proposals: [] },
+      ],
+    }
+    const ready = { questions: QUESTIONS_FOUND, scope, proposals }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: ready }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { ...ready, choices: [{ question_id: 'Q1', proposal: 'P1' },
+                                                               { question_id: 'Q2', proposal: null }] } })))
+    const first = await screen.findByRole('radiogroup', { name: 'Где хранить состояние?' })
+    expect(within(first).getAllByRole('radio')).toHaveLength(3)    // F2 из группы, P1 от ИИ, «пока не решаю»
+    expect(within(first).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()
+    expect(within(first).getByText(ru['options.recommended'])).toBeTruthy()
+    expect(within(first).getByText('зависит от: Q2')).toBeTruthy()
+    expect(screen.getByText('Новых вариантов нет: всё уже есть')).toBeTruthy()
+    const approve = screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
+    expect(approve.disabled).toBe(true)
+    expect(screen.getByText('Выбрано 0 из 2')).toBeTruthy()
+
+    fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
+    const second = screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
+    expect(screen.getByText('Выбрано 2 из 2')).toBeTruthy()
+    fireEvent.click(approve)
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'choices', body: {
+      run: 'g1', revision: 0, proposals_run: 'p1',
+      choices: [{ question_id: 'Q1', proposal: 'P1' }, { question_id: 'Q2', proposal: null }] } }])
+    expect(screen.getByText('P1 · Хранить в SQLite')).toBeTruthy()
+    expect(screen.getByText(ru['decisions.unresolved'])).toBeTruthy()
+  })
+
+  it('варианты ищет ИИ — найденное видно по вопросу, утвердить нельзя', async () => {
+    const seeking: ProposalDiscovery = {
+      state: 'running', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'none', reason: null, proposals: [] }],
+    }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals: seeking } }))
+    expect(await screen.findByText(ru['options.noneShort'])).toBeTruthy()       // Q1 готов
+    expect(screen.getByText(ru['options.seeking'])).toBeTruthy()                // Q2 ещё ищут
+    expect(screen.getByText(ru['options.capsAi'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('пока ищутся варианты, ни отбор, ни идею не поменять', async () => {
+    const seeking: ProposalDiscovery = { state: 'running', run: 'p1', scope: [], error: null, steps: [], options: [] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals: seeking } }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['options.change'] }))
+    expect(await screen.findByText(ru['questions.optionsRunning'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
+    expect(approveButton().disabled).toBe(true)
+  })
+
+  it('ограничения, которые вариант учитывает, и связанные риски — раздельно', async () => {
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Хранить в SQLite', reason: '', constraint_ids: [3], risk_ids: [4],
+            depends_on: [], recommended: true }] }],
+    }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals } }))
+    expect(await screen.findByText('учитывает ограничения: F3')).toBeTruthy()
+    expect(screen.getByText('связанные риски: F4')).toBeTruthy()
+  })
+
+  it('«Найти варианты» не удалось — отказ виден', async () => {
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions } }),
+               () => json({ detail: 'Сервер останавливается, ход не запущен' }, 503))
+    fireEvent.click(await screen.findByRole('button', { name: ru['options.seek'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Сервер останавливается, ход не запущен')
   })
 
   it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {

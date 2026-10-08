@@ -1,6 +1,7 @@
 import {
   councilPath, seeking, structureIsStale,
-  type Council, type IdeaDiscovery, type QuestionDiscovery, type Slicing, type Stream, type Structure,
+  type Council, type IdeaDiscovery, type ProposalDiscovery, type QuestionDiscovery, type Slicing, type Stream,
+  type Structure,
 } from './api'
 import type { Stage } from './pages/CouncilPage'
 
@@ -20,16 +21,21 @@ const ORDER: Light[] = ['failed', 'yours', 'running', 'done', 'idle']
 export const strongest = (lights: Light[]): Light => ORDER.find(light => lights.includes(light)) ?? 'idle'
 
 /** Ход модели: идёт — зелёный, упал — красный. Готов или не было — решает этап. */
-const ofRun = (run: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | null): Light | null => {
+const ofRun = (run: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery | null)
+  : Light | null => {
   if (run?.state === 'running') return 'running'
   if (run?.state === 'failed') return 'failed'
   return null
 }
 
-/** Где поток: пока нет идеи — на группе, пока не отобраны вопросы — на вопросах, дальше — варианты. */
+/**
+ * Где поток: пока нет идеи — на группе, пока не отобраны вопросы — на вопросах, пока не выбраны
+ * варианты — на вариантах, дальше — решения.
+ */
 export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.idea) return 'group'
-  return stream.scope ? 'options' : 'questions'
+  if (!stream.scope) return 'questions'
+  return stream.choices ? 'decisions' : 'options'
 }
 
 /**
@@ -40,6 +46,7 @@ export const currentStep = (stream: Stream): ChainStep => {
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
   if (step === 'questions' && stream.idea) return stream.scope ? 'done' : ofRun(stream.questions) ?? 'yours'
+  if (step === 'options' && stream.scope) return stream.choices ? 'done' : ofRun(stream.proposals) ?? 'yours'
   return 'idle'
 }
 
@@ -84,7 +91,7 @@ export const councilLight = (council: Council): Light =>
 export interface Attention {
   light: 'yours' | 'failed'
   what: 'slicingFailed' | 'slicesDone' | 'groupingFailed' | 'groupsStale' | 'groupsReady'
-    | 'ideaFailed' | 'ideaWaits' | 'questionsFailed' | 'questionsWait'
+    | 'ideaFailed' | 'ideaWaits' | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
   /** Буква потока — у того, что про поток. */
   group?: string
   to: string
@@ -109,9 +116,10 @@ export function attention(council: Council): Attention[] {
     for (const stream of streams ?? []) {
       const to = councilPath(id, `streams/${stream.group}`)
       const light = streamLight(stream)
-      const onIdea = currentStep(stream) === 'group'
-      if (light === 'failed') add('failed', onIdea ? 'ideaFailed' : 'questionsFailed', to, stream.group)
-      else if (light === 'yours') add('yours', onIdea ? 'ideaWaits' : 'questionsWait', to, stream.group)
+      const step = currentStep(stream)
+      const where = step === 'group' ? 'idea' : step === 'questions' ? 'questions' : 'options'
+      if (light === 'failed') add('failed', `${where}Failed`, to, stream.group)
+      else if (light === 'yours') add('yours', where === 'idea' ? 'ideaWaits' : `${where}Wait`, to, stream.group)
     }
   }
   return items

@@ -5,6 +5,7 @@ export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
   | 'idea_discovery' | 'idea_judge' | 'question_discovery' | 'question_judge'
+  | 'proposal_discovery' | 'proposal_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -90,12 +91,34 @@ export interface QuestionDiscovery {
   questions: OpenQuestion[]; error: string | null
 }
 /**
+ * Новый вариант ответа на вопрос, найденный советом (P1, P2… сквозь поток). Варианты из текста —
+ * фрагменты группы в OpenQuestion.proposal_ids. Ссылки — на ограничения и риски группы и на
+ * другие вопросы, от которых он зависит; recommended — судья счёл его предпочтительным.
+ */
+export interface Proposal {
+  id: string; text: string; reason: string; constraint_ids: number[]; risk_ids: number[]
+  depends_on: string[]; recommended: boolean
+}
+/** Что совет нашёл к вопросу: recommended — один предпочтительный, alternatives — равноправные, none — ничего нового. */
+export interface QuestionOptions {
+  question_id: string; proposals: Proposal[]; verdict: 'recommended' | 'alternatives' | 'none'; reason: string | null
+}
+/** Поиск вариантов к отобранным вопросам: по вопросу за раз, готовые — в options по мере поиска. */
+export interface ProposalDiscovery {
+  state: 'running' | 'done' | 'failed'; run: string; scope: string[]; steps: Step[]
+  options: QuestionOptions[]; error: string | null
+}
+/** Выбор по вопросу: Fn — вариант из текста, Pn — найденный советом, null — пока не решает (unresolved). */
+export interface Choice { question_id: string; proposal: string | null }
+/**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
- * тексте; questions — поиск вопросов к утверждённой идее; scope — какие из них решать.
+ * тексте; questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
+ * proposals — поиск вариантов к ним; choices — выбор по каждому.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
+  proposals: ProposalDiscovery | null; choices: Choice[] | null
 }
 
 /** Правка с экрана: меняются только присланные поля. */
@@ -180,6 +203,15 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, questions_run: questionsRun, keep, added }),
     }),
+  /** Искать варианты к отобранным вопросам заново: после сбоя или без подключения к моделям. */
+  seekProposals: (id: string, group: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/proposals/discovery`, { method: 'POST' }),
+  /** Выбор по каждому отобранному вопросу. proposalsRun — к какому поиску: у каждого свои номера Pn. */
+  approveChoices: (id: string, at: GroupsVersion, group: string, proposalsRun: string, choices: Choice[]) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/choices`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, proposals_run: proposalsRun, choices }),
+    }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/idea`, {
@@ -234,10 +266,12 @@ export const structureIsStale = (council: Council): boolean => {
 export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
-/** Совет ищет идею или вопросы хоть одного потока. */
+/** Поиск идеи, вопросов или вариантов, что идёт в потоке. */
+export const searchesOf = (stream: Stream) => [stream.discovery, stream.questions, stream.proposals]
+
+/** Совет ищет идею, вопросы или варианты хоть одного потока. */
 export const seeking = (council: Council): boolean =>
-  council.streams?.some(stream => stream.discovery?.state === 'running' || stream.questions?.state === 'running')
-  ?? false
+  council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

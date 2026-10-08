@@ -18,6 +18,10 @@ GIVEN = {
     "idea_judge": {"group", "idea_options"},
     "question_discovery": {"idea", "fragments"},
     "question_judge": {"idea", "fragments", "question_candidates"},
+    "proposal_discovery": {"idea", "question", "existing_proposals", "constraints_and_risks",
+                           "accepted_decisions"},
+    "proposal_judge": {"idea", "question", "existing_proposals", "constraints_and_risks",
+                       "accepted_adrs", "proposal_candidates"},
 }
 
 

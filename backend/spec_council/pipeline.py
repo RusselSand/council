@@ -22,6 +22,12 @@
 2. question_judge — судья сводит списки в канонический (question_judge.md); если списки
    совпали, он не нужен.
 
+Варианты потока (ProposalRun) — к отобранным вопросам, по вопросу за раз:
+1. proposal_discovery — каждый участник ищет новые варианты ответа, которых ещё нет среди
+   предложений группы (proposal_discovery.md);
+2. proposal_judge — если новые варианты есть, судья сводит их и решает, что показать:
+   одну рекомендацию, равноправные альтернативы или ничего (proposal_judge.md).
+
 Судья не знает, какая модель что предложила, а варианты идут в перемешанном порядке:
 иначе он охотнее выбирает своё и первое. Перемешивание детерминированное: у одного и
 того же текста один и тот же промпт.
@@ -36,6 +42,7 @@ import json
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
@@ -51,7 +58,11 @@ from .models import (
     IdeaProposal,
     LabeledFragment,
     ModelRun,
+    OpenQuestion,
+    Proposal,
+    ProposalDiscovery,
     QuestionDiscovery,
+    QuestionOptions,
     Slicing,
     Step,
     StepName,
@@ -61,7 +72,17 @@ from .models import (
     Vote,
 )
 from .prompts import PromptError, render
-from .questions import as_prompt, numbered, question_list, same_lists, with_user_questions
+from .proposals import Context, Verdict, judged_proposals, proposal_list
+from .proposals import as_prompt as proposal_prompt
+from .proposals import merged as merged_proposals
+from .questions import (
+    as_prompt,
+    numbered,
+    question_list,
+    same_lists,
+    same_question,
+    with_user_questions,
+)
 from .slicing import (
     BadAnswer,
     BoundaryNote,
@@ -137,6 +158,18 @@ def start_questions(participants: list[str], judge: str, idea: str) -> QuestionD
                                          (StepName.question_discovery, StepName.question_judge)))
 
 
+def scope_key(scope: list[OpenQuestion]) -> list[str]:
+    """Отбор вопросов, как его помнит поиск вариантов: поменялся — искать заново."""
+    return [f"{question.id}: {question.text}" for question in scope]
+
+
+def start_proposals(participants: list[str], judge: str,
+                    scope: list[OpenQuestion]) -> ProposalDiscovery:
+    return ProposalDiscovery(state="running", run=uuid4().hex[:8], scope=scope_key(scope),
+                             steps=steps(participants, judge,
+                                         (StepName.proposal_discovery, StepName.proposal_judge)))
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
@@ -155,7 +188,7 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery)]:
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
@@ -522,3 +555,110 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
             chosen = self._ask_judge(StepName.question_judge, prompt,
                                      lambda data: question_list(data, self.fragments))
         return {"questions": numbered(with_user_questions(chosen, self.fragments))}
+
+
+class ProposalRun(CouncilRun[ProposalDiscovery]):
+    """Новые варианты ответа на отобранные вопросы потока. Вопросы — по очереди: модель всё
+    равно отвечает по одному запросу за раз. По каждому участники ищут варианты, которых нет
+    среди предложений группы, судья сводит их и решает, что показать. Готовый вопрос сразу
+    в отчёте: человек видит варианты по мере поиска. Варианты нумеруются сквозь поток: P1, P2…
+    Принятых решений на этом шаге ещё нет — их фиксирует следующий.
+
+    Вопрос модели видят вместе с другими вопросами потока (other_open_questions): без них не
+    указать, от какого вопроса вариант зависит. Повтор предложения группы, как бы его ни
+    написали, — не новый вариант: он отсеивается и у участников, и у судьи. Модель, упавшая
+    на одном вопросе, так и числится упавшей, хоть следующие она и ответила."""
+
+    what = "поиск вариантов"
+
+    def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
+                 fragments: list[LabeledFragment], participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[ProposalDiscovery], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_proposals(participants, judge, scope))
+        self.idea = idea
+        self.scope = scope
+        self.fragments = {fragment.id: fragment for fragment in fragments}
+
+    def work(self) -> dict[str, Any]:
+        limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
+        known = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in limits])
+        numbers = iter(range(1, 10_000))
+        failures: dict[str, list[str]] = {}
+        judged = False
+        for question in self.scope:
+            context = Context(
+                frozenset(f.id for f in limits if f.label == "constraint"),
+                frozenset(f.id for f in limits if f.label == "risk"),
+                frozenset(q.id for q in self.scope if q.id != question.id))
+            values = {
+                "idea": self.idea,
+                "question": as_json({
+                    "id": question.id, "text": question.text,
+                    "other_open_questions": [{"id": q.id, "text": q.text}
+                                             for q in self.scope if q.id != question.id]}),
+                "existing_proposals": as_json([{"id": f"F{i}", "text": self.fragments[i].text}
+                                               for i in question.proposal_ids
+                                               if i in self.fragments]),
+                "constraints_and_risks": known,
+            }
+            answers = self._ask_all(
+                StepName.proposal_discovery,
+                render("proposal_discovery", **values, accepted_decisions="[]"),
+                partial(proposal_list, context=context))
+            self._keep_failures(question, failures)
+            existing = {same_question(self.fragments[i].text): i for i in question.proposal_ids
+                        if i in self.fragments}
+            offered = merged_proposals(c for found in answers.values() for c in found)
+            candidates = [c for c in offered if same_question(c.text) not in existing]
+            if candidates:
+                judged = True
+                variants = shuffled([proposal_prompt(c) for c in candidates])
+                prompt = render("proposal_judge", **values, accepted_adrs="[]",
+                                proposal_candidates=as_json(
+                                    [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
+                verdict = without_repeats(self._ask_judge(
+                    StepName.proposal_judge, prompt, partial(judged_proposals, context=context)),
+                    existing)
+            else:
+                verdict = Verdict("none", (), None)
+            with self._lock:
+                self.state.options.append(options_of(question, verdict, numbers))
+                self._publish()
+        if not judged:
+            self._skip(StepName.proposal_judge)
+        return {"options": self.state.options}
+
+    def _keep_failures(self, question: OpenQuestion, failures: dict[str, list[str]]) -> None:
+        """Шаг участников один на все вопросы, и каждый следующий перезаписал бы, кто упал на
+        прежнем. Копим: упавшая хоть на одном вопросе модель так и числится упавшей — с тем,
+        на каком и почему."""
+        with self._lock:
+            runs = list(self._step(StepName.proposal_discovery).runs)
+        for run in runs:
+            if run.state == "failed":
+                failures.setdefault(run.model, []).append(f"{question.id}: {run.error}")
+        for model, errors in failures.items():
+            self._set_run(StepName.proposal_discovery, model, "failed", "; ".join(errors))
+
+
+def without_repeats(verdict: Verdict, existing: dict[str, int]) -> Verdict:
+    """Судья вернул повтор предложения группы — это не новый вариант. Рекомендовал повтор —
+    новых вариантов нет, и сказано, с чем он совпал; из альтернатив повтор просто выпадает:
+    выбор между оставшимися и предложением группы остаётся."""
+    kept = tuple(c for c in verdict.proposals if same_question(c.text) not in existing)
+    if kept or verdict.kind == "none":
+        return Verdict(verdict.kind, kept, verdict.reason)
+    repeats = sorted({existing[same_question(c.text)] for c in verdict.proposals})
+    return Verdict("none", (), "рекомендованный вариант уже есть в тексте группы: "
+                   + ", ".join(f"F{i}" for i in repeats))
+
+
+def options_of(question: OpenQuestion, verdict: Verdict, numbers) -> QuestionOptions:
+    return QuestionOptions(
+        question_id=question.id, verdict=verdict.kind, reason=verdict.reason,
+        proposals=[Proposal(id=f"P{next(numbers)}", text=c.text, reason=c.reason,
+                            constraint_ids=list(c.constraint_ids), risk_ids=list(c.risk_ids),
+                            depends_on=list(c.depends_on),
+                            recommended=verdict.kind == "recommended")
+                   for c in verdict.proposals])
