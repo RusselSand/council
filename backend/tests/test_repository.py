@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from spec_council import repository
+from spec_council.models import FollowUp
 from spec_council.repository import (
     Context,
     Inventory,
@@ -396,6 +397,56 @@ def test_a_file_reached_through_a_linked_folder_is_neither_listed_nor_copied(rep
     with pytest.raises(RepositoryError, match="conf/app.ini"):
         snapshot(forged, tmp_path / "snap")
     assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
+
+
+def test_a_tracked_folder_swapped_for_an_ignored_link_is_told_not_hidden(repo, tmp_path):
+    """Каталог с отслеживаемыми файлами подменили ссылкой, и он ещё и игнорируется: git его не
+    покажет, файлов за ним в снимке нет — значит, в «нет в снимке» должна быть сама ссылка."""
+    (repo / "conf").mkdir()
+    (repo / "conf" / "app.ini").write_text("x=1\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "conf")
+    (repo / ".gitignore").write_text("*.log\nconf\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    shutil.rmtree(repo / "conf")
+    link_folder(repo / "conf", outside)
+    found = inventory(repo)
+    assert "conf/app.ini" not in found.files
+    assert [entry for entry in found.omitted if entry.startswith("conf → ")]
+
+
+def test_a_nested_copy_whose_worktree_is_elsewhere_is_not_walked(repo, tmp_path):
+    """core.worktree у вложенной копии ведёт наружу: git читал бы чужой каталог под её именем."""
+    nested = repo / "tools" / "gen"
+    nested.mkdir(parents=True)
+    git(nested, "init", "-q")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret.txt").write_text("ключ\n", encoding="utf-8")
+    git(nested, "config", "core.worktree", str(elsewhere))
+    assert [copy.prefix for copy in repository.copies_of(repo)] == [""]
+
+
+def test_paths_of_all_nested_copies_together_are_bounded(with_submodule, monkeypatch):
+    """Каждая команда git — меньше предела, а пути всех копий вместе — сотни мегабайт."""
+    monkeypatch.setattr(repository, "PATHS_MAX", 40)
+    with pytest.raises(RepositoryError, match="слишком"):
+        repository.copies_of(with_submodule)
+
+
+def test_the_next_steps_know_a_scan_that_ran_out_of_rounds_left_work(repo):
+    """Три прохода кончились, а судья ещё просил доисследовать: следующие шаги не должны
+    принять недоисследованное за установленное."""
+    result = map_of({"findings": []}, CONTEXT)
+    left = [FollowUp(objective="Проверить очередь", reason="не дочитали",
+                     targets=["infra/queue.yml"], related_finding_ids=[])]
+    told = json.loads(context_prompt(result, "abc", complete=False, follow_up=left))
+    assert told["complete"] is False
+    assert told["remaining_follow_up"][0]["objective"] == "Проверить очередь"
+    done = json.loads(context_prompt(result, "abc"))
+    assert done["complete"] is True
+    assert done["remaining_follow_up"] == []
 
 
 def test_a_folder_swapped_for_a_link_to_an_ignored_folder_inside_is_not_copied(repo, tmp_path):

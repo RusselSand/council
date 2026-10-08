@@ -54,8 +54,9 @@ ABSENT_CHARS = 4000
 # и по байтам, и по числу файлов (крошечных их бывает миллион: кончились бы память и inode).
 SNAPSHOT_MAX = 512 * 2**20
 FILES_MAX = 100_000
-# Больше вывода от одной команды git не читаем.
+# Больше вывода от одной команды git не читаем — и путей всех копий вместе не держим.
 OUTPUT_MAX = 64 * 2**20
+PATHS_MAX = 64 * 2**20
 GIT_TIMEOUT = 120
 TEXT_MAX = 2000
 # Путь в ответе: 4 КБ байтов имени, каждый — до четырёх знаков «\xNN», и символ точки входа.
@@ -214,7 +215,7 @@ def copies_of(root: Path) -> list[Copy]:
     top = os.path.realpath(root)
     seen = {top}
     found: list[Copy] = []
-    counted = 0
+    counted = chars = 0
     queue = [(root, "", False)]
     while queue:
         folder, prefix, embedded = queue.pop(0)
@@ -222,8 +223,12 @@ def copies_of(root: Path) -> list[Copy]:
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
         counted += len(cached) + len(others)
+        chars += sum(map(len, cached)) + sum(map(len, others))
         if counted > FILES_MAX:
             raise too_many()            # пока обходим: подмодулей бывает и тысяча
+        if chars > PATHS_MAX:
+            raise RepositoryError(f"Рабочая копия слишком велика для скана: пути её файлов "
+                                  f"вместе длиннее {PATHS_MAX / 2**20:g} МБ")
         # Подмодуль записан в коммите своего родителя (recorded); репозиторий внутри — нигде.
         links = [(name, embedded, True) for _, mode, _, name in index if mode == b"160000"]
         links += [(name, True, False) for name in inner_copies(folder, cached, others)]
@@ -252,7 +257,16 @@ def checked_out(path: Path, top: str) -> bool:
         return False
     real = os.path.realpath(path)
     return (real == os.path.abspath(path) and Path(real).is_relative_to(top)
-            and (path / ".git").exists())
+            and (path / ".git").exists() and own_top(path))
+
+
+def own_top(path: Path) -> bool:
+    """Корень этой копии по git — сама она: core.worktree или .git-файл не уводят git в чужой
+    каталог под её именем."""
+    try:
+        return os.path.normcase(top_of(path)) == os.path.normcase(os.path.realpath(path))
+    except RepositoryError:
+        return False
 
 
 def outside_of(folder: Path, index: list[tuple[bytes, bytes, str, str]]) -> int:
@@ -461,17 +475,34 @@ def omitted_of(root: Path, copies: list[Copy]) -> tuple[str, ...]:
 
 
 def links_of(root: Path, copies: list[Copy]) -> list[str]:
-    """Ссылки рабочей копии — путь и куда ведёт (сам текст ссылки, по ней не ходим)."""
-    found = []
+    """Ссылки рабочей копии — путь и куда ведёт (сам текст ссылки, по ней не ходим). И ссылка
+    на каталог по дороге к файлу: файлов за ней в снимке нет, даже если git её самой не
+    показывает (каталог игнорируется). Каждая — один раз, первая по пути."""
+    found: list[str] = []
+    linked: dict[str, bool] = {}
     for name in sorted(set(listed(copies))):
-        path, folder = root / name, os.path.dirname(name)
-        if os.path.islink(path) and (not folder or unlinked(root, folder)):
-            try:
-                target = shown(os.readlink(path))
-            except OSError:
-                target = "?"
-            found.append(f"{shown(name)} → {target} — ссылка, в снимок не копируется")
+        parts = name.removesuffix("/").split("/")
+        for depth in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            if prefix not in linked:
+                linked[prefix] = is_link(root / prefix)
+                if linked[prefix]:
+                    found.append(f"{shown(prefix)} → {link_text(root / prefix)} — ссылка, в "
+                                 "снимок не копируется")
+            if linked[prefix]:
+                break
     return found
+
+
+def is_link(path: Path) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def link_text(path: Path) -> str:
+    try:
+        return shown(os.readlink(path))
+    except OSError:
+        return "?"
 
 
 def present(root: Path, copies: list[Copy]) -> tuple[str, ...]:
@@ -876,18 +907,24 @@ def as_prompt(result: RepositoryMap) -> dict:
 
 def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
                    dirty: bool = False, outside: int = 0, omitted: Sequence[str] = (),
-                   omitted_count: int = 0) -> str:
+                   omitted_count: int = 0, complete: bool = True,
+                   follow_up: Sequence[FollowUp] = ()) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
     сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
     правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
     files_outside_checkout — сколько файлов коммита вне sparse checkout, а not_in_snapshot —
     чего ещё нет в снимке (нескачанные подмодули, ссылки; первые, всего — _count): этого модели
-    не видели."""
+    не видели; complete — судья счёл исследование достаточным, а remaining_follow_up — что
+    доисследовать не успели: недоисследованное — не установленное."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
     return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
                        "files_outside_checkout": outside,
                        "not_in_snapshot": capped(omitted),
                        "not_in_snapshot_count": max(omitted_count, len(omitted)),
+                       "complete": complete,
+                       "remaining_follow_up": [
+                           {"objective": item.objective, "reason": item.reason,
+                            "targets": item.targets} for item in follow_up[:ABSENT_SHOWN]],
                        **as_prompt(result)},
                       ensure_ascii=False, indent=2)

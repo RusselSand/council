@@ -336,7 +336,8 @@ def repository_map(stream: Stream) -> str:
         return context_prompt(None)
     return context_prompt(scan.result, scan.commit_sha, dirty=scan.dirty,
                           outside=scan.outside, omitted=scan.omitted,
-                          omitted_count=scan.omitted_count)
+                          omitted_count=scan.omitted_count, complete=scan.complete,
+                          follow_up=scan.follow_up)
 
 
 def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:
