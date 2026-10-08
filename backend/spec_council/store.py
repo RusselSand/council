@@ -8,7 +8,7 @@ import logging
 import os
 import tempfile
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -113,9 +113,11 @@ class FileStore(InMemoryStore):
     все, дальше живут в памяти, а каждая правка пишется на диск раньше, чем её увидят: не
     записалась — правки нет. Каталог — одного процесса: второй не увидел бы чужих правок."""
 
-    def __init__(self, folder: Path) -> None:
+    def __init__(self, folder: Path, fit: Callable[[Council], Council] | None = None) -> None:
+        """fit — какими совет читать: под нынешние модели совета (config.fitted)."""
         writable(folder)
         self._folder = folder
+        fit = fit or (lambda council: council)
         councils = []
         for path in sorted(folder.glob("*.json")):
             try:
@@ -124,7 +126,7 @@ class FileStore(InMemoryStore):
                 # Файл не трогаем: его можно поправить руками, и при следующем старте он вернётся.
                 log.warning("Совет из %s не прочитан, его нет в списке: %s", path, exc)
                 continue
-            stopped = interrupted(migrated(council))
+            stopped = interrupted(migrated(fit(council)))
             if stopped is not council:
                 self._keep(stopped)
             councils.append(stopped)

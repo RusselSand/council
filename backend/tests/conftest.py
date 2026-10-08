@@ -8,6 +8,10 @@ import pytest
 # хранилище читает каталог один раз на процесс.
 DATA = tempfile.mkdtemp(prefix="council-tests-")
 os.environ["COUNCIL_DATA"] = DATA
+# Совет тестов — по умолчанию (Sol и Fable, судья Fable), что бы ни было в .env на машине:
+# пустое значение в окружении сильнее .env и значит «по умолчанию».
+for variable in ("COUNCIL_PARTICIPANT_1", "COUNCIL_PARTICIPANT_2", "COUNCIL_JUDGE"):
+    os.environ[variable] = ""
 
 from spec_council.app import app  # noqa: E402
 from spec_council.deps import get_agents  # noqa: E402

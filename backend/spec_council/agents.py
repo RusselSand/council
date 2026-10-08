@@ -1,7 +1,8 @@
 """Запуск моделей совета через agent-workers: одна модель — одно подключение к CLI.
 
-Каталог учётной записи модели — .accounts/<alias> рядом с .env (он в .gitignore), или
-COUNCIL_<ALIAS>_HOME в .env или окружении; в докере его задаёт compose. Вход в подписку
+Каталог учётной записи модели — <alias> в каталоге учётных записей: .accounts рядом с .env
+(он в .gitignore) или COUNCIL_ACCOUNTS; свой каталог одной модели — COUNCIL_<ALIAS>_HOME. В
+докере каталог учётных записей монтирует compose. Вход в подписку
 делается заранее на хосте, см. README: python -m agent_workers login --home <каталог>.
 """
 
@@ -99,7 +100,8 @@ class AgentRunner:
             return None
         # Без настройки — .accounts/<alias> рядом с .env, то есть в корне репозитория.
         root = self._settings.path.parent if self._settings.path else Path.cwd()
-        return self._settings.path_of(home_key(alias)) or (root / ".accounts" / alias).resolve()
+        accounts = self._settings.path_of("COUNCIL_ACCOUNTS") or (root / ".accounts").resolve()
+        return self._settings.path_of(home_key(alias)) or accounts / alias
 
     def available(self, alias: str, *, fresh: bool = False) -> bool:
         """Вход в подписку подтверждает сама CLI (claude auth status, codex login status).

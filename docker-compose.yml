@@ -2,12 +2,14 @@
 # Сборка в один контейнер — профиль prod (сервис app).
 name: council
 
-# Где внутри контейнера учётные записи моделей совета и сами советы. HOME — куда CLI пишут
-# мелочи вне своих каталогов: под произвольным UID без записи в /etc/passwd это «/», а туда
-# писать нельзя.
+# Где внутри контейнера учётные записи моделей совета и сами советы, и кто в совете (из .env:
+# пусто — по умолчанию). HOME — куда CLI пишут мелочи вне своих каталогов: под произвольным
+# UID без записи в /etc/passwd это «/», а туда писать нельзя.
 x-paths: &paths
-  COUNCIL_SOL_HOME: /data/accounts/sol
-  COUNCIL_FABLE_HOME: /data/accounts/fable
+  COUNCIL_ACCOUNTS: /data/accounts
+  COUNCIL_PARTICIPANT_1: ${COUNCIL_PARTICIPANT_1:-}
+  COUNCIL_PARTICIPANT_2: ${COUNCIL_PARTICIPANT_2:-}
+  COUNCIL_JUDGE: ${COUNCIL_JUDGE:-}
   COUNCIL_DATA: /data/councils
   COUNCIL_REPOS: /repos
   HOME: /tmp
@@ -32,14 +34,11 @@ services:
       - "8420:8420"
     volumes:
       - ./backend:/app
-      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      # Учётные записи моделей совета с хоста: по каталогу на модель, <имя> из COUNCIL_PARTICIPANT_*
+      # и COUNCIL_JUDGE, внутри COUNCIL_ACCOUNTS (по умолчанию .accounts). Вход — на хосте, см. README.
       - type: bind
-        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
-        target: /data/accounts/sol
-        bind: { create_host_path: true }
-      - type: bind
-        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
-        target: /data/accounts/fable
+        source: ${COUNCIL_ACCOUNTS:-./.accounts}
+        target: /data/accounts
         bind: { create_host_path: true }
       # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
       # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
@@ -93,14 +92,11 @@ services:
     ports:
       - "8080:8420"
     volumes:
-      # Каталоги учётных записей моделей с хоста (пути в .env). Вход делается на хосте, см. README.
+      # Учётные записи моделей совета с хоста: по каталогу на модель, <имя> из COUNCIL_PARTICIPANT_*
+      # и COUNCIL_JUDGE, внутри COUNCIL_ACCOUNTS (по умолчанию .accounts). Вход — на хосте, см. README.
       - type: bind
-        source: ${COUNCIL_SOL_HOME:-./.accounts/sol}
-        target: /data/accounts/sol
-        bind: { create_host_path: true }
-      - type: bind
-        source: ${COUNCIL_FABLE_HOME:-./.accounts/fable}
-        target: /data/accounts/fable
+        source: ${COUNCIL_ACCOUNTS:-./.accounts}
+        target: /data/accounts
         bind: { create_host_path: true }
       # Советы — файлы на хосте (путь в .env): переживают перезапуск и пересборку. Каталог не
       # создаём: на Linux docker сделал бы его от root, и бэкенд под COUNCIL_UID не смог бы
