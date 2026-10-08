@@ -7,6 +7,7 @@ import pytest
 
 from spec_council import deps
 from spec_council import store as store_module
+from spec_council.config import config_of, fitted
 from spec_council.deps import data_folder
 from spec_council.models import (
     CouncilStatus,
@@ -193,3 +194,15 @@ def test_streams_saved_before_the_repository_step_passed_it_by_skipping(tmp_path
     first, second = after.streams
     assert (first.repository.by, first.questions.repository) == ("skipped", "skipped")
     assert second.repository is None                    # вопросов не было — шаг впереди
+
+
+def test_councils_are_read_under_the_models_of_today(tmp_path):
+    """fit подгоняет совет при чтении — и подогнанный записывается: следующий старт его так и
+    прочитает."""
+    before = FileStore(tmp_path)
+    council = before.create_council(participants=["sol", "fable"], judge="sol")
+    config = config_of("fable=claude/claude-fable-5-1", "opus=claude/claude-opus-5-5")
+    after = FileStore(tmp_path, fit=lambda c: fitted(c, config)).get_council(council.id)
+    assert (after.participants, after.judge) == (["fable", "opus"], "opus")
+    saved = json.loads((tmp_path / f"{council.id}.json").read_text(encoding="utf-8"))
+    assert saved["participants"] == ["fable", "opus"]

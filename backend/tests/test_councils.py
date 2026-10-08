@@ -8,11 +8,28 @@ from fastapi.testclient import TestClient
 
 from spec_council.api import councils as councils_api
 from spec_council.app import app
-from spec_council.config import DEFAULT_CONFIG
-from spec_council.deps import get_agents, get_launcher, get_store
+from spec_council.config import AppConfig, config_of
+from spec_council.deps import get_agents, get_config, get_launcher, get_store
+from spec_council.models import Model
 from spec_council.pipeline import start, start_structure
 
 client = TestClient(app)
+
+# Совет, как его зададут в .env (Sol и Fable), и ещё модель, которую не запустить: судья вне
+# совета и «нет подключения» — на ней.
+ENV = config_of()
+DEFAULT_CONFIG = AppConfig(
+    models=[*ENV.models, Model(alias="astra", short_name="Astra", display_name="Gemini Astra 3",
+                               cli="gemini")],
+    default_participants=ENV.default_participants, default_judge=ENV.default_judge,
+    agents=ENV.agents)
+
+
+@pytest.fixture(autouse=True)
+def with_astra():
+    app.dependency_overrides[get_config] = lambda: DEFAULT_CONFIG
+    yield
+    app.dependency_overrides.pop(get_config)
 
 
 def new_council() -> str:

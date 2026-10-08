@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # получает на запрос сам FastAPI, со всем жизненным циклом зависимости (async, yield),
     # которого здесь не повторить.
     if get_store not in app.dependency_overrides:
-        get_store()
+        get_store()   # заодно и модели совета: неверно заданные — сервер не поднимется
     yield
     shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 

@@ -13,14 +13,16 @@ from agent_workers import Settings
 from fastapi import Depends
 
 from .agents import AgentRunner, launch
-from .config import DEFAULT_CONFIG, AppConfig
+from .config import AppConfig, config_of, fitted
 from .store import FileStore, Store
 
 
 @cache
 def get_store() -> Store:
-    """Советы — файлами в каталоге данных: переживают перезапуск. Один на процесс."""
-    return FileStore(data_folder())
+    """Советы — файлами в каталоге данных: переживают перезапуск. Один на процесс. Советы,
+    сохранённые с другими моделями, читаются уже под нынешние (config.fitted)."""
+    config = get_config()
+    return FileStore(data_folder(), fit=lambda council: fitted(council, config))
 
 
 def data_folder() -> Path:
@@ -50,8 +52,13 @@ def repository() -> Path | None:
     return next((folder for folder in here.parents if (folder / ".git").exists()), None)
 
 
+@cache
 def get_config() -> AppConfig:
-    return DEFAULT_CONFIG
+    """Совет из окружения или .env: COUNCIL_PARTICIPANT_1, COUNCIL_PARTICIPANT_2 и COUNCIL_JUDGE
+    (config.config_of). Читаются один раз: поменяли — перезапустите сервер."""
+    settings = Settings.load()
+    return config_of(settings.get("COUNCIL_PARTICIPANT_1"), settings.get("COUNCIL_PARTICIPANT_2"),
+                     settings.get("COUNCIL_JUDGE"))
 
 
 def get_repositories() -> Path | None:
@@ -64,7 +71,7 @@ def get_repositories() -> Path | None:
 @cache
 def get_agents() -> AgentRunner:
     """Подключения к моделям. Одно на процесс: .env читается один раз, воркеры переиспользуются."""
-    return AgentRunner(DEFAULT_CONFIG.agents)
+    return AgentRunner(get_config().agents)
 
 
 StoreDep = Annotated[Store, Depends(get_store)]
