@@ -58,6 +58,8 @@ class Parent:
     risk_ids: tuple[int, ...] = ()
     blocked_by: tuple[str, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
+    # Когда итог готов: его критерии доходят до агента вместе с задачей.
+    criteria: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,8 @@ class Candidate:
     depends_on: tuple[str, ...]
     # Открытые вопросы потока и пробелы этого ответа: «G<n>» — n-й из gaps.
     blocked_by: tuple[str, ...]
+    # Критерии готовности её итогов — из итогов, а не от модели.
+    criteria: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -240,8 +244,9 @@ def issue_set(data: dict, context: Context) -> Answer:
 def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
     """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
     повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
-    сделал бы ей наперекор. Решения, ограничения и риски итога — и у задачи; открытый вопрос
-    итога — в её blocked_by, как и каждый пробел, названный для её итогов. Здесь, при разборе, —
+    сделал бы ей наперекор. Решения, ограничения, риски и критерии готовности итога — и у
+    задачи; открытый вопрос итога — в её blocked_by, как и каждый пробел, названный для её
+    итогов. Здесь, при разборе, —
     чтобы ответы, разные лишь тем, повторили ли они это, сравнивались одинаковыми."""
     parents = [context.parents[name] for name in issue.outcome_ids if name in context.parents]
     adrs = {*issue.adr_ids, *(name for parent in parents for name in parent.adr_ids)}
@@ -250,8 +255,10 @@ def inherited(issue: Candidate, gaps: list[Gap], context: Context) -> Candidate:
                  if name in context.open_questions),
                *(f"G{n}" for n, gap in enumerate(gaps, 1)
                  if set(gap.outcome_ids) & set(issue.outcome_ids))}
+    criteria = dict.fromkeys(text for parent in parents for text in parent.criteria)
     return replace(
-        issue, adr_ids=tuple(sorted(adrs, key=lambda name: int(name.split("-")[1]))),
+        issue, criteria=tuple(criteria),
+        adr_ids=tuple(sorted(adrs, key=lambda name: int(name.split("-")[1]))),
         constraint_ids=tuple(sorted({*issue.constraint_ids,
                                      *(n for parent in parents for n in parent.constraint_ids)})),
         risk_ids=tuple(sorted({*issue.risk_ids,
@@ -329,6 +336,7 @@ def as_prompt(answer: Answer) -> dict:
             "constraint_ids": [f"F{i}" for i in issue.constraint_ids],
             "risk_ids": [f"F{i}" for i in issue.risk_ids],
             "depends_on": list(issue.depends_on), "blocked_by": list(issue.blocked_by),
+            "outcome_acceptance_criteria": list(issue.criteria),
         } for issue in answer.issues],
         "gaps": [{"id": f"G{n}", "question": gap.question, "reason": gap.reason,
                   "outcome_ids": list(gap.outcome_ids)} for n, gap in enumerate(answer.gaps, 1)],

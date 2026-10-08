@@ -506,6 +506,7 @@ export const en: Dict = {
   'issues.now': 'now',
   'issues.scope': 'to do',
   'issues.outcomes': 'outcomes',
+  'issues.doneWhen': 'the outcome is done when',
   'issues.decisions': 'decisions',
   'issues.keep': 'keep',
   'issues.risks': 'risks',

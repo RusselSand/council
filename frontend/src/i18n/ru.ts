@@ -502,6 +502,7 @@ export const ru = {
   'issues.now': 'сейчас',
   'issues.scope': 'сделать',
   'issues.outcomes': 'итоги',
+  'issues.doneWhen': 'итог готов, когда',
   'issues.decisions': 'решения',
   'issues.keep': 'соблюдать',
   'issues.risks': 'риски',

@@ -1567,6 +1567,12 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
         <dd><ul>{issue.outcome_ids.map(id => (
           <li key={id}><span className="fragment-id">{id}</span> {outcomes.get(id) ?? id}</li>
         ))}</ul></dd>
+        {issue.acceptance_criteria.length > 0 && (
+          <>
+            <dt>{t('issues.doneWhen')}</dt>
+            <dd><ul>{issue.acceptance_criteria.map(text => <li key={text}>— {text}</li>)}</ul></dd>
+          </>
+        )}
         {issue.adr_ids.length > 0 && (
           <>
             <dt>{t('issues.decisions')}</dt>

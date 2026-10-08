@@ -193,12 +193,12 @@ export interface IssueGap { id: string; question: string; reason: string; outcom
  * Задача для coding agent (I1, I2…) — законченная часть утверждённых итогов: кому и зачем
  * (user_story), где менять и что там сейчас, что именно сделать (scope). depends_on — задачи,
  * результат которых ей нужен; blocked_by — пробелы (G-n) и открытые вопросы, без решения
- * которых её не сделать.
+ * которых её не сделать; acceptance_criteria — когда готовы её итоги (из итогов, не от модели).
  */
 export interface Issue {
   id: string; title: string; user_story: string; main_entry_points: string[]; current_state: string
   scope: string[]; outcome_ids: string[]; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
-  depends_on: string[]; blocked_by: string[]
+  depends_on: string[]; blocked_by: string[]; acceptance_criteria: string[]
 }
 /**
  * Нарезка утверждённых итогов (outcomes — каких) на задачи. code — читали ли модели код (без

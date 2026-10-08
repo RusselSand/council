@@ -1067,11 +1067,12 @@ describe('Поток: решения и итоги', () => {
       { id: 'I1', title: 'Сохранять состояние в файлы', main_entry_points: ['worker/state.py'],
         user_story: 'As an operator, I want the state in files, so that a restart loses nothing.',
         current_state: 'Состояние в памяти.', scope: ['Писать state.json после шага.'], outcome_ids: ['O1'],
-        adr_ids: ['ADR-1'], constraint_ids: [1], risk_ids: [], depends_on: [], blocked_by: [] },
+        adr_ids: ['ADR-1'], constraint_ids: [1], risk_ids: [], depends_on: [], blocked_by: [],
+        acceptance_criteria: ['После перезапуска состояние на месте.'] },
       { id: 'I2', title: 'Считать потери', main_entry_points: [], current_state: '',
         user_story: 'As an operator, I want losses counted, so that I see them.', scope: ['Считать потери.'],
         outcome_ids: ['O2'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: ['I1'],
-        blocked_by: ['G1', 'Q2'] },
+        blocked_by: ['G1', 'Q2'], acceptance_criteria: [] },
     ],
     gaps: [{ id: 'G1', question: 'Где хранить отчёт?', reason: 'нет решения', outcome_ids: ['O2'] }],
     uncovered_outcome_ids: [],
@@ -1097,6 +1098,7 @@ describe('Поток: решения и итоги', () => {
     expect(within(ready).getByText(ru['issues.ready'])).toBeTruthy()
     expect(within(ready).getByText('worker/state.py')).toBeTruthy()
     expect(within(ready).getByText('— Писать state.json после шага.')).toBeTruthy()
+    expect(within(ready).getByText('— После перезапуска состояние на месте.')).toBeTruthy()   // итог готов, когда
     expect(within(ready).getByText('Состояние в файлах')).toBeTruthy()                    // итог O1
     expect(within(ready).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()  // ADR-1
     expect(screen.getByText('По коду коммита abcdef12.')).toBeTruthy()

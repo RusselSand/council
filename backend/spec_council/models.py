@@ -521,6 +521,8 @@ class Issue(BaseModel):
     depends_on: list[str] = []
     # Пробелы нарезки (G-n) и открытые вопросы потока, без решения которых её не сделать.
     blocked_by: list[str] = []
+    # Когда готовы её итоги: их критерии — из итогов, а не от модели, — доходят до агента.
+    acceptance_criteria: list[str] = []
 
 
 class IssueDiscovery(BaseModel):

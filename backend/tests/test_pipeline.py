@@ -1052,3 +1052,11 @@ def test_answers_that_differ_only_in_what_the_outcomes_give_need_no_judge():
     result, _ = cut({("issue_discovery", "sol"): full, ("issue_discovery", "fable"): bare},
                     found=None)
     assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
+
+
+def test_an_issue_carries_the_acceptance_criteria_of_its_outcomes():
+    """Критерии готовности итога доходят до агента вместе с задачей, а не на усмотрение модели."""
+    same = {"issues": [task("I1", "Индекс")]}
+    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                    found=None)
+    assert result.issues[0].acceptance_criteria == ["Находит по слову."]

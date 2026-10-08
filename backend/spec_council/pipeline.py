@@ -1141,7 +1141,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             frozenset(q["id"] for q in questions if q["status"] == "open"),
             {same_question(q.text): q.id for q in self.scope},
             {o.id: Parent(tuple(o.adr_ids), tuple(o.constraint_ids), tuple(o.risk_ids),
-                          tuple(o.blocked_by), tuple((g.question, g.reason) for g in o.gaps))
+                          tuple(o.blocked_by), tuple((g.question, g.reason) for g in o.gaps),
+                          tuple(o.acceptance_criteria))
              for o in self.outcomes})
         opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
                   for q in questions if q["status"] == "open"}
@@ -1197,7 +1198,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                         adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
                         risk_ids=list(c.risk_ids),
                         depends_on=[renamed[name] for name in c.depends_on],
-                        blocked_by=list(c.blocked_by))
+                        blocked_by=list(c.blocked_by), acceptance_criteria=list(c.criteria))
                   for n, c in enumerate(chosen.issues, 1)]
         gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,
                          outcome_ids=list(g.outcome_ids)) for n, g in enumerate(chosen.gaps, 1)]

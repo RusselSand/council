@@ -35,7 +35,7 @@ const assembled = (state: OutcomeDiscovery['state'], outcomes: Outcome[] = []): 
 const task = (more: Partial<Issue> = {}): Issue => ({
   id: 'I1', title: 'Задача', user_story: 'As a member, I want it.', main_entry_points: [], current_state: '',
   scope: ['Сделать.'], outcome_ids: ['O1'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: [],
-  blocked_by: [], ...more })
+  blocked_by: [], acceptance_criteria: [], ...more })
 const cut = (state: IssueDiscovery['state'], issues: Issue[] = []): IssueDiscovery =>
   ({ state, run: 'i1', outcomes: 'o1', code: false, commit_sha: '', dirty: false, steps: [], issues, gaps: [],
      uncovered_outcome_ids: [], error: null })
