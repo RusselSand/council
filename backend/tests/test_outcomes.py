@@ -67,3 +67,15 @@ def test_a_gap_longer_than_a_question_is_dropped():
                                                        {"question": "Кто смотрит отчёт?"}])]},
                            CONTEXT)
     assert found.gaps == (Gap("Кто смотрит отчёт?", ""),)
+
+
+def test_a_gap_that_is_a_scope_question_is_not_a_gap():
+    """Открытый вопрос отбора блокирует итог, решённый уже ответил: новым вопросом ни один не
+    стать."""
+    scoped = Context(adrs=CONTEXT.adrs, constraints=CONTEXT.constraints, risks=CONTEXT.risks,
+                     open_questions=CONTEXT.open_questions,
+                     questions={"где живёт база": "Q2", "как искать": "Q1"})
+    [found] = outcome_list({"outcomes": [outcome(gaps=[
+        {"question": "Где живёт  база?", "reason": "нет решения"}, {"question": "Как искать."},
+        {"question": "Кто смотрит отчёт?"}])]}, scoped)
+    assert (found.blocked_by, found.gaps) == (("Q2",), (Gap("Кто смотрит отчёт?", ""),))

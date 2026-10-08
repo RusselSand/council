@@ -3,16 +3,19 @@
 Итог стоит на принятых решениях (ADR-n — решение по n-му вопросу отбора), соблюдает
 ограничения группы и блокируется открытыми вопросами — теми, по которым решения нет. Ссылки
 вторичны: чужой номер просто отбрасывается, а итог остаётся. Блокировать может только открытый
-вопрос: решённый уже не держит. Список итогов может быть и пустым: фиктивный итог хуже.
+вопрос: решённый уже не держит. Пробел — неопределённость, которой нет среди вопросов: пробел,
+совпавший с открытым вопросом отбора, — блокировка им, с решённым — уже ответ. Список итогов
+может быть и пустым: фиктивный итог хуже.
 """
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .ideas import reason_of
 from .proposals import fragments_in, questions_in
-from .questions import QUESTION_MAX
+from .questions import QUESTION_MAX, same_question
 from .slicing import BadAnswer
 
 TITLE_MAX = 200
@@ -30,6 +33,8 @@ class Context:
     constraints: frozenset[int]
     risks: frozenset[int]
     open_questions: frozenset[str]
+    # Вопросы отбора: текст, как его сравнивает same_question, — номер.
+    questions: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,14 @@ def gaps_of(value: object) -> tuple[Gap, ...]:
 def candidate_of(item: object, context: Context, what: str) -> Candidate:
     if not isinstance(item, dict):
         raise BadAnswer(f"{what} — не объект")
+    blocked = set(questions_in(item.get("blocked_by"), context.open_questions))
+    gaps = []
+    for gap in gaps_of(item.get("gaps")):
+        known = context.questions.get(same_question(gap.question))
+        if known is None:
+            gaps.append(gap)
+        elif known in context.open_questions:
+            blocked.add(known)   # «пробел» — открытый вопрос отбора: он итог и держит
     return Candidate(
         text_of(item.get("title"), TITLE_MAX, f"{what}, title"),
         text_of(item.get("behavior"), BEHAVIOR_MAX, f"{what}, behavior"),
@@ -93,8 +106,7 @@ def candidate_of(item: object, context: Context, what: str) -> Candidate:
         fragments_in(item.get("constraint_ids"), context.constraints),
         fragments_in(item.get("risk_ids"), context.risks),
         criteria_of(item.get("acceptance_criteria")),
-        questions_in(item.get("blocked_by"), context.open_questions),
-        gaps_of(item.get("gaps")))
+        tuple(sorted(blocked)), tuple(gaps))
 
 
 def outcome_list(data: dict, context: Context) -> list[Candidate]:

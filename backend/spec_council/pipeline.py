@@ -873,7 +873,8 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             frozenset(adr["id"] for adr in adrs),
             frozenset(f.id for f in limits if f.label == "constraint"),
             frozenset(f.id for f in limits if f.label == "risk"),
-            frozenset(q["id"] for q in questions if q["status"] == "open"))
+            frozenset(q["id"] for q in questions if q["status"] == "open"),
+            {same_question(q.text): q.id for q in self.scope})
         values = {
             "idea": self.idea,
             "questions_and_proposals": as_json(questions),

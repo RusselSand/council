@@ -777,3 +777,11 @@ def test_the_same_outcomes_in_another_order_need_no_judge():
     assert result.state == "done"
     assert {s.name.value: s.state for s in result.steps}["outcome_judge"] == "skipped"
     assert [o.title for o in result.outcomes] == ["Поиск", "Хранение"]
+
+
+def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
+    gap = result_of("Хранение базы") | {"gaps": [{"question": "где живёт база", "reason": "нет"}]}
+    result, _ = assemble({("outcome_discovery", "sol"): {"outcomes": [gap]},
+                          ("outcome_discovery", "fable"): {"outcomes": [gap]}})
+    [found] = result.outcomes
+    assert (found.blocked_by, found.gaps) == (["Q2"], [])
