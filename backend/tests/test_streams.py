@@ -8,6 +8,7 @@ import subprocess
 import pytest
 from fastapi.testclient import TestClient
 
+from spec_council.api import streams as streams_api
 from spec_council.api.councils import reporter
 from spec_council.api.streams import decided, discovery
 from spec_council.app import app
@@ -977,21 +978,44 @@ def test_a_scan_is_refused_if_the_idea_changed_while_git_read_the_working_copy(a
     council_id = grouped()
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
-    read = working_copy
-
-    def meanwhile(*args):
-        found = read(*args)
-        council = get_store().get_council(council_id)
-        get_store().update_council(council_id, {"streams": [
-            stream.model_copy(update={"idea": stream.idea.model_copy(update={"text": "Другая"})})
-            if stream.group == "C" else stream for stream in council.streams]})
-        return found
-
-    monkeypatch.setattr("spec_council.api.streams.working_copy", meanwhile)
+    monkeypatch.setattr("spec_council.api.streams.working_copy",
+                        meanwhile(working_copy, lambda: another_idea(council_id, "C")))
     before = dict(agents.prompts)
     assert scans(council_id, "C").status_code == 409
     assert streams_of(council_id)["C"].scan is None
     assert agents.prompts == before                              # модели не звали
+
+
+def test_skipping_the_repository_step_is_refused_if_the_idea_changed_meanwhile(agents, repos,
+                                                                              monkeypatch):
+    """Пока проверялись модели, идею поменяли: вопросы искались бы под идею, которой человек не
+    видел."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    monkeypatch.setattr("spec_council.api.streams.offline",
+                        meanwhile(streams_api.offline, lambda: another_idea(council_id, "C")))
+    before = dict(agents.prompts)
+    assert skip(council_id, "C").status_code == 409
+    assert streams_of(council_id)["C"].repository is None
+    assert streams_of(council_id)["C"].questions is None
+    assert agents.prompts == before
+
+
+def meanwhile(call, change):
+    """call, а пока он шёл, — change: правка из другой вкладки."""
+    def changed(*args, **kwargs):
+        result = call(*args, **kwargs)
+        change()
+        return result
+    return changed
+
+
+def another_idea(council_id, group):
+    council = get_store().get_council(council_id)
+    get_store().update_council(council_id, {"streams": [
+        stream.model_copy(update={"idea": stream.idea.model_copy(update={"text": "Другая"})})
+        if stream.group == group else stream for stream in council.streams]})
 
 
 def test_a_scan_request_is_checked_before_git_reads_the_working_copy(agents, repos, monkeypatch):

@@ -84,6 +84,19 @@ def finding(id_="R1", status="verified", path="api/deps.py", **extra):
             "relevance": "точка входа", **extra}
 
 
+def test_a_duplicate_finding_id_takes_no_other_finding_s_id_and_links_to_it_are_dropped():
+    """Номер R1 у двух находок: вторая не должна забрать номер R2 у третьей, а ссылка на R1 —
+    на неизвестно какую из двух, её не берём."""
+    result = map_of({"findings": [
+        finding("R1", statement="первая"), finding("R1", statement="вторая"),
+        finding("R2", statement="третья")], "flows": [
+        {"name": "Поток", "entry_point": "api/deps.py",
+         "steps": [{"description": "шаг", "finding_ids": ["R1", "R2"]}]}]}, CONTEXT)
+    assert [(f.id, f.statement) for f in result.findings] == [
+        ("R1", "первая"), ("R3", "вторая"), ("R2", "третья")]
+    assert result.flows[0].steps[0].finding_ids == ["R2"]
+
+
 def test_findings_hold_on_files_that_exist():
     result = map_of({"findings": [
         finding(), finding("r2", path=".\\api\\routes.py"), finding("R3", path="нет.py"),
@@ -510,6 +523,24 @@ def test_an_untracked_working_copy_inside_is_scanned_too(repo, tmp_path):
     assert not any("/.git/" in name for name in found.files)
     into, _, _ = copy(found, tmp_path)
     assert (into / "tools" / "gen" / "fresh.py").is_file()
+
+
+def test_a_working_copy_inside_a_tracked_folder_keeps_its_own_excludes(repo):
+    """В каталоге вложенной копии есть и файлы внешней: --others внешней перечисляет её файлы
+    поштучно и её собственных исключений (.git/info/exclude) не знает."""
+    nested = repo / "tools"
+    nested.mkdir()
+    (nested / "README.md").write_text("внешний\n", encoding="utf-8")
+    git(repo, "add", "tools/README.md")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tools")
+    git(nested, "init", "-q")
+    (nested / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (nested / ".git" / "info" / "exclude").write_text("secret.key\n", encoding="utf-8")
+    (nested / "gen.py").write_text("x = 1\n", encoding="utf-8")
+    (nested / "secret.key").write_text("ключ\n", encoding="utf-8")
+    files = set(inventory(repo).files)
+    assert {"tools/README.md", "tools/gen.py"} <= files
+    assert "tools/secret.key" not in files
 
 
 def test_a_flagged_file_edited_after_the_inventory_is_caught_by_the_snapshot(repo, tmp_path):

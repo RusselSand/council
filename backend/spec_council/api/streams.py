@@ -216,19 +216,15 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     участники и судья исследуют код, только читая его. Скан заново — шаг «Репозиторий» заново:
     утверждённая карта, вопросы и всё ниже сбрасываются. Повтор после сбоя берёт уже
     оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной.
-    Идея — та, что была при запросе: поменяли, пока git читал копию или проверялись модели, —
-    409, скан не под ту идею."""
-    seen: list[StreamIdea] = []
+    Идея — та, что была при запросе (same_idea)."""
+    seen: list[StreamIdea | None] = []
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         if stream.idea is None:
             raise HTTPException(409, NO_IDEA)
-        if seen and stream.idea != seen[0]:
-            raise HTTPException(409, "Идею потока поменяли, пока готовился скан, — запустите "
-                                     "скан снова")
-        seen[:] = [stream.idea]
+        same_idea(seen, stream)
         if running(stream.scan):
             raise HTTPException(409, "Скан уже идёт")
         if below_running(stream, "questions"):
@@ -267,16 +263,21 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
 
 @router.post("/{council_id}/streams/{group}/repository",
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
+                        409: {"description": "Групп уже других, сканировали заново или идею "
+                                             "поменяли"},
                         423: {"description": "Совет ещё сканирует или работает ниже"}})
 def approve_repository(council_id: str, group: str, edit: ApproveRepository, store: StoreDep,
                        config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
     """Человек проходит шаг «Репозиторий»: утверждает карту скана или пропускает шаг, — и
     совет сразу ищет открытые вопросы, а карта идёт во все следующие шаги. Пройти шаг заново
     иначе — вопросы и всё ниже ищутся заново; так же — ничего не меняется. Карта — того скана,
-    что был на экране: сканировали заново — 409."""
+    что был на экране: сканировали заново — 409; идея — та, что была при запросе (same_idea)."""
+    seen: list[StreamIdea | None] = []
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
+        same_idea(seen, stream)
         step = repository_step(stream, edit)
         anew = asks_anew(stream, step)
         if anew and below_running(stream, "scan"):
@@ -733,6 +734,16 @@ def scoped(search: QuestionDiscovery, keep: list[str], added: list[str]) -> list
     start = len(search.questions) + 1
     return [*kept, *(OpenQuestion(id=f"Q{n}", text=text, source="added")
                      for n, text in enumerate(own, start))]
+
+
+def same_idea(seen: list[StreamIdea | None], stream: Stream) -> None:
+    """Правка — к той идее, что была при запросе: plan() зовётся и до, и после проверки моделей
+    (и git), и если идею поменяли в другой вкладке — 409, а не скан или поиск вопросов под идею,
+    которой человек не видел."""
+    if seen and stream.idea != seen[0]:
+        raise HTTPException(409, "Идею потока поменяли, пока шла проверка, — посмотрите на новую "
+                                 "и повторите")
+    seen[:] = [stream.idea]
 
 
 def probed[T](config: AppConfig, agents: AgentRunner, plan: Callable[[], tuple[Council, bool]],

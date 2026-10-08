@@ -14,6 +14,7 @@ Inventory — обычный список файлов, его даёт git пр
 """
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -21,9 +22,11 @@ import stat
 import subprocess
 import tempfile
 import threading
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from .ideas import reason_of
 from .models import (
@@ -122,29 +125,46 @@ def git(root: Path, *args: str) -> str:
     return git_bytes(root, *args).decode("utf-8", errors="replace")
 
 
-def listed(copies: list[tuple[Path, str]]) -> list[str]:
-    """Отслеживаемые и новые, не игнорируемые файлы — каждой рабочей копии из copies_of. Во
+class Copy(NamedTuple):
+    """Рабочая копия — корень или вложенная: каталог, путь от корня с «/» на конце (у корня —
+    ""), её отслеживаемые и новые, не игнорируемые файлы."""
+
+    folder: Path
+    prefix: str
+    cached: list[str]
+    others: list[str]
+
+
+def listed(copies: list[Copy]) -> list[str]:
+    """Отслеживаемые и новые, не игнорируемые файлы каждой рабочей копии из copies_of. Во
     вложенные git сам не заходит (--recurse-submodules споткнулся бы о подмодуль-ссылку, а
-    --others его и вовсе не умеет): обходим их мы, без ссылок и кругов."""
+    --others его и вовсе не умеет): обходим их мы, без ссылок и кругов. Новые файлы внешней
+    копии, что лежат во вложенной, — по правилам вложенной: её исключений внешняя не знает."""
     found: list[str] = []
-    for folder, prefix in copies:
-        for args in (("--cached",), ("--others", "--exclude-standard")):
-            found += [prefix + name for name in names(git_bytes(folder, "ls-files", "-z", *args))]
+    for copy in copies:
+        inner = tuple(other.prefix.removeprefix(copy.prefix) for other in copies
+                      if other.prefix != copy.prefix and other.prefix.startswith(copy.prefix))
+        found += [copy.prefix + name for name in copy.cached]
+        found += [copy.prefix + name for name in copy.others if not name.startswith(inner)]
     return found
 
 
-def copies_of(root: Path) -> list[tuple[Path, str]]:
+def copies_of(root: Path) -> list[Copy]:
     """Корень и вложенные рабочие копии — checked-out подмодули и просто репозитории внутри,
-    не подмодули, — и вложенные в них: (каталог, путь от корня с «/» на конце, у корня — "").
-    Подменённую ссылкой и уже пройденную не обходим: ссылка назад на родителя водила бы по
-    кругу, а наружу — за пределы рабочей копии."""
+    не подмодули, — и вложенные в них. Подменённую ссылкой и уже пройденную не обходим: ссылка
+    назад на родителя водила бы по кругу, а наружу — за пределы рабочей копии."""
     top = os.path.realpath(root)
     seen = {top}
-    found: list[tuple[Path, str]] = [(root, "")]
+    found: list[Copy] = []
     queue = [(root, "")]
     while queue:
         folder, prefix = queue.pop(0)
-        for link in [*gitlinks(folder), *embedded(folder)]:
+        index = index_of(folder)
+        cached = [name for *_, name in index]
+        others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
+        found.append(Copy(folder, prefix, cached, others))
+        links = [name for _, mode, _, name in index if mode == b"160000"]
+        for link in [*links, *inner_copies(folder, cached, others)]:
             path = folder / link
             real = os.path.realpath(path)
             try:
@@ -155,22 +175,20 @@ def copies_of(root: Path) -> list[tuple[Path, str]]:
                     or not Path(real).is_relative_to(top) or not (path / ".git").exists()):
                 continue
             seen.add(real)
-            found.append((path, f"{prefix}{link}/"))
             queue.append((path, f"{prefix}{link}/"))
     return found
 
 
-def embedded(root: Path) -> list[str]:
-    """Репозитории внутри, не подмодули: --others показывает только их каталог («tools/gen/»),
-    а код в них модели должны видеть."""
-    others = names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))
-    return [name.removesuffix("/") for name in others if name.endswith("/")]
-
-
-def gitlinks(root: Path) -> list[str]:
-    """Пути подмодулей: записи индекса с режимом 160000 («<режим> <sha> <стадия>\t<путь>»)."""
-    entries = names(git_bytes(root, "ls-files", "-z", "--stage"))
-    return [entry.split("\t", 1)[1] for entry in entries if entry.startswith("160000 ")]
+def inner_copies(folder: Path, *listings: list[str]) -> list[str]:
+    """Репозитории внутри, не подмодули: каталоги с .git, где лежат файлы из списков. --others
+    показывает такой каталог одной строкой («tools/gen/»), а если в нём есть и отслеживаемые
+    файлы внешней копии — поштучно. Игнорируемые каталоги в списки не попадают — в них не ищем."""
+    folders: set[str] = set()
+    for name in itertools.chain(*listings):
+        parts = name.removesuffix("/").split("/")
+        whole = name.endswith("/")                   # «tools/gen/» — сам каталог тоже
+        folders.update("/".join(parts[:i]) for i in range(1, len(parts) + whole))
+    return sorted(inner for inner in folders if os.path.lexists(folder / inner / ".git"))
 
 
 def names(output: bytes) -> list[str]:
@@ -235,12 +253,12 @@ def head(root: Path) -> str:
         return ""
 
 
-def levels(copies: list[tuple[Path, str]]) -> list[tuple[str, str, bytes]]:
+def levels(copies: list[Copy]) -> list[tuple[str, str, bytes]]:
     """Каждая рабочая копия из copies_of: (путь от корня, коммит, git status с каждым новым
     файлом). Во вложенные git status сам не заходит: обходим их мы, без ссылок и кругов, — и у
     каждой свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в
     нём ни правили."""
-    return [(prefix, head(folder), changes_of(folder)) for folder, prefix in copies]
+    return [(copy.prefix, head(copy.folder), changes_of(copy.folder)) for copy in copies]
 
 
 def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
@@ -290,15 +308,16 @@ def index_of(root: Path) -> list[tuple[bytes, bytes, str, str]]:
     return found
 
 
-def modes_of(copies: list[tuple[Path, str]]) -> dict[str, bool]:
+def modes_of(copies: list[Copy]) -> dict[str, bool]:
     """Бит исполняемости, которому git верит больше, чем диску: при core.fileMode=false — из
     индекса (на диске он бывает и у всех файлов сразу, как в bind mount из Windows). Снимок
     берёт его оттуда же, откуда взял бы коммит: иначе модели видели бы не показанный коммит, а
     копия числилась бы без правок."""
     modes: dict[str, bool] = {}
-    for folder, prefix in copies:
-        if not file_mode(folder):
-            modes.update({prefix + name: mode == b"100755" for _, mode, _, name in index_of(folder)
+    for copy in copies:
+        if not file_mode(copy.folder):
+            modes.update({copy.prefix + name: mode == b"100755"
+                          for _, mode, _, name in index_of(copy.folder)
                           if mode in (b"100644", b"100755")})
     return modes
 
@@ -526,14 +545,16 @@ def evidence_of(value: object, context: Context) -> list[Evidence]:
 
 
 def findings_of(value: object, context: Context) -> list[RepositoryFinding]:
-    items = value if isinstance(value, list) else []
+    """Находки со своими номерами. Без номера или с повтором — номер наш и не занятый ни одной
+    находкой ответа: иначе ссылки на ту находку достались бы этой."""
+    items = given_findings(value)
+    taken = {finding_id(item.get("id")) for item in items}
+    free = (f"R{n}" for n in itertools.count(1) if f"R{n}" not in taken)
     found: dict[str, RepositoryFinding] = {}
     for item in items:
-        if not isinstance(item, dict) or not text_of(item.get("statement")):
-            continue
-        name = finding_id(item.get("id")) or f"R{len(found) + 1}"
-        while name in found:
-            name = f"R{int(name[1:]) + 1}"
+        name = finding_id(item.get("id"))
+        if name is None or name in found:
+            name = next(free)
         status = item.get("status") if item.get("status") in STATUSES else "unknown"
         evidence = evidence_of(item.get("evidence"), context)
         if status == "verified" and not evidence:
@@ -542,6 +563,18 @@ def findings_of(value: object, context: Context) -> list[RepositoryFinding]:
                                         status=status, evidence=evidence,
                                         relevance=text_of(item.get("relevance")))
     return list(found.values())
+
+
+def given_findings(value: object) -> list[dict]:
+    items = value if isinstance(value, list) else []
+    return [item for item in items if isinstance(item, dict) and text_of(item.get("statement"))]
+
+
+def linkable(findings: list[RepositoryFinding], value: object) -> set[str]:
+    """На какие находки ссылки берём: на те, чей номер дал сам ответ, и одной находке. Номер у
+    двух — ссылка на неизвестно какую из них; номер наш — ответ его и не знал."""
+    named = Counter(finding_id(item.get("id")) for item in given_findings(value))
+    return {finding.id for finding in findings if named[finding.id] == 1}
 
 
 def ids_in(value: object, known: set[str]) -> list[str]:
@@ -611,7 +644,7 @@ def map_of(data: dict, context: Context) -> RepositoryMap:
     if not isinstance(data.get("findings"), list):
         raise BadAnswer("нет списка findings")
     findings = findings_of(data.get("findings"), context)
-    known = {finding.id for finding in findings}
+    known = linkable(findings, data.get("findings"))
     return RepositoryMap(findings=findings, flows=flows_of(data.get("flows"), known, context),
                          coverage=coverage_of(data.get("coverage"), known),
                          unknowns=unknowns_of(data.get("unknowns")),
@@ -633,7 +666,7 @@ def judged_map(data: dict, context: Context) -> Judged:
     if status not in ("complete", "needs_investigation"):
         raise BadAnswer(f"неизвестный status: {status!r}")
     result = map_of(data, context)
-    known = {finding.id for finding in result.findings}
+    known = linkable(result.findings, data.get("findings"))
     items = data.get("follow_up") if isinstance(data.get("follow_up"), list) else []
     follow_up = tuple(FollowUp(objective=text_of(item.get("objective")),
                                reason=text_of(item.get("reason")),
