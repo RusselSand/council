@@ -1016,3 +1016,14 @@ def test_a_gap_found_for_an_outcome_holds_every_issue_of_it():
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                     found=None)
     assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"])]
+
+
+def test_an_issue_inherits_the_decisions_and_limits_of_its_outcomes():
+    """Модель не повторила решение и ограничение итога — задача стоит на них всё равно: иначе
+    агент сделал бы ей наперекор."""
+    bare = task("I1", "Индекс", adr_ids=[], constraint_ids=[])
+    same = {"issues": [bare]}
+    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                    found=None)
+    [issue] = result.issues
+    assert (issue.adr_ids, issue.constraint_ids) == (["ADR-1"], [5])
