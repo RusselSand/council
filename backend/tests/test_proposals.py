@@ -67,9 +67,15 @@ def test_the_judge_recommends_one_offers_alternatives_or_nothing():
     assert nothing == Verdict("none", (), "всё есть")
 
 
+TWICE = "гибрид: полнотекстовый  отбор и переранжирование."
+
+
 @pytest.mark.parametrize(("bad", "problem"), [
     ({"status": "maybe"}, "status"),
-    ({"status": "alternatives", "proposals": []}, "без вариантов"),
+    ({"status": "alternatives", "proposals": []}, "меньше двух"),
+    ({"status": "alternatives", "proposals": [offer()]}, "меньше двух"),
+    # Два одинаковых после сведения — тоже один.
+    ({"status": "alternatives", "proposals": [offer(), offer(TWICE)]}, "меньше двух"),
     ({"status": "recommended", "proposal": "вариант"}, "не объект"),
 ])
 def test_a_judge_answer_out_of_form_is_bad(bad, problem):

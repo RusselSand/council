@@ -274,7 +274,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
   const text = group.missing_idea ? squash(draft) : null
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   // Пока ИИ ищет вопросы к идее, её не поменять: сервер ответит 423.
-  const asking = stream.questions?.state === 'running'
+  const asking = stream.questions?.state === 'running' || stream.proposals?.state === 'running'
   const canApprove = !busy && !sought && !asking && text !== '' && !structureIsStale(council)
 
   const submit = () => void approve.go(async () => {
@@ -338,7 +338,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
           })}
         </ol>
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
-        {asking && <p className="fragment-note">{t('idea.questionsRunning')}</p>}
+        {asking && <p className="fragment-note">{t('idea.belowRunning')}</p>}
         <div className="stream-actions">
           <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('idea.approve')}</button>
         </div>
@@ -462,7 +462,9 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
   const kept = found.filter(q => !removed.has(q.id))
   const chosen = kept.length + added.length
   const locked = busy || sought
-  const canApprove = !locked && search !== null && chosen > 0 && !structureIsStale(council)
+  // Пока к утверждённому отбору ищут варианты, отбор не поменять: сервер ответит 423.
+  const offering = stream.proposals?.state === 'running'
+  const canApprove = !locked && !offering && search !== null && chosen > 0 && !structureIsStale(council)
   const idea = stream.idea
   if (!idea) return null
 
@@ -500,10 +502,13 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
 
   let list
   if (!search) list = (
-    <p className="muted">
-      {t('questions.notSought')}{' '}
-      <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('questions.seek')}</button>
-    </p>
+    <>
+      <p className="muted">
+        {t('questions.notSought')}{' '}
+        <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('questions.seek')}</button>
+      </p>
+      {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+    </>
   )
   else if (sought) list = <p className="muted">{t('questions.seeking')} {t('run.note')}</p>
   else list = (
@@ -568,6 +573,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
         </div>
         {list}
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
+        {offering && <p className="fragment-note">{t('questions.optionsRunning')}</p>}
         <div className="stream-actions spread">
           <span className="muted">{t('questions.count', { count: chosen, total: found.length + added.length })}</span>
           <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('questions.approve')}</button>
@@ -666,10 +672,13 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
         <button className="btn-link" onClick={onBack}>{t('options.change')}</button>
       </p>
       {!search && (
-        <p className="muted">
-          {t('options.notSought')}{' '}
-          <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('options.seek')}</button>
-        </p>
+        <div>
+          <p className="muted">
+            {t('options.notSought')}{' '}
+            <button className="btn-link" disabled={busy || stale} onClick={seek}>{t('options.seek')}</button>
+          </p>
+          {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+        </div>
       )}
       {search?.state === 'failed' && (
         <div>
@@ -738,10 +747,11 @@ function QuestionChoice({ question, options, sought, fragments, value, busy, onP
               {proposal.recommended && <span className="pill ready">{t('options.recommended')}</span>}
             </span>
             {proposal.reason && <span className="option-note">{t('options.why', { reason: proposal.reason })}</span>}
-            {proposal.constraint_ids.length + proposal.risk_ids.length > 0 && (
-              <span className="option-note">
-                {t('options.limits', { ids: fragmentRange([...proposal.constraint_ids, ...proposal.risk_ids]) })}
-              </span>
+            {proposal.constraint_ids.length > 0 && (
+              <span className="option-note">{t('options.limits', { ids: fragmentRange(proposal.constraint_ids) })}</span>
+            )}
+            {proposal.risk_ids.length > 0 && (
+              <span className="option-note">{t('options.risks', { ids: fragmentRange(proposal.risk_ids) })}</span>
             )}
             {proposal.depends_on.length > 0 && (
               <span className="option-note">{t('options.depends', { ids: proposal.depends_on.join(', ') })}</span>

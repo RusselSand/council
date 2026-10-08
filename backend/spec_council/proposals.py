@@ -109,9 +109,11 @@ def judged_proposals(data: dict, context: Context) -> Verdict:
     if kind == "recommended":
         return Verdict("recommended", (candidate_of(data.get("proposal"), context, "судья"),),
                        reason)
+    # Альтернативы — это выбор: меньше двух разных вариантов (после сведения одинаковых) —
+    # не та форма ответа, как и неизвестный status.
     found = candidates_of(data.get("proposals"), context, "судья")
-    if not found:
-        raise BadAnswer("судья: alternatives без вариантов")
+    if len(found) < 2:
+        raise BadAnswer("судья: alternatives — меньше двух разных вариантов")
     return Verdict("alternatives", tuple(found), reason)
 
 

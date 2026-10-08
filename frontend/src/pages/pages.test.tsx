@@ -533,7 +533,7 @@ describe('Поток: группа и идея', () => {
   it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.questionsRunning'])).toBeTruthy()
+    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
     expect(approveButton().disabled).toBe(true)
   })
 
@@ -687,6 +687,39 @@ describe('Поток: группа и идея', () => {
     expect(screen.getByText(ru['options.seeking'])).toBeTruthy()                // Q2 ещё ищут
     expect(screen.getByText(ru['options.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('пока ищутся варианты, ни отбор, ни идею не поменять', async () => {
+    const seeking: ProposalDiscovery = { state: 'running', run: 'p1', scope: [], error: null, steps: [], options: [] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals: seeking } }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['options.change'] }))
+    expect(await screen.findByText(ru['questions.optionsRunning'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
+    expect(approveButton().disabled).toBe(true)
+  })
+
+  it('ограничения, которые вариант учитывает, и связанные риски — раздельно', async () => {
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Хранить в SQLite', reason: '', constraint_ids: [3], risk_ids: [4],
+            depends_on: [], recommended: true }] }],
+    }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals } }))
+    expect(await screen.findByText('учитывает ограничения: F3')).toBeTruthy()
+    expect(screen.getByText('связанные риски: F4')).toBeTruthy()
+  })
+
+  it('«Найти варианты» не удалось — отказ виден', async () => {
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions } }),
+               () => json({ detail: 'Сервер останавливается, ход не запущен' }, 503))
+    fireEvent.click(await screen.findByRole('button', { name: ru['options.seek'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Сервер останавливается, ход не запущен')
   })
 
   it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
