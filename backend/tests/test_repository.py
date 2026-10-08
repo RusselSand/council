@@ -1,6 +1,9 @@
 """Репозиторий: inventory рабочей копии, путь к ней, разбор находок и вердикта судьи."""
 
+import os
+import stat
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +11,7 @@ from spec_council.repository import (
     Context,
     RepositoryError,
     context_prompt,
+    file_state,
     inventory,
     inventory_prompt,
     judged_map,
@@ -170,3 +174,66 @@ def test_the_fingerprint_follows_the_working_copy_state(repo, tmp_path):
     (repo / "new.py").unlink()
     assert inventory(repo).fingerprint == clean                       # вернули как было
     assert inventory(clone).fingerprint != clean                      # другой клон — другой ключ
+
+
+def test_an_untracked_symlink_counts_as_a_link_not_as_what_it_points_to(repo, tmp_path):
+    """Ссылку не разыменовываем: за ней может быть что угодно, вплоть до /dev/zero."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("раз", encoding="utf-8")
+    try:
+        (repo / "link").symlink_to(outside)
+    except OSError:
+        pytest.skip("символьные ссылки здесь создавать нельзя")
+    linked = inventory(repo).fingerprint
+    outside.write_text("два", encoding="utf-8")
+    assert inventory(repo).fingerprint == linked
+
+
+@pytest.fixture
+def with_submodule(repo, tmp_path):
+    """В project — подмодуль vendor/lib с lib.py."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "lib.py").write_text("def api(): ...\n", encoding="utf-8")
+    git(lib, "init", "-q")
+    git(lib, "add", ".")
+    git(lib, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "lib")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "vendor/lib")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "подмодуль")
+    return repo
+
+
+def test_files_of_a_checked_out_submodule_are_in_the_inventory(with_submodule):
+    files = inventory(with_submodule).files
+    assert "vendor/lib/lib.py" in files
+    assert "vendor/lib" not in files                                  # не сам gitlink
+
+
+def test_an_edit_inside_a_submodule_changes_the_fingerprint(with_submodule):
+    """Не только «подмодуль грязный», а какая именно правка: правка поверх правки — другой код."""
+    lib = with_submodule / "vendor" / "lib" / "lib.py"
+    lib.write_text("def api(): return 1\n", encoding="utf-8")
+    first = inventory(with_submodule).fingerprint
+    lib.write_text("def api(): return 2\n", encoding="utf-8")
+    assert inventory(with_submodule).fingerprint != first
+
+
+def test_a_link_is_hashed_by_where_it_points_and_never_read(tmp_path, monkeypatch):
+    """Ссылка — это её цель словами, а не содержимое: оно может быть бесконечным (/dev/zero)."""
+    link = tmp_path / "link"
+    as_link = os.stat_result((stat.S_IFLNK | 0o777,) + (0,) * 9)
+    monkeypatch.setattr(Path, "lstat", lambda self: as_link)
+    monkeypatch.setattr(os, "readlink", lambda path: "/dev/zero")
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: pytest.fail("ссылку читать нельзя"))
+    assert file_state(link) == file_state(link)
+    monkeypatch.setattr(os, "readlink", lambda path: "/etc/passwd")
+    assert file_state(link) != b"link:/dev/zero"
+
+
+def test_a_regular_file_is_hashed_by_its_content(tmp_path):
+    one, two = tmp_path / "one", tmp_path / "two"
+    one.write_bytes(b"x" * 3_000_000)
+    two.write_bytes(b"x" * 3_000_000)
+    assert file_state(one) == file_state(two)
+    two.write_bytes(b"y")
+    assert file_state(one) != file_state(two)

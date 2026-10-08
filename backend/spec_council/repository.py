@@ -15,7 +15,9 @@ Inventory — обычный список файлов, его даёт git пр
 
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,23 +115,39 @@ def inventory(path: Path) -> Inventory:
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
     sha = git(root, "rev-parse", "HEAD").strip()
     dirty = bool(git(root, "status", "--porcelain").strip())
-    listed = names(git_bytes(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"))
+    # Отслеживаемые — и в checked-out подмодулях (их файлы модели тоже читают), новые — отдельно:
+    # --recurse-submodules с --others git не умеет.
+    listed = [*names(git_bytes(root, "ls-files", "-z", "--cached", "--recurse-submodules")),
+              *names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))]
     files = tuple(sorted({name for name in listed if (root / name).exists()}))
     return Inventory(root, sha, dirty, files, fingerprint(root, sha))
 
 
 def fingerprint(root: Path, sha: str) -> str:
-    """Состояние рабочей копии: путь, коммит, правки отслеживаемых файлов и содержимое новых.
-    Одинаковый у одного и того же кода в одной и той же копии."""
+    """Состояние рабочей копии: путь, коммит, правки отслеживаемых файлов — и внутри
+    подмодулей — и новые файлы. Одинаковый у одного и того же кода в одной и той же копии."""
     digest = hashlib.sha256(f"{root}\0{sha}\0".encode())
-    digest.update(git_bytes(root, "diff", "HEAD", "--binary", "--no-ext-diff"))
+    digest.update(git_bytes(root, "diff", "HEAD", "--binary", "--no-ext-diff", "--submodule=diff"))
     for name in sorted(names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))):
-        digest.update(name.encode() + b"\0")
-        try:
-            digest.update(hashlib.sha256((root / name).read_bytes()).digest())
-        except OSError:
-            digest.update(b"-")   # не прочитать — это тоже состояние
+        digest.update(name.encode() + b"\0" + file_state(root / name) + b"\0")
     return digest.hexdigest()
+
+
+def file_state(path: Path) -> bytes:
+    """Состояние нового файла для отпечатка. Ссылку не разыменовываем — это её цель словами: за
+    ней может быть что угодно, вплоть до /dev/zero. Обычный файл — хеш содержимого, кусками: а
+    то большой артефакт занял бы всю память. Прочее (FIFO, устройство) — по типу: его не читают.
+    Не прочитать — тоже состояние."""
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            return b"link:" + os.readlink(path).encode()
+        if stat.S_ISREG(info.st_mode):
+            with path.open("rb") as file:
+                return hashlib.file_digest(file, "sha256").digest()
+        return b"special"
+    except OSError:
+        return b"-"
 
 
 def inventory_prompt(found: Inventory) -> str:

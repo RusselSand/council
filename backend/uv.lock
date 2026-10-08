@@ -4,8 +4,8 @@ requires-python = ">=3.14"
 
 [[package]]
 name = "agent-workers"
-version = "0.1.0"
-source = { git = "https://github.com/RusselSand/agent-workers?tag=v0.1.0#e3ab54a1cbedadd87b74daaa61ab865cf687d728" }
+version = "0.2.0"
+source = { git = "https://github.com/RusselSand/agent-workers?rev=88fdee327cd5c8cf0fc16a06636212a6a5928bc4#88fdee327cd5c8cf0fc16a06636212a6a5928bc4" }
 
 [[package]]
 name = "annotated-doc"
@@ -336,7 +336,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-workers", git = "https://github.com/RusselSand/agent-workers?tag=v0.1.0" },
+    { name = "agent-workers", git = "https://github.com/RusselSand/agent-workers?rev=88fdee327cd5c8cf0fc16a06636212a6a5928bc4" },
     { name = "fastapi", specifier = ">=0.141" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.53" },
 ]
