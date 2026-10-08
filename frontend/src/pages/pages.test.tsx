@@ -1,9 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, IdeaDiscovery, Label, ProposalDiscovery, QuestionDiscovery, Settings, Slicing,
-  Stream, StreamIdea, Structure,
+  Council, CouncilPatch, DecisionAnalysis, IdeaDiscovery, Label, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
+  Settings, Slicing, Stream, StreamIdea, Structure,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -132,9 +132,9 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
   ...COUNCIL, status: 'review', slicing: DONE, structure,
   streams: [
     { group: 'A', discovery: null, idea: ideas.A ?? null, questions: null, scope: null, proposals: null, choices: null,
-      analysis: null, decisions: null, ...more.A },
+      analysis: null, decisions: null, outcomes: null, ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, questions: null, scope: null, proposals: null, choices: null,
-      analysis: null, decisions: null, ...more.B },
+      analysis: null, decisions: null, outcomes: null, ...more.B },
   ] satisfies Stream[],
 })
 
@@ -184,7 +184,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|(?:questions|proposals)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|(?:questions|proposals|outcomes)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -739,7 +739,7 @@ describe('Поток: группа и идея', () => {
 })
 
 
-describe('Поток: решения', () => {
+describe('Поток: решения и итоги', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>) => {
     fetchMock.mockImplementation(server({ council, stream }))
     renderAt('/councils/demo-1/streams/A')
@@ -775,7 +775,9 @@ describe('Поток: решения', () => {
   const why = (question: string) => screen.getByRole('textbox', { name: `Почему ${question}` }) as HTMLTextAreaElement
 
   it('выбор проверен, для unresolved ИИ предлагает вариант — принятое уходит на сервер с обоснованием', async () => {
-    openStream(() => deciding(), () => json(deciding({ decisions: [
+    const assembling: OutcomeDiscovery = {
+      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], uncovered_adr_ids: [], error: null }
+    openStream(() => deciding(), () => json(deciding({ outcomes: assembling, decisions: [
       { question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' },
       { question_id: 'Q2', proposal: 'P2', rationale: 'Мера без опросов.', rationale_by: 'ai' }] })))
     const first = await card('Где хранить состояние?')
@@ -802,7 +804,7 @@ describe('Поток: решения', () => {
       run: 'g1', revision: 0, analysis_run: 'd1', decisions: [
         { question_id: 'Q1', proposal: 'F2', rationale: KEPT },
         { question_id: 'Q2', proposal: 'P2', rationale: 'Мера без опросов.' }] } }])
-    expect(screen.getByText('Решено 2 из 2.', { exact: false })).toBeTruthy()
+    expect(screen.getByText(ru['outcomes.assembling'], { exact: false })).toBeTruthy()
   })
 
   it('решить можно и непроверенным вариантом — со своим обоснованием; без обоснования не зафиксировать', async () => {
@@ -861,6 +863,95 @@ describe('Поток: решения', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
     expect(await screen.findByText(ru['decisions.validated'])).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'analysis', body: undefined }])
+  })
+
+  const FIXED = [{ question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' as const },
+                 { question_id: 'Q2', proposal: null, rationale: null, rationale_by: null }]
+  const ASSEMBLED: OutcomeDiscovery = {
+    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [],
+    steps: [{ name: 'outcome_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+            { name: 'outcome_judge', state: 'skipped', runs: [] }],
+    outcomes: [
+      { id: 'O1', title: 'Состояние в файлах', behavior: 'Воркер хранит состояние в файлах.', adr_ids: ['ADR-1'],
+        constraint_ids: [1], risk_ids: [], acceptance_criteria: ['После перезапуска состояние на месте.'],
+        blocked_by: [], gaps: [] },
+      { id: 'O2', title: 'Замер потерь', behavior: 'Видно, сколько результатов потеряно.', adr_ids: [],
+        constraint_ids: [], risk_ids: [], acceptance_criteria: [], blocked_by: ['Q2'],
+        gaps: [{ question: 'Где хранить отчёт?', reason: 'нет решения' }] },
+    ],
+  }
+
+  it('итоги: готовый и заблокированный открытым вопросом — из него назад, к этому вопросу', async () => {
+    // В jsdom прокрутки нет: подставляем её на этот тест и убираем после.
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    onTestFinished(() => { delete (Element.prototype as Partial<Element>).scrollIntoView })
+    openStream(() => deciding({ decisions: FIXED, outcomes: { ...ASSEMBLED, uncovered_adr_ids: ['ADR-1'] } }))
+    const ready = await card('Состояние в файлах')
+    expect(within(ready).getByText(ru['outcomes.ready'])).toBeTruthy()
+    expect(within(ready).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()   // ADR-1 — решение по Q1
+    expect(within(ready).getByText('Хочу воркер.')).toBeTruthy()                            // соблюдать F1
+    expect(within(ready).getByText('— После перезапуска состояние на месте.')).toBeTruthy()
+
+    const blocked = await card('Замер потерь')
+    expect(within(blocked).getByText('заблокирован Q2')).toBeTruthy()
+    expect(within(blocked).getByText('Не хватает решения: Q2. Итог не додумывается.')).toBeTruthy()
+    expect(within(blocked).getByText('открыт — Как понять, что воркер не теряет результат?', { exact: false }))
+      .toBeTruthy()
+    expect(within(blocked).getByText('Где хранить отчёт? — нет решения')).toBeTruthy()
+    expect(screen.getByText('Не вошли ни в один итог: ADR-1.')).toBeTruthy()
+    expect(screen.getAllByText('заблокировано 1 из 2').length).toBeGreaterThan(0)    // цепочка и «Сейчас»
+
+    fireEvent.click(within(blocked).getByRole('button', { name: ru['outcomes.back'] }))
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(scrolled.mock.contexts.map(el => (el as Element).id)).toContain('decision-Q2-title')
+  })
+
+  it('итог без критериев готовности — не готов к разработке', async () => {
+    const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: vague }))
+    const outcome = await card('Состояние в файлах')
+    expect(within(outcome).getByText(ru['outcomes.noCriteria'])).toBeTruthy()
+    expect(within(outcome).queryByText(ru['outcomes.ready'])).toBeNull()
+    expect(screen.getAllByText('не готово 1 из 1').length).toBeGreaterThan(0)
+  })
+
+  it('решение вне итогов — поток не готов, цепочка его называет', async () => {
+    const lost: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [ASSEMBLED.outcomes[0]], uncovered_adr_ids: ['ADR-1'] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: lost }))
+    expect(await screen.findByText('Не вошли ни в один итог: ADR-1.')).toBeTruthy()
+    expect(screen.getAllByText('вне итогов: ADR-1').length).toBeGreaterThan(0)
+  })
+
+  it('пока ИИ собирает итоги, решения не зафиксировать заново', async () => {
+    const assembling: OutcomeDiscovery = { ...ASSEMBLED, state: 'running', outcomes: [] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: assembling }))
+    expect(await screen.findByText(ru['outcomes.assembling'], { exact: false })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['outcomes.change'] }))
+    expect(await screen.findByText(ru['decisions.belowRunning'])).toBeTruthy()
+    expect(fix().disabled).toBe(true)
+  })
+
+  it('пробел из итога — в вопросы: он в отборе, утверждённый отбор уходит на сервер с ним', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }), () => json(deciding()))
+    const blocked = await card('Замер потерь')
+    fireEvent.click(within(blocked).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
+    expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.approve'] }))
+    await waitFor(() => expect(streamCalls).toEqual([{ group: 'A', action: 'questions', body: {
+      run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1', 'Q2'], added: ['Где хранить отчёт?'] } }]))
+  })
+
+  it('сборка итогов упала — причина видна, её запускают снова', async () => {
+    const failed: OutcomeDiscovery = { ...ASSEMBLED, state: 'failed', outcomes: [], error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    openStream(() => deciding({ decisions: FIXED, outcomes: failed }),
+               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED })))
+    expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText('Состояние в файлах')).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes/discovery', body: undefined }])
   })
 })
 

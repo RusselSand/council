@@ -1,9 +1,9 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, startOrFollow, streamOf, structureIsStale,
-  type Council, type Group, type IdeaDiscovery, type LabeledFragment, type Model, type OpenQuestion,
+  api, ApiError, councilPath, groupsConfirmed, outcomeReady, startOrFollow, streamOf, structureIsStale,
+  type Council, type Group, type IdeaDiscovery, type LabeledFragment, type Model, type OpenQuestion, type Outcome,
   type QuestionAnalysis, type QuestionOptions, type Settings, type Stream, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
@@ -49,19 +49,29 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
   const choosing = useAction(onChange, 'questions.approveFailed')
   const picking = useAction(onChange, 'options.approveFailed')
   const fixing = useAction(onChange, 'decisions.approveFailed')
+  // Открытый вопрос, к которому вернулись из итогов: шаг «Решения» прокрутит к нему.
+  const [focus, setFocus] = useState<string | null>(null)
+  // Пробел из итога, который человек понёс в вопросы: шаг «Вопросы» добавит его в отбор.
+  const [gap, setGap] = useState<string | null>(null)
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
   const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(currentStep(stream)) ? chosen : currentStep(stream)
   const search = stream.discovery
-  const runs = { group: search, questions: stream.questions, options: stream.proposals, decisions: stream.analysis }
-  const run = view === 'outcomes' ? null : runs[view]
+  const runs = { group: search, questions: stream.questions, options: stream.proposals, decisions: stream.analysis,
+                 outcomes: stream.outcomes }
+  const run = runs[view]
+  const open = (step: ChainStep) => {
+    setFocus(null)
+    setGap(null)
+    setView(step)
+  }
 
   return (
     <div className="streams-layout">
       <aside className="streams-nav">
         <StreamList council={council} structure={structure} open={stream.group} />
-        <Chain stream={stream} group={group} view={view} onView={setView} />
+        <Chain stream={stream} group={group} view={view} onView={open} />
       </aside>
       <div className="streams-main">
         <Now stream={stream} group={group} />
@@ -80,8 +90,8 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         {view === 'questions' && (
           // Новый поиск вопросов — и отбор заново, к его вопросам.
           <QuestionsStep key={stream.questions?.run ?? ''} council={council} structure={structure}
-                         stream={stream} group={group} onChange={onChange} approve={choosing}
-                         onBack={() => setView('group')} onApproved={() => setView('options')} />
+                         stream={stream} group={group} onChange={onChange} approve={choosing} proposed={gap}
+                         onBack={() => open('group')} onApproved={() => open('options')} />
         )}
         {view === 'options' && (
           // Новый поиск вариантов — и выбор заново, к его вариантам.
@@ -92,10 +102,15 @@ function StreamPage({ council, structure, stream, models, onChange }: Readonly<{
         {view === 'decisions' && (
           // Новая проверка выбора — и решения заново, к её итогам.
           <DecisionsStep key={stream.analysis?.run ?? ''} council={council} structure={structure}
-                         stream={stream} group={group} onChange={onChange} approve={fixing}
-                         onBack={() => setView('options')} onApproved={() => setView('outcomes')} />
+                         stream={stream} group={group} onChange={onChange} approve={fixing} focus={focus}
+                         onBack={() => open('options')} onApproved={() => open('outcomes')} />
         )}
-        {view === 'outcomes' && <OutcomesStep stream={stream} onBack={() => setView('decisions')} />}
+        {view === 'outcomes' && (
+          <OutcomesStep council={council} stream={stream} group={group} onChange={onChange}
+                        onBack={() => open('decisions')}
+                        onQuestion={question => { setFocus(question); setView('decisions') }}
+                        onGap={question => { setGap(question); setView('questions') }} />
+        )}
       </div>
       <aside className="streams-side">
         {run && <Progress steps={run.steps} models={models} />}
@@ -137,11 +152,11 @@ function StreamList({ council, structure, open }: Readonly<{
 /** Где поток и чей ход. */
 function whereIs(stream: Stream, t: T): string {
   const step = currentStep(stream)
-  if (step === 'outcomes') return t('streams.atOutcomes')
   const run = { group: stream.discovery, questions: stream.questions, options: stream.proposals,
-                decisions: stream.analysis }[step]
+                decisions: stream.analysis, outcomes: stream.outcomes }[step]
   if (run?.state === 'running') return t(`streams.${step}.seeking`)
   if (run?.state === 'failed') return t(`streams.${step}.failed`)
+  if (step === 'outcomes' && streamLight(stream) === 'done') return t('streams.outcomes.done')
   return t(`streams.${step}.yours`)
 }
 
@@ -170,6 +185,9 @@ function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
               {step === 'decisions' && stream.choices && (
                 <span className="segment-sub">{decisionsStatus(stream, t)}</span>
               )}
+              {step === 'outcomes' && stream.decisions && (
+                <span className="segment-sub">{outcomesStatus(stream, t)}</span>
+              )}
             </li>
           )
         })}
@@ -189,6 +207,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
     if (step === 'questions' && stream.idea) return questionsStatus(stream, t)
     if (step === 'options' && stream.scope) return optionsStatus(stream, t)
     if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
+    if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
     return t(i === reached ? 'chain.soon' : 'chain.notStarted')
   }
   return (
@@ -232,6 +251,25 @@ function Chain({ stream, group, view, onView }: Readonly<{
 
 function groupStatus(stream: Stream, group: Group, t: T): string {
   return `${t('chain.fragments', { count: group.fragment_ids.length })} · ${ideaStatus(stream, group, t)}`
+}
+
+/**
+ * Что с итогами потока: собираются, сборка упала, сколько держат открытые вопросы, сколько ещё не
+ * готово, какие решения не вошли ни в один, сколько готово.
+ */
+function outcomesStatus(stream: Stream, t: T): string {
+  const run = stream.outcomes
+  if (run?.state === 'running') return t('chain.outcomesAssembling')
+  if (run?.state === 'failed') return t('chain.outcomesFailed')
+  if (!run) return t('chain.outcomesNone')
+  const total = run.outcomes.length
+  if (total === 0) return t('chain.outcomesEmpty')
+  const blocked = run.outcomes.filter(o => o.blocked_by.length > 0).length
+  if (blocked > 0) return t('chain.outcomesBlocked', { count: blocked, total })
+  const unready = run.outcomes.filter(o => !outcomeReady(o)).length
+  if (unready > 0) return t('chain.outcomesNotReady', { count: unready, total })
+  if (run.uncovered_adr_ids.length > 0) return t('chain.outcomesUncovered', { ids: run.uncovered_adr_ids.join(', ') })
+  return t('chain.outcomesReady', { count: total, total })
 }
 
 /** Что с решениями потока: зафиксированы, выбор проверяется, проверка упала, прошла или не шла. */
@@ -300,7 +338,8 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
   const text = group.missing_idea ? squash(draft) : null
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   // Пока ИИ работает ниже по цепочке, идею не поменять: сервер ответит 423.
-  const asking = [stream.questions, stream.proposals, stream.analysis].some(run => run?.state === 'running')
+  const asking = [stream.questions, stream.proposals, stream.analysis, stream.outcomes]
+    .some(run => run?.state === 'running')
   const canApprove = !busy && !sought && !asking && text !== '' && !structureIsStale(council)
 
   const submit = () => void approve.go(async () => {
@@ -466,9 +505,11 @@ function IdeaOptions({ search, draft, models, busy, onTake }: Readonly<{
  * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
  * выбирают. Черновик отбора — к нынешнему поиску; утверждённый отбор — его начало.
  */
-function QuestionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
+function QuestionsStep({ council, structure, stream, group, onChange, approve, proposed, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
   onChange: (council: Council) => void; approve: ReturnType<typeof useAction>
+  /** Пробел из итогов: его добавить в отбор своим вопросом, если такого там ещё нет. */
+  proposed: string | null
   onBack: () => void; onApproved: () => void
 }>) {
   const { t } = useTranslation()
@@ -477,8 +518,12 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
   const scope = stream.scope
   const [removed, setRemoved] = useState<ReadonlySet<string>>(
     () => new Set(scope ? found.filter(q => !scope.some(s => s.id === q.id)).map(q => q.id) : []))
-  const [added, setAdded] = useState<string[]>(
-    () => scope?.filter(q => q.source === 'added').map(q => q.text) ?? [])
+  const [added, setAdded] = useState<string[]>(() => {
+    const own = scope?.filter(q => q.source === 'added').map(q => q.text) ?? []
+    const there = [...found.filter(q => !scope || scope.some(s => s.id === q.id)).map(q => q.text), ...own]
+    const gap = squash(proposed ?? '')
+    return gap && !there.some(text => sameQuestion(text) === sameQuestion(gap)) ? [...own, gap] : own
+  })
   const [draft, setDraft] = useState('')
   const [twice, setTwice] = useState(false)   // свой вопрос совпал с тем, что уже в отборе
   const retry = useAction(onChange)
@@ -489,7 +534,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
   const chosen = kept.length + added.length
   const locked = busy || sought
   // Пока ИИ работает с утверждённым отбором (ищет варианты, проверяет выбор), отбор не поменять: 423.
-  const offering = [stream.proposals, stream.analysis].some(run => run?.state === 'running')
+  const offering = [stream.proposals, stream.analysis, stream.outcomes].some(run => run?.state === 'running')
   const canApprove = !locked && !offering && search !== null && chosen > 0 && !structureIsStale(council)
   const idea = stream.idea
   if (!idea) return null
@@ -577,6 +622,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, o
         </button>
       </form>
       {twice && <p className="fragment-note question-twice">{t('questions.twice')}</p>}
+      {proposed && added.includes(squash(proposed)) && <p className="fragment-note">{t('questions.fromGap')}</p>}
     </>
   )
 
@@ -666,8 +712,8 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const found = new Map(search?.options.map(o => [o.question_id, o]) ?? [])
   const chosen = scope.filter(q => picked.has(q.id)).length
-  // Пока ИИ проверяет утверждённый выбор, выбор не поменять: сервер ответит 423.
-  const checking = stream.analysis?.state === 'running'
+  // Пока ИИ работает с утверждённым выбором (проверяет, собирает итоги), выбор не поменять: 423.
+  const checking = [stream.analysis, stream.outcomes].some(run => run?.state === 'running')
   const canApprove = !busy && !sought && !checking && !stale && search !== null && chosen === scope.length
   const idea = stream.idea
   if (!idea || !stream.scope) return null
@@ -807,9 +853,11 @@ function QuestionChoice({ question, options, sought, fragments, value, busy, onP
  * проблема, которую нашёл совет, этому не мешает. Обоснование совета — черновик: оставленное
  * как есть, при фиксации оно подтверждено человеком. Черновик решений — к нынешней проверке.
  */
-function DecisionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
+function DecisionsStep({ council, structure, stream, group, onChange, approve, focus, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
   onChange: (council: Council) => void; approve: ReturnType<typeof useAction>
+  /** Вопрос, к которому прокрутить: к нему вернулись из итогов. */
+  focus: string | null
   onBack: () => void; onApproved: () => void
 }>) {
   const { t } = useTranslation()
@@ -837,7 +885,12 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, o
     written.get(`${question}:${proposal}`) ?? suggested(question, proposal) ?? ''
   const decided = scope.filter(q => picked.get(q.id))
   const complete = decided.every(q => squash(rationaleOf(q.id, picked.get(q.id) ?? '')) !== '')
-  const canApprove = !busy && !sought && !stale && analysis !== null && complete
+  // Пока ИИ собирает итоги по решениям, их не поменять: сервер ответит 423.
+  const assembling = stream.outcomes?.state === 'running'
+  const canApprove = !busy && !sought && !assembling && !stale && analysis !== null && complete
+  useEffect(() => {
+    if (focus) document.getElementById(`decision-${focus}-title`)?.scrollIntoView?.({ block: 'center' })
+  }, [focus])
   const idea = stream.idea
   if (!idea || !stream.scope || !stream.choices) return null
 
@@ -909,6 +962,7 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, o
         )
       })}
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
+      {assembling && <p className="fragment-note">{t('decisions.belowRunning')}</p>}
       <div className="stream-actions spread">
         <span className="muted">{t('decisions.count', { count: decided.length, total: scope.length })}</span>
         <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('decisions.approve')}</button>
@@ -1023,22 +1077,152 @@ function consequences(said: QuestionAnalysis, t: T): string {
   return parts.join(' ')
 }
 
-/** Шаг «Итоги» пока не готов: здесь сколько решено и дорога назад, к решениям. */
-function OutcomesStep({ stream, onBack }: Readonly<{ stream: Stream; onBack: () => void }>) {
+/**
+ * Шаг «Итоги»: совет собирает зафиксированные решения в законченные изменения системы. Итог,
+ * которому не хватает решения открытого вопроса, заблокирован им, а не додуман: из него можно
+ * вернуться к вопросу. Человеку здесь утверждать нечего — менять можно решения.
+ */
+function OutcomesStep({ council, stream, group, onChange, onBack, onQuestion, onGap }: Readonly<{
+  council: Council; stream: Stream; group: Group; onChange: (council: Council) => void
+  onBack: () => void; onQuestion: (question: string) => void
+  /** Пробел — в вопросы: его добавляют в отбор, и цепочка ниже идёт заново. */
+  onGap: (question: string) => void
+}>) {
   const { t } = useTranslation()
-  const decisions = stream.decisions ?? []
+  const run = stream.outcomes
+  const retry = useAction(onChange)
+  const stale = structureIsStale(council)
+  const scope = stream.scope ?? []
+  const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
+  const found = new Map(stream.proposals?.options.flatMap(o => o.proposals).map(p => [p.id, p.text]) ?? [])
+  const textOf = (id: string) => (id.startsWith('F') ? fragments.get(Number(id.slice(1)))?.text : found.get(id)) ?? id
+  // Решение ADR-n — по n-му вопросу отбора: тот же номер, что у его карточки на шаге «Решения».
+  const adrs = new Map(scope.flatMap((question, n) => {
+    const proposal = stream.decisions?.find(d => d.question_id === question.id)?.proposal
+    return proposal ? [[`ADR-${n + 1}`, { question: question.id, text: textOf(proposal) }] as const] : []
+  }))
+  const questions = new Map(scope.map(q => [q.id, q.text]))
+  const assemble = () => void retry.go(() => startOrFollow(
+    () => api.seekOutcomes(council.id, group.id), council, c => streamOf(c, group.id)?.outcomes))
+  if (!stream.decisions) return null
+
   return (
     <>
       <section className="card panel" aria-labelledby="step-title">
         <p className="next-caps">{t('outcomes.caps')}</p>
         <h2 id="step-title" className="panel-title large">{t('outcomes.title')}</h2>
-        <p className="panel-hint">
-          {t('outcomes.decided', { count: decisions.filter(d => d.proposal).length, total: decisions.length })}{' '}
-          <button className="btn-link" onClick={onBack}>{t('outcomes.change')}</button>
-        </p>
+        <p className="panel-hint">{t('outcomes.hint')}</p>
       </section>
-      <div className="card placeholder">{t('outcomes.stub')}</div>
+      {!run && (
+        <div>
+          <p className="muted">
+            {t('outcomes.notAssembled')}{' '}
+            <button className="btn-link" disabled={retry.busy || stale} onClick={assemble}>{t('outcomes.assemble')}</button>
+          </p>
+          {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+        </div>
+      )}
+      {run?.state === 'running' && <p className="muted">{t('outcomes.assembling')} {t('run.note')}</p>}
+      {run?.state === 'failed' && (
+        <div>
+          <p className="error-text" role="alert">{run.error}</p>
+          {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+          <p className="fragment-note">
+            {t('outcomes.failedNote')}{' '}
+            <button className="btn-link" disabled={retry.busy || stale} onClick={assemble}>{t('run.retry')}</button>
+          </p>
+        </div>
+      )}
+      {run?.state === 'done' && run.outcomes.length === 0 && <p className="muted">{t('outcomes.none')}</p>}
+      {run?.outcomes.map((outcome, n) => (
+        <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
+                     fragments={fragments} onQuestion={onQuestion} onGap={onGap} />
+      ))}
+      {run && run.uncovered_adr_ids.length > 0 && (
+        <p className="fragment-note">{t('outcomes.uncovered', { ids: run.uncovered_adr_ids.join(', ') })}</p>
+      )}
+      <div className="stream-actions">
+        <button className="btn-link" onClick={onBack}>{t('outcomes.change')}</button>
+      </div>
     </>
+  )
+}
+
+/** Итог: что меняется, на каких решениях стоит, что соблюдать, когда готово — и чего не хватает. */
+function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap }: Readonly<{
+  outcome: Outcome; n: number; adrs: Map<string, { question: string; text: string }>
+  questions: Map<string, string>; fragments: Map<number, LabeledFragment>
+  onQuestion: (question: string) => void; onGap: (question: string) => void
+}>) {
+  const { t } = useTranslation()
+  const name = `outcome-${outcome.id}`
+  const blocked = outcome.blocked_by
+  let pill = <span className="pill ready">{t('outcomes.ready')}</span>
+  if (blocked.length > 0) pill = <span className="pill blocked">{t('outcomes.blocked', { ids: blocked.join(', ') })}</span>
+  else if (outcome.gaps.length > 0) pill = <span className="pill open">{t('outcomes.withGaps')}</span>
+  else if (!outcomeReady(outcome)) pill = <span className="pill open">{t('outcomes.noCriteria')}</span>
+  const limits = (ids: number[]) => (
+    <ul>{ids.map(id => <li key={id}><span className="fragment-id">F{id}</span> {fragments.get(id)?.text ?? '—'}</li>)}</ul>
+  )
+  return (
+    <section className="card panel" aria-labelledby={`${name}-title`}>
+      <div className="question-head">
+        <span className="fragment-id">{String(n).padStart(2, '0')}</span>
+        <h3 id={`${name}-title`} className="question-text">{outcome.title}</h3>
+        {pill}
+      </div>
+      {blocked.length > 0 && (
+        <div className="check problem outcome-missing">
+          <span>{t('outcomes.missing', { ids: blocked.join(', ') })}</span>
+          <button className="btn-secondary" onClick={() => onQuestion(blocked[0])}>{t('outcomes.back')}</button>
+        </div>
+      )}
+      <dl className="outcome-rows">
+        <dt>{t('outcomes.changes')}</dt>
+        <dd>{outcome.behavior}</dd>
+        {outcome.adr_ids.length + blocked.length > 0 && (
+          <>
+            <dt>{t('outcomes.decisions')}</dt>
+            <dd>
+              <ul>
+                {outcome.adr_ids.map(id => {
+                  const adr = adrs.get(id)
+                  return <li key={id}><span className="fragment-id">{adr?.question ?? id}</span> {adr?.text ?? id}</li>
+                })}
+                {blocked.map(id => (
+                  <li key={id} className="outcome-open">
+                    <span className="fragment-id">{id}</span> {t('outcomes.open')} — {questions.get(id) ?? id}
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </>
+        )}
+        {outcome.constraint_ids.length > 0 && (
+          <><dt>{t('outcomes.keep')}</dt><dd>{limits(outcome.constraint_ids)}</dd></>
+        )}
+        {outcome.risk_ids.length > 0 && <><dt>{t('outcomes.risks')}</dt><dd>{limits(outcome.risk_ids)}</dd></>}
+        {outcome.acceptance_criteria.length > 0 && (
+          <>
+            <dt>{t('outcomes.doneWhen')}</dt>
+            <dd><ul>{outcome.acceptance_criteria.map(text => <li key={text}>— {text}</li>)}</ul></dd>
+          </>
+        )}
+        {outcome.gaps.length > 0 && (
+          <>
+            <dt>{t('outcomes.gaps')}</dt>
+            <dd>
+              <ul>{outcome.gaps.map(gap => (
+                <li key={gap.question} className="outcome-gap">
+                  <span>{gap.reason ? `${gap.question} — ${gap.reason}` : gap.question}</span>
+                  <button className="btn-link" onClick={() => onGap(gap.question)}>{t('outcomes.toQuestions')}</button>
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+      </dl>
+    </section>
   )
 }
 

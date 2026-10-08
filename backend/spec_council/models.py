@@ -34,6 +34,8 @@ class StepName(StrEnum):
     proposal_judge = "proposal_judge"          # судья решает, какие из них показать
     decision_analysis = "decision_analysis"  # участники проверяют выбор или сравнивают варианты
     decision_judge = "decision_judge"        # судья сводит их анализы в один итог по вопросу
+    outcome_discovery = "outcome_discovery"  # участники собирают решения в изменения системы
+    outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
 
 
 class ModelRun(BaseModel):
@@ -326,13 +328,55 @@ class Decision(BaseModel):
     rationale_by: Literal["ai", "human"] | None = None
 
 
+class OutcomeGap(BaseModel):
+    """Неопределённость, которой нет среди вопросов потока: материал для нового поиска
+    вопросов, а не ответ на неё."""
+
+    question: str
+    reason: str = ""
+
+
+class Outcome(BaseModel):
+    """Итог — законченное изменение системы после принятых решений: что меняется, на каких
+    решениях стоит, что соблюдать и как проверить. Вопрос без решения его блокирует:
+    недостающее не додумывается."""
+
+    # O1, O2… по порядку.
+    id: str
+    title: str
+    behavior: str
+    # Принятые решения (ADR-n — n-й вопрос отбора), из которых он следует.
+    adr_ids: list[str] = []
+    constraint_ids: list[int] = []
+    risk_ids: list[int] = []
+    acceptance_criteria: list[str] = []
+    # Открытые вопросы потока, без решения которых его поведение не определить.
+    blocked_by: list[str] = []
+    gaps: list[OutcomeGap] = []
+
+
+class OutcomeDiscovery(BaseModel):
+    """Сборка итогов потока из его решений: участники по отдельности, судья сводит их в
+    итоговый набор. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К каким решениям собирали: зафиксировали другие — собирают заново.
+    decisions: list[str] = []
+    steps: list[Step]
+    outcomes: list[Outcome] = []
+    # Принятые решения, не вошедшие ни в один итог.
+    uncovered_adr_ids: list[str] = []
+    error: str | None = None
+
+
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
     её ищет совет (discovery), утверждает человек (idea); потом вопросы — их ищет совет
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
     (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
-    человек фиксирует решения (decisions)."""
+    человек фиксирует решения (decisions); из них совет собирает итоги (outcomes)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
@@ -344,10 +388,11 @@ class Stream(BaseModel):
     choices: list[Choice] | None = None
     analysis: DecisionAnalysis | None = None
     decisions: list[Decision] | None = None
+    outcomes: OutcomeDiscovery | None = None
 
 
-# Ходы потока по его цепочке: поиск идеи, вопросов, вариантов и проверка выбора.
-STREAM_RUNS = ("discovery", "questions", "proposals", "analysis")
+# Ходы потока по его цепочке: поиск идеи, вопросов, вариантов, проверка выбора, сборка итогов.
+STREAM_RUNS = ("discovery", "questions", "proposals", "analysis", "outcomes")
 
 
 class Council(BaseModel):
