@@ -9,6 +9,7 @@ x-paths: &paths
   COUNCIL_SOL_HOME: /data/accounts/sol
   COUNCIL_FABLE_HOME: /data/accounts/fable
   COUNCIL_DATA: /data/councils
+  COUNCIL_REPOS: /repos
   HOME: /tmp
 
 # Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста, советы — в .data.
@@ -47,6 +48,13 @@ services:
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
         bind: { create_host_path: false }
+      # Репозитории для скана (COUNCIL_REPOS в .env) — только на чтение: модели их читают, но
+      # не меняют. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      - type: bind
+        source: ${COUNCIL_REPOS:-./.repos}
+        target: /repos
+        read_only: true
+        bind: { create_host_path: true }
     environment:
       <<: *paths
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
@@ -101,6 +109,13 @@ services:
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
         bind: { create_host_path: false }
+      # Репозитории для скана (COUNCIL_REPOS в .env) — только на чтение: модели их читают, но
+      # не меняют. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      - type: bind
+        source: ${COUNCIL_REPOS:-./.repos}
+        target: /repos
+        read_only: true
+        bind: { create_host_path: true }
     environment: *paths
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.

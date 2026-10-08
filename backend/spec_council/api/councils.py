@@ -20,6 +20,7 @@ from ..models import (
     OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
+    RepositoryScan,
     Slicing,
     Structure,
 )
@@ -46,8 +47,8 @@ council_lock = Lock()
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
 
-RunState = (Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
-            | DecisionAnalysis | OutcomeDiscovery)
+RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
+            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery)
 
 
 @dataclass(frozen=True)

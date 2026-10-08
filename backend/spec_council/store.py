@@ -24,6 +24,7 @@ from .models import (
     OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
+    RepositoryScan,
     Slicing,
     Structure,
 )
@@ -180,13 +181,13 @@ def interrupted(council: Council) -> Council:
     return council.model_copy(update=changes) if changes else council
 
 
-def running(state: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
-            | DecisionAnalysis | OutcomeDiscovery | None) -> bool:
+def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
+            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery | None) -> bool:
     return state is not None and state.state == "running"
 
 
-def halted[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
-               DecisionAnalysis, OutcomeDiscovery)](state: S) -> S:
+def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
+               ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

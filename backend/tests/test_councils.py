@@ -102,7 +102,7 @@ class FakeAgents:
                 self.on_probe()
         return {alias: alias in self.online for alias in aliases}
 
-    def ask(self, model, prompt, key):
+    def ask(self, model, prompt, key, workspace=None):
         self.asked.append(key)
         if "-slice-" in key:
             return json.dumps({"options": [{"fragments": [self.text], "reason": None}]})

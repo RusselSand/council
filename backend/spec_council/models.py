@@ -28,6 +28,8 @@ class StepName(StrEnum):
     structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись
     idea_discovery = "idea_discovery"    # участники восстанавливают идею группы без неё
     idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
+    repository_discovery = "repository_discovery"  # участники исследуют репозиторий под идею
+    repository_judge = "repository_judge"          # судья проверяет их находки и покрытие
     question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
     question_judge = "question_judge"          # судья сводит их в один канонический список
     proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
@@ -201,6 +203,107 @@ class StreamIdea(BaseModel):
     evidence: list[int] = []
 
 
+class Evidence(BaseModel):
+    """Где в репозитории подтверждение: файл, строки, символ."""
+
+    path: str
+    lines: str | None = None
+    symbol: str | None = None
+
+
+class RepositoryFinding(BaseModel):
+    """Факт о том, как система устроена сейчас. verified — подтверждён кодом (evidence есть),
+    inferred — следует из наблюдений, unknown — установить не удалось."""
+
+    id: str
+    statement: str
+    status: Literal["verified", "inferred", "unknown"]
+    evidence: list[Evidence] = []
+    relevance: str = ""
+
+
+class FlowStep(BaseModel):
+    description: str
+    finding_ids: list[str] = []
+
+
+class RepositoryFlow(BaseModel):
+    """Как поведение проходит через систему: откуда начинается и через что идёт."""
+
+    name: str
+    entry_point: str = ""
+    steps: list[FlowStep] = []
+
+
+class CoverageArea(BaseModel):
+    """Насколько исследована область репозитория относительно идеи."""
+
+    area: str
+    status: Literal["covered", "partial", "not_investigated", "not_applicable"]
+    evidence_ids: list[str] = []
+    reason: str = ""
+
+
+class RepositoryUnknown(BaseModel):
+    """Что установить не удалось, почему это важно и где искать дальше."""
+
+    question: str
+    reason: str = ""
+    investigate: list[str] = []
+
+
+class FollowUp(BaseModel):
+    """Задание на доисследование от судьи: что установить и где."""
+
+    objective: str
+    reason: str = ""
+    targets: list[str] = []
+    related_finding_ids: list[str] = []
+
+
+class RepositoryMap(BaseModel):
+    """Проверенная карта существующей реализации: факты, потоки выполнения, покрытие и
+    неизвестное. Описывает, как система устроена сейчас, а не как её менять."""
+
+    findings: list[RepositoryFinding] = []
+    flows: list[RepositoryFlow] = []
+    coverage: list[CoverageArea] = []
+    unknowns: list[RepositoryUnknown] = []
+    documentation_conflicts: list[str] = []
+
+
+class RepositoryScan(BaseModel):
+    """Скан репозитория под идею потока: inventory при запуске, участники исследуют, судья
+    проверяет и, если пробелы существенны, отправляет их доисследовать — до двух раз. Ход по
+    шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К какой идее и какому репозиторию: путь, как его ввёл человек, и его коммит.
+    idea: str = ""
+    path: str = ""
+    commit_sha: str = ""
+    # В рабочей копии есть незакоммиченные правки: модели читают её, а не коммит.
+    dirty: bool = False
+    # Сколько файлов в inventory и сколько проходов участников и судьи понадобилось.
+    files: int = 0
+    rounds: int = 0
+    steps: list[Step]
+    # complete — судья счёл исследование достаточным; иначе остались задания follow_up.
+    complete: bool = False
+    result: RepositoryMap | None = None
+    follow_up: list[FollowUp] = []
+    error: str | None = None
+
+
+class RepositoryStep(BaseModel):
+    """Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана."""
+
+    # skipped — без скана; scan — с картой скана scan_run.
+    by: Literal["skipped", "scan"]
+    scan_run: str = ""
+
+
 class OpenQuestion(BaseModel):
     """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
     нет: предложения из текста связаны с ним через proposal_ids."""
@@ -225,6 +328,8 @@ class QuestionDiscovery(BaseModel):
     run: str = ""
     # Идея, к которой ищут: утвердили другую — вопросы ищутся заново.
     idea: str = ""
+    # С какой картой репозитория: «skipped» или run скана. Прошли шаг иначе — ищут заново.
+    repository: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -372,7 +477,9 @@ class OutcomeDiscovery(BaseModel):
 
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
-    её ищет совет (discovery), утверждает человек (idea); потом вопросы — их ищет совет
+    её ищет совет (discovery), утверждает человек (idea); потом необязательный скан
+    репозитория — его ведёт совет (scan), а человек утверждает карту или пропускает шаг
+    (repository), и карта идёт во все следующие шаги; потом вопросы — их ищет совет
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
     (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
@@ -381,6 +488,8 @@ class Stream(BaseModel):
     group: str
     discovery: IdeaDiscovery | None = None
     idea: StreamIdea | None = None
+    scan: RepositoryScan | None = None
+    repository: RepositoryStep | None = None
     questions: QuestionDiscovery | None = None
     # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
     scope: list[OpenQuestion] | None = None
@@ -391,8 +500,9 @@ class Stream(BaseModel):
     outcomes: OutcomeDiscovery | None = None
 
 
-# Ходы потока по его цепочке: поиск идеи, вопросов, вариантов, проверка выбора, сборка итогов.
-STREAM_RUNS = ("discovery", "questions", "proposals", "analysis", "outcomes")
+# Ходы потока по его цепочке: поиск идеи, скан репозитория, поиск вопросов, вариантов,
+# проверка выбора, сборка итогов.
+STREAM_RUNS = ("discovery", "scan", "questions", "proposals", "analysis", "outcomes")
 
 
 class Council(BaseModel):
@@ -467,6 +577,20 @@ class ApproveIdea(GroupsEdit):
     text: str | None = None
 
 
+class ScanRepository(GroupsEdit):
+    """Человек запускает скан репозитория потока: путь к рабочей копии — абсолютный или от
+    каталога репозиториев (COUNCIL_REPOS)."""
+
+    path: str
+
+
+class ApproveRepository(GroupsEdit):
+    """Человек проходит шаг «Репозиторий»: scan_run — утверждает карту этого скана, None —
+    пропускает шаг. И совет сразу ищет вопросы."""
+
+    scan_run: str | None = None
+
+
 class ApproveScope(GroupsEdit):
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных (их id) и
     свои, добавленные при отборе (тексты). questions_run — к какому поиску (QuestionDiscovery
@@ -515,6 +639,8 @@ class Model(BaseModel):
 
 class Settings(BaseModel):
     models: list[Model]
+    # Каталог репозиториев для скана (COUNCIL_REPOS): пути — от него. None — путь абсолютный.
+    repositories: str | None = None
     min_participants: int
     default_participants: list[str]
     default_judge: str

@@ -54,6 +54,13 @@ def get_config() -> AppConfig:
     return DEFAULT_CONFIG
 
 
+def get_repositories() -> Path | None:
+    """Каталог репозиториев для скана: COUNCIL_REPOS из окружения или .env (относительный —
+    от каталога .env). В докере это смонтированный только на чтение /repos. Без него путь к
+    рабочей копии — абсолютный."""
+    return Settings.load().path_of("COUNCIL_REPOS")
+
+
 @cache
 def get_agents() -> AgentRunner:
     """Подключения к моделям. Одно на процесс: .env читается один раз, воркеры переиспользуются."""
@@ -63,6 +70,7 @@ def get_agents() -> AgentRunner:
 StoreDep = Annotated[Store, Depends(get_store)]
 ConfigDep = Annotated[AppConfig, Depends(get_config)]
 AgentsDep = Annotated[AgentRunner, Depends(get_agents)]
+RepositoriesDep = Annotated[Path | None, Depends(get_repositories)]
 
 Launcher = Callable[[Callable[[], object]], None]
 

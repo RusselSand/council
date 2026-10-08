@@ -24,7 +24,9 @@ from spec_council.pipeline import (
     start_outcomes,
     start_proposals,
     start_questions,
+    start_scan,
 )
+from spec_council.repository import Inventory
 from spec_council.store import INTERRUPTED, FileStore
 
 
@@ -59,7 +61,9 @@ def test_runs_that_were_going_on_come_back_failed_and_can_be_started_again(tmp_p
     slicing.steps[0].state = "running"
     slicing.steps[0].runs = [ModelRun(model="sol", state="running"),
                              ModelRun(model="fable", state="done")]
-    streams = [Stream(group="A", discovery=start_idea(["sol"], "sol")),
+    found = Inventory(root=tmp_path, commit_sha="abc", dirty=False, files=())
+    streams = [Stream(group="A", discovery=start_idea(["sol"], "sol"),
+                      scan=start_scan(["sol"], "sol", "Идея", "project", found)),
                Stream(group="B", questions=start_questions(["sol"], "sol", "Идея"),
                       proposals=start_proposals(["sol"], "sol", []),
                       analysis=start_analysis(["sol"], "sol", []),
@@ -74,6 +78,7 @@ def test_runs_that_were_going_on_come_back_failed_and_can_be_started_again(tmp_p
         ("sol", "failed", INTERRUPTED), ("fable", "done", None)]
     assert second.state == "waiting"
     assert after.streams[0].discovery.state == "failed"
+    assert after.streams[0].scan.state == "failed"
     assert (after.streams[1].questions.state, after.streams[1].questions.error) == (
         "failed", INTERRUPTED)
     assert after.streams[1].proposals.state == "failed"

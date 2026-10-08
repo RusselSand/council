@@ -16,6 +16,14 @@
    (idea_discovery.md);
 2. idea_judge — если вариантов несколько, судья выбирает или сводит их (idea_judge.md).
 
+Скан репозитория (RepositoryRun) — необязательный, к утверждённой идее; модели читают
+рабочую копию сами:
+1. repository_discovery — каждый участник по inventory и коду устанавливает, как система
+   устроена сейчас относительно идеи (repository_discovery.md);
+2. repository_judge — судья проверяет находки по коду, сводит их в одну карту и, если пробелы
+   существенны, даёт задания follow_up (repository_judge.md); участники доисследуют их, судья
+   проверяет снова — до двух раз. Карта идёт во все следующие шаги: {{repository}}.
+
 Вопросы потока (QuestionRun) — к утверждённой идее:
 1. question_discovery — каждый участник ищет открытые вопросы: из текста, восстановленные
    по предложениям и недостающие (question_discovery.md);
@@ -56,6 +64,7 @@ import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
@@ -86,6 +95,7 @@ from .models import (
     QuestionAnalysis,
     QuestionDiscovery,
     QuestionOptions,
+    RepositoryScan,
     Slicing,
     Step,
     StepName,
@@ -109,6 +119,9 @@ from .questions import (
     same_question,
     with_user_questions,
 )
+from .repository import Context as RepositoryContext
+from .repository import Inventory, context_prompt, inventory_prompt, judged_map, map_of, sha_prompt
+from .repository import as_prompt as map_prompt
 from .slicing import (
     BadAnswer,
     BoundaryNote,
@@ -141,8 +154,9 @@ class StageFailed(RuntimeError):
 
 
 class Runner(Protocol):
-    def ask(self, model: str, prompt: str, key: str) -> str:
-        """Текст ответа модели или ModelFailed."""
+    def ask(self, model: str, prompt: str, key: str, workspace: Path | None = None) -> str:
+        """Текст ответа модели или ModelFailed. workspace — каталог, который модель читает:
+        ход идёт в нём, только на чтение."""
 
     def forget(self, keys: Iterable[str]) -> None:
         """Убрать оплаченные ответы из лотка: они больше не нужны."""
@@ -178,8 +192,24 @@ def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
                                      (StepName.idea_discovery, StepName.idea_judge)))
 
 
-def start_questions(participants: list[str], judge: str, idea: str) -> QuestionDiscovery:
+# Шаг «Репозиторий» пропущен: так его помнят вопросы.
+SKIPPED = "skipped"
+# Сколько проходов участников и судьи у скана: первый и до двух доисследований.
+SCAN_ROUNDS = 3
+
+
+def start_scan(participants: list[str], judge: str, idea: str, path: str,
+               found: Inventory) -> RepositoryScan:
+    return RepositoryScan(state="running", run=uuid4().hex[:8], idea=idea, path=path,
+                          commit_sha=found.commit_sha, dirty=found.dirty, files=len(found.files),
+                          steps=steps(participants, judge, (StepName.repository_discovery,
+                                                            StepName.repository_judge)))
+
+
+def start_questions(participants: list[str], judge: str, idea: str,
+                    repository: str = SKIPPED) -> QuestionDiscovery:
     return QuestionDiscovery(state="running", run=uuid4().hex[:8], idea=idea,
+                             repository=repository,
                              steps=steps(participants, judge,
                                          (StepName.question_discovery, StepName.question_judge)))
 
@@ -238,12 +268,14 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
-                     DecisionAnalysis, OutcomeDiscovery)]:
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
+                     ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
 
     what = "ход"
+    # Каталог, который модели читают в этом ходе; None — ход без файлов, только текст.
+    workspace: Path | None = None
 
     def __init__(self, council_id: str, participants: list[str], judge: str,
                  runner: Runner, report: Callable[[S], None], state: S) -> None:
@@ -305,7 +337,7 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, Propo
         key = f"{self.council_id}-{step}-{model}-{digest(self.runner.identity(model) + prompt)}"
         self._set_run(step, model, "running")
         try:
-            reply = self.runner.ask(model, prompt, key)
+            reply = self.runner.ask(model, prompt, key, workspace=self.workspace)
         except ModelFailed as exc:
             self._set_run(step, model, "failed", str(exc))
             return None
@@ -342,7 +374,7 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, Propo
             self._step(name).state = state
             self._publish()
 
-    def _keep_failures(self, step: StepName, question: OpenQuestion,
+    def _keep_failures(self, step: StepName, label: str,
                        failures: dict[str, list[str]]) -> None:
         """Шаг участников, который зовут по вопросу за раз, один на все вопросы, и каждый
         следующий перезаписал бы, кто упал на прежнем. Копим: упавшая хоть на одном вопросе
@@ -351,7 +383,7 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, Propo
             runs = list(self._step(step).runs)
         for run in runs:
             if run.state == "failed":
-                failures.setdefault(run.model, []).append(f"{question.id}: {run.error}")
+                failures.setdefault(run.model, []).append(f"{label}: {run.error}")
         for model, errors in failures.items():
             self._set_run(step, model, "failed", "; ".join(errors))
 
@@ -595,16 +627,19 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
 
     def __init__(self, council_id: str, idea: str, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
-                 report: Callable[[QuestionDiscovery], None]) -> None:
+                 report: Callable[[QuestionDiscovery], None], *, repository: str = SKIPPED,
+                 repository_map: str = context_prompt(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_questions(participants, judge, idea))
+                         start_questions(participants, judge, idea, repository))
         self.idea = idea
+        self.repository = repository_map
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
         group = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
                          for f in self.fragments.values()])
-        prompt = render("question_discovery", idea=self.idea, fragments=group)
+        prompt = render("question_discovery", idea=self.idea, fragments=group,
+                        repository=self.repository)
         answers = self._ask_all(StepName.question_discovery, prompt,
                                 lambda data: question_list(data, self.fragments))
         lists = list(answers.values())
@@ -615,6 +650,7 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
             candidates = shuffled([{"questions": as_prompt(questions)} for questions in lists])
             numbered_lists = [{"agent": n, **c} for n, c in enumerate(candidates, 1)]
             prompt = render("question_judge", idea=self.idea, fragments=group,
+                            repository=self.repository,
                             question_candidates=as_json(numbered_lists))
             chosen = self._ask_judge(StepName.question_judge, prompt,
                                      lambda data: question_list(data, self.fragments))
@@ -637,10 +673,12 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
 
     def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
-                 runner: Runner, report: Callable[[ProposalDiscovery], None]) -> None:
+                 runner: Runner, report: Callable[[ProposalDiscovery], None], *,
+                 repository: str = context_prompt(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_proposals(participants, judge, scope))
         self.idea = idea
+        self.repository = repository
         self.scope = scope
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
@@ -665,12 +703,13 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                                                for i in question.proposal_ids
                                                if i in self.fragments]),
                 "constraints_and_risks": known,
+                "repository": self.repository,
             }
             answers = self._ask_all(
                 StepName.proposal_discovery,
                 render("proposal_discovery", **values, accepted_decisions="[]"),
                 partial(proposal_list, context=context))
-            self._keep_failures(StepName.proposal_discovery, question, failures)
+            self._keep_failures(StepName.proposal_discovery, question.id, failures)
             existing = {same_question(self.fragments[i].text): i for i in question.proposal_ids
                         if i in self.fragments}
             offered = merged_proposals(c for found in answers.values() for c in found)
@@ -732,10 +771,12 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
     def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
                  choices: list[Choice], proposals: ProposalDiscovery | None,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
-                 runner: Runner, report: Callable[[DecisionAnalysis], None]) -> None:
+                 runner: Runner, report: Callable[[DecisionAnalysis], None], *,
+                 repository: str = context_prompt(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_analysis(participants, judge, choices))
         self.idea = idea
+        self.repository = repository
         self.scope = scope
         self.choices = {choice.question_id: choice.proposal for choice in choices}
         self.found = {options.question_id: options.proposals
@@ -781,11 +822,12 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
             "constraints_and_risks": known,
             "related_questions": as_json([self._related(q) for q in self.scope
                                           if q.id != question.id]),
+            "repository": self.repository,
         }
         answers = self._ask_all(StepName.decision_analysis,
                                 render("decision_analysis", **values, accepted_decisions="[]"),
                                 partial(analysis_of, context=context))
-        self._keep_failures(StepName.decision_analysis, question, failures)
+        self._keep_failures(StepName.decision_analysis, question.id, failures)
         distinct = {as_json(analysis_prompt(a)): analysis_prompt(a) for a in answers.values()}
         variants = shuffled(list(distinct.values()))
         prompt = render("decision_judge", **values, accepted_adrs="[]",
@@ -843,10 +885,12 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
     def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
                  decisions: list[Decision], proposals: ProposalDiscovery | None,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
-                 runner: Runner, report: Callable[[OutcomeDiscovery], None]) -> None:
+                 runner: Runner, report: Callable[[OutcomeDiscovery], None], *,
+                 repository: str = context_prompt(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_outcomes(participants, judge, decisions))
         self.idea = idea
+        self.repository = repository
         self.scope = scope
         self.decisions = {decision.question_id: decision for decision in decisions}
         self.found = {options.question_id: options.proposals
@@ -881,6 +925,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             "accepted_adrs": as_json(adrs),
             "constraints_and_risks": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
                                               for f in limits]),
+            "repository": self.repository,
         }
         answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
                                 partial(outcome_list, context=context))
@@ -908,3 +953,59 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         covered = {name for outcome in outcomes for name in outcome.adr_ids}
         return {"outcomes": outcomes,
                 "uncovered_adr_ids": [adr["id"] for adr in adrs if adr["id"] not in covered]}
+
+
+class RepositoryRun(CouncilRun[RepositoryScan]):
+    """Скан репозитория под идею потока. Inventory — список файлов рабочей копии на момент
+    запуска; модели читают её сами, только на чтение. Участники по отдельности устанавливают,
+    как система устроена сейчас, судья проверяет их находки по коду и сводит в одну карту.
+    Если он видит существенные пробелы, участники доисследуют именно их — до двух раз; судья
+    видит и прежнюю карту. Одинаковые находки судья видит одним: число согласных — не довод."""
+
+    what = "скан репозитория"
+
+    def __init__(self, council_id: str, idea: str, path: str, found: Inventory,
+                 fragments: list[LabeledFragment], participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[RepositoryScan], None]) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_scan(participants, judge, idea, path, found))
+        self.idea = idea
+        self.found = found
+        self.fragments = fragments
+        self.workspace = found.root
+
+    def work(self) -> dict[str, Any]:
+        context = RepositoryContext(frozenset(self.found.files))
+        values = {
+            "idea": self.idea,
+            "fragments": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
+                                  for f in self.fragments]),
+            "inventory": inventory_prompt(self.found),
+            "commit_sha": sha_prompt(self.found),
+        }
+        requests: list[dict] = []
+        previous: list | dict = []
+        failures: dict[str, list[str]] = {}
+        for n in range(1, SCAN_ROUNDS + 1):
+            answers = self._ask_all(
+                StepName.repository_discovery,
+                render("repository_discovery", **values, investigation_requests=as_json(requests)),
+                partial(map_of, context=context))
+            self._keep_failures(StepName.repository_discovery, f"проход {n}", failures)
+            distinct = {as_json(map_prompt(m)): map_prompt(m) for m in answers.values()}
+            variants = shuffled(list(distinct.values()))
+            prompt = render("repository_judge", **values, previous_findings=as_json(previous),
+                            discovery_results=as_json(
+                                [{"discovery": i, **v} for i, v in enumerate(variants, 1)]))
+            judged = self._ask_judge(StepName.repository_judge, prompt,
+                                     partial(judged_map, context=context))
+            with self._lock:
+                self.state.rounds, self.state.complete = n, judged.complete
+                self.state.result, self.state.follow_up = judged.result, list(judged.follow_up)
+                self._publish()
+            if judged.complete:
+                break
+            requests = [item.model_dump(mode="json") for item in judged.follow_up]
+            previous = map_prompt(judged.result)
+        return {"rounds": self.state.rounds, "complete": self.state.complete,
+                "result": self.state.result, "follow_up": self.state.follow_up}

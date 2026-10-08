@@ -348,6 +348,19 @@ section > .option-note { margin: 8px 0 0 18px }
   .outcome-rows dd + dt { margin-top: 8px }
 }
 
+/* Шаг «Репозиторий»: путь и скан, карта находок — по разделам, как строки итога. */
+.repo-scan { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 }
+.repo-scan .text-field { flex: 1; min-width: 16ch; padding: 8px 12px; font-family: var(--mono); font-size: 13px }
+.repo-summary { margin: 12px 0 0; color: var(--fg-soft); font: 12.5px var(--mono); overflow-wrap: anywhere }
+.repo-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none }
+.repo-finding { display: grid; gap: 2px }
+.repo-finding-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px }
+.repo-statement { flex: 1; min-width: 12ch }
+.repo-evidence { color: var(--fg-muted); font: 12px var(--mono); overflow-wrap: anywhere }
+.repo-steps { margin: 4px 0 0; padding-left: 18px }
+.check p, .check ul { margin: 0 }
+.check ul { padding-left: 18px }
+
 /* Светофор точкой: в списках, легенде, на карточках советов. */
 .light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }
 .light-dot.done, .light-dot.running { background: var(--go); box-shadow: none }
@@ -366,7 +379,7 @@ section > .option-note { margin: 8px 0 0 18px }
 .now-caps.failed { color: var(--stop-bright) }
 .now-caps.running, .now-caps.done { color: var(--go-bright) }
 .now-title { margin: 0 0 14px; font-size: 17px; font-weight: 600 }
-.segments { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
+.segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
 .segment::before { content: ""; display: block; height: 4px; margin-bottom: 8px; border-radius: 99px; background: var(--ink-line) }
 .segment.done::before, .segment.running::before { background: var(--go-bright) }
 .segment.yours::before { background: var(--wait) }
@@ -413,5 +426,5 @@ section > .option-note { margin: 8px 0 0 18px }
 @media (max-width: 600px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
   /* Пять сегментов в узкой карточке не помещаются: листаются внутри неё. */
-  .segments { grid-template-columns: repeat(5, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
+  .segments { grid-template-columns: repeat(6, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
 }
