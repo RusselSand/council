@@ -513,13 +513,41 @@ def test_with_file_mode_off_a_bit_set_only_on_disk_is_not_in_the_snapshot(repo, 
 def test_a_working_copy_too_big_for_a_snapshot_is_refused_before_copying(repo, tmp_path,
                                                                         monkeypatch):
     """Снимок ложится на диск сервера: без предела большой репозиторий его бы заполнил."""
+    found = inventory(repo)
     monkeypatch.setattr(repository, "SNAPSHOT_MAX", 10)
     with pytest.raises(RepositoryError, match="слишком"):
         working_copy(str(repo), None)
-    found = inventory(repo)
     with pytest.raises(RepositoryError, match="слишком"):
         copy(found, tmp_path)
     assert not any((tmp_path / "snap").iterdir())
+
+
+def test_a_file_made_while_the_inventory_is_taken_is_caught_by_the_snapshot(repo, tmp_path,
+                                                                            monkeypatch):
+    """Файл появился между списком файлов и состоянием копии: снимок без него — не та копия."""
+    take = repository.levels
+
+    def meanwhile(copies):
+        (repo / "late.py").write_text("x = 1\n", encoding="utf-8")
+        return take(copies)
+
+    monkeypatch.setattr(repository, "levels", meanwhile)
+    found = inventory(repo)
+    monkeypatch.setattr(repository, "levels", take)
+    assert "late.py" not in found.files
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path)
+
+
+def test_a_working_copy_too_big_is_refused_before_its_flagged_files_are_hashed(repo,
+                                                                              monkeypatch):
+    """Файл с assume-unchanged hash-object читает целиком: у копии, которой всё равно откажут,
+    — это сотни мегабайт зря. Сначала размер."""
+    git(repo, "update-index", "--assume-unchanged", "api/deps.py")
+    monkeypatch.setattr(repository, "SNAPSHOT_MAX", 10)
+    monkeypatch.setattr(repository, "hidden_of", lambda root: pytest.fail("хешировали зря"))
+    with pytest.raises(RepositoryError, match="слишком"):
+        inventory(repo)
 
 
 def test_a_file_that_grows_past_the_limit_while_copying_stops_the_snapshot(repo, tmp_path,

@@ -439,18 +439,25 @@ def inventory(path: Path) -> Inventory:
     вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
     root = top_of(path)
     copies = copies_of(root)
-    found = levels(copies)
-    listing = set(listed(copies))
-    if len(listing) > FILES_MAX:
-        raise too_many()                  # до lstat каждого: их может быть миллион
-    files = tuple(sorted(name for name in listing if plain(root, name)))
+    files = present(root, copies)
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
+    if size > SNAPSHOT_MAX:
+        raise too_big()        # до git status и hash-object: они читают файлы с флагами целиком
+    found = levels(copies)
     # Правки — и вложенный репозиторий, не подмодуль: его кода в коммите корня нет.
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
     return Inventory(root, found[0][1], dirty, files,
                      state_of(found), modes_of(copies), size,
                      sum(copy.outside for copy in copies),
                      tuple(name for copy in copies for name in copy.absent))
+
+
+def present(root: Path, copies: list[Copy]) -> tuple[str, ...]:
+    """Файлы рабочей копии: из списков git — те, что на диске есть и это обычные файлы."""
+    listing = set(listed(copies))
+    if len(listing) > FILES_MAX:
+        raise too_many()                  # до lstat каждого: их может быть миллион
+    return tuple(sorted(name for name in listing if plain(root, name)))
 
 
 def plain(root: Path, name: str) -> bool:
@@ -497,7 +504,10 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
         digest.update(os.fsencode(name) + b"\0" + part + b"\0")
         taken[name] = stamp
         written += (into / name).stat().st_size
-    if state_of(levels(copies_of(found.root))) != found.state or any(
+    copies = copies_of(found.root)
+    # Состояние читается после списка файлов: появился файл между ними — его в снимке нет.
+    appeared = set(present(found.root, copies)) - set(found.files)
+    if state_of(levels(copies)) != found.state or appeared or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")
