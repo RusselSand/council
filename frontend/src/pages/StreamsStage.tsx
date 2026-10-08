@@ -253,7 +253,10 @@ function groupStatus(stream: Stream, group: Group, t: T): string {
   return `${t('chain.fragments', { count: group.fragment_ids.length })} · ${ideaStatus(stream, group, t)}`
 }
 
-/** Что с итогами потока: собираются, сборка упала, сколько держат открытые вопросы, сколько ещё не готово, сколько готово. */
+/**
+ * Что с итогами потока: собираются, сборка упала, сколько держат открытые вопросы, сколько ещё не
+ * готово, какие решения не вошли ни в один, сколько готово.
+ */
 function outcomesStatus(stream: Stream, t: T): string {
   const run = stream.outcomes
   if (run?.state === 'running') return t('chain.outcomesAssembling')
@@ -265,6 +268,7 @@ function outcomesStatus(stream: Stream, t: T): string {
   if (blocked > 0) return t('chain.outcomesBlocked', { count: blocked, total })
   const unready = run.outcomes.filter(o => !outcomeReady(o)).length
   if (unready > 0) return t('chain.outcomesNotReady', { count: unready, total })
+  if (run.uncovered_adr_ids.length > 0) return t('chain.outcomesUncovered', { ids: run.uncovered_adr_ids.join(', ') })
   return t('chain.outcomesReady', { count: total, total })
 }
 

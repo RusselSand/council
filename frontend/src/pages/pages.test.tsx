@@ -916,6 +916,13 @@ describe('Поток: решения и итоги', () => {
     expect(screen.getAllByText('не готово 1 из 1').length).toBeGreaterThan(0)
   })
 
+  it('решение вне итогов — поток не готов, цепочка его называет', async () => {
+    const lost: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [ASSEMBLED.outcomes[0]], uncovered_adr_ids: ['ADR-1'] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: lost }))
+    expect(await screen.findByText('Не вошли ни в один итог: ADR-1.')).toBeTruthy()
+    expect(screen.getAllByText('вне итогов: ADR-1').length).toBeGreaterThan(0)
+  })
+
   it('пока ИИ собирает итоги, решения не зафиксировать заново', async () => {
     const assembling: OutcomeDiscovery = { ...ASSEMBLED, state: 'running', outcomes: [] }
     openStream(() => deciding({ decisions: FIXED, outcomes: assembling }))

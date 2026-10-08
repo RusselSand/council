@@ -81,7 +81,7 @@ export const ru = {
   'attention.outcomesFailed': 'Поток {{group}} · ошибка',
   'attention.outcomesFailed.hint': 'Сборка итогов остановилась — запустите снова.',
   'attention.outcomesWait': 'Поток {{group}} · итоги',
-  'attention.outcomesWait.hint': 'Итоги не готовы: решите открытые вопросы, разберите пробелы или поменяйте решения.',
+  'attention.outcomesWait.hint': 'Итоги не готовы: решите открытые вопросы, разберите пробелы или поменяйте решения — и те, что не вошли в итоги.',
 
   'council.untitled': 'Без названия',
   'council.notFound': 'Совет не найден',
@@ -257,6 +257,7 @@ export const ru = {
   'chain.outcomesEmpty': 'итогов нет',
   'chain.outcomesBlocked': 'заблокировано {{count}} из {{total}}',
   'chain.outcomesNotReady': 'не готово {{count}} из {{total}}',
+  'chain.outcomesUncovered': 'вне итогов: {{ids}}',
   'chain.outcomesReady': 'готово {{count}} из {{total}}',
 
   'idea.caps': 'Группа · вы',

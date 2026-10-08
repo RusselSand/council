@@ -155,6 +155,10 @@ describe('светофор', () => {
     expect(attention(council(empty)).map(a => a.what)).toEqual(['outcomesWait'])
     // Без критериев готовности итог не проверить — он не готов.
     expect(streamLight(on(assembled('done', [result({ acceptance_criteria: [] })])))).toBe('yours')
+    // Принятое решение не вошло ни в один итог — спецификация его потеряла.
+    const lost = on({ ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] })
+    expect(streamLight(lost)).toBe('yours')
+    expect(attention(council(lost)).map(a => a.what)).toEqual(['outcomesWait'])
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {

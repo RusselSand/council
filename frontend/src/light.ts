@@ -44,9 +44,9 @@ export const currentStep = (stream: Stream): ChainStep => {
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
  * Утверждённая идея проходит шаг, и прежний поиск идеи, даже упавший, уже не важен. Итоги —
- * последний шаг: собраны и все готовы — зелёные; какой-то держит открытый вопрос или пробел —
- * ход за вами (решить его), как и если итоги ещё не собирали или не собралось ни одного:
- * решений не хватает даже на ожидаемое поведение.
+ * последний шаг: собраны, все готовы и вобрали все решения — зелёные; какой-то держит открытый
+ * вопрос или пробел, или принятое решение не вошло ни в один — ход за вами, как и если итоги ещё
+ * не собирали или не собралось ни одного: решений не хватает даже на ожидаемое поведение.
  */
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
@@ -56,6 +56,7 @@ export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'outcomes' && stream.decisions) {
     const outcomes = stream.outcomes
     const ready = outcomes !== null && outcomes.outcomes.length > 0 && outcomes.outcomes.every(outcomeReady)
+      && outcomes.uncovered_adr_ids.length === 0
     return ofRun(outcomes) ?? (ready ? 'done' : 'yours')
   }
   return 'idle'
