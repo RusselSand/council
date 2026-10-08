@@ -288,6 +288,39 @@ def test_a_file_reached_through_a_linked_folder_is_neither_listed_nor_copied(rep
     assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
 
 
+def test_a_folder_swapped_for_a_link_to_an_ignored_folder_inside_is_not_copied(repo, tmp_path):
+    """Ссылка ведёт внутрь рабочей копии, но в игнорируемое: за ней может быть и .env."""
+    (repo / "conf").mkdir()
+    (repo / "conf" / "app.ini").write_text("x=1\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("*.log\nsecret/\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "conf")
+    (repo / "secret").mkdir()
+    (repo / "secret" / "app.ini").write_text("TOKEN=секрет\n", encoding="utf-8")
+    shutil.rmtree(repo / "conf")
+    link_folder(repo / "conf", repo / "secret")
+    found = inventory(repo)
+    assert "conf/app.ini" not in found.files
+    forged = Inventory(found.root, found.commit_sha, found.dirty, (*found.files, "conf/app.ini"),
+                       found.state)
+    with pytest.raises(RepositoryError, match="conf/app.ini"):
+        snapshot(forged, tmp_path / "snap")
+    assert not (tmp_path / "snap" / "conf" / "app.ini").exists()
+
+
+def test_a_working_copy_with_too_many_files_is_refused(repo, tmp_path, monkeypatch):
+    """Крошечных файлов может быть миллион: байтов мало, а память и inode кончатся."""
+    monkeypatch.setattr(repository, "FILES_MAX", 1)
+    with pytest.raises(RepositoryError, match="много файлов"):
+        working_copy(str(repo), None)
+
+
+def test_git_output_beyond_the_limit_is_not_read_into_memory(repo, monkeypatch):
+    monkeypatch.setattr(repository, "OUTPUT_MAX", 5)
+    with pytest.raises(RepositoryError, match="слишком"):
+        repository.git_bytes(repo, "ls-files", "-z")
+
+
 def test_a_working_copy_edited_while_the_snapshot_is_made_is_refused(repo, tmp_path, monkeypatch):
     """Файл поправили, когда он уже скопирован: снимок — смесь старого и нового, не годится."""
     found = inventory(repo)

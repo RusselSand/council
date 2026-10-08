@@ -19,6 +19,8 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,8 +40,13 @@ from .slicing import BadAnswer
 
 # Больше файлов в промпт не кладём: модели всё равно ищут по репозиторию сами.
 INVENTORY_MAX = 5000
-# Снимок ложится на диск сервера: рабочую копию больше этого не копируем, а отказываем.
+# Снимок ложится на диск сервера: рабочую копию больше этого не копируем, а отказываем, —
+# и по байтам, и по числу файлов (крошечных их бывает миллион: кончились бы память и inode).
 SNAPSHOT_MAX = 512 * 2**20
+FILES_MAX = 100_000
+# Больше вывода от одной команды git не читаем.
+OUTPUT_MAX = 64 * 2**20
+GIT_TIMEOUT = 120
 TEXT_MAX = 2000
 FINDING_ID = re.compile(r"R?(\d+)", re.IGNORECASE)
 STATUSES = ("verified", "inferred", "unknown")
@@ -72,15 +79,43 @@ def git_command(root: Path, *args: str) -> list[str]:
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
+    """Вывод git — кусками и не больше OUTPUT_MAX: больше — RepositoryError, а git
+    останавливаем. В рабочей копии с миллионами файлов один список занял бы всю память."""
     command = git_command(root, *args)
-    try:
-        result = subprocess.run(command, capture_output=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RepositoryError(f"git не запускается: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RepositoryError(detail or f"git {args[0]} не удался")
-    return result.stdout
+    expired = threading.Event()
+    with tempfile.TemporaryFile() as errors:
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
+        except OSError as exc:
+            raise RepositoryError(f"git не запускается: {exc}") from exc
+
+        def stop() -> None:
+            expired.set()
+            process.kill()
+
+        timer = threading.Timer(GIT_TIMEOUT, stop)
+        timer.start()
+        output = bytearray()
+        try:
+            with process.stdout:
+                while chunk := process.stdout.read(1 << 16):
+                    output += chunk
+                    if len(output) > OUTPUT_MAX:
+                        process.kill()
+                        break
+            code = process.wait()
+        finally:
+            timer.cancel()
+        if len(output) > OUTPUT_MAX:
+            raise RepositoryError(f"Рабочая копия слишком велика для скана: список от git "
+                                  f"{args[0]} больше {OUTPUT_MAX / 2**20:g} МБ")
+        if expired.is_set():
+            raise RepositoryError(f"git {args[0]} не уложился в {GIT_TIMEOUT} с")
+        if code != 0:
+            errors.seek(0)
+            detail = errors.read(8192).decode("utf-8", errors="replace").strip()
+            raise RepositoryError(detail or f"git {args[0]} не удался")
+    return bytes(output)
 
 
 def git(root: Path, *args: str) -> str:
@@ -161,14 +196,21 @@ def working_copy(text: str, base: Path | None) -> Inventory:
     found = inventory(located(text, base))
     if base is not None and not found.root.is_relative_to(base.resolve()):
         raise RepositoryError(f"Корень рабочей копии {found.root} вне каталога репозиториев {base}")
-    fits(found.size)
+    fits(found)
     return found
 
 
-def fits(size: int) -> None:
-    """Снимок такого размера ляжет на диск сервера — или RepositoryError: больше не копируем."""
-    if size > SNAPSHOT_MAX:
+def fits(found: Inventory) -> None:
+    """Снимок этой рабочей копии ляжет на диск сервера — или RepositoryError: больше не
+    копируем."""
+    if len(found.files) > FILES_MAX:
+        raise too_many()
+    if found.size > SNAPSHOT_MAX:
         raise too_big()
+
+
+def too_many() -> RepositoryError:
+    return RepositoryError(f"В рабочей копии слишком много файлов для снимка: больше {FILES_MAX}")
 
 
 def too_big() -> RepositoryError:
@@ -268,22 +310,33 @@ def inventory(path: Path) -> Inventory:
     вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
     found = levels(root)
-    files = tuple(sorted({name for name in listed(root) if plain(root, name)}))
+    listing = set(listed(root))
+    if len(listing) > FILES_MAX:
+        raise too_many()                  # до lstat каждого: их может быть миллион
+    files = tuple(sorted(name for name in listing if plain(root, name)))
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
     return Inventory(root, found[0][1], any(status for _, _, status in found), files,
                      state_of(found), modes_of(root), size)
 
 
 def plain(root: Path, name: str) -> bool:
-    """Обычный файл, и путь к нему — внутри рабочей копии: ни он сам, ни каталоги по дороге не
-    ссылки наружу. За ссылкой может быть что угодно, вплоть до /dev/zero или чужих ключей."""
+    """Обычный файл, и путь к нему — без ссылок: ни он сам, ни каталоги по дороге. За ссылкой
+    может быть что угодно, вплоть до /dev/zero или чужих ключей."""
     path = root / name
     try:
         if not stat.S_ISREG(path.lstat().st_mode):
             return False
     except OSError:
         return False
-    return Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root))
+    return unlinked(root, name)
+
+
+def unlinked(root: Path, name: str) -> bool:
+    """От корня до файла — ни одной ссылки или junction: путь без них тот же, что и с ними.
+    Ссылка и внутрь рабочей копии не годится: за ней может быть игнорируемое, вплоть до .env."""
+    real = os.path.realpath(root / name)
+    expected = os.path.join(os.path.realpath(root), *name.split("/"))
+    return os.path.normcase(real) == os.path.normcase(expected)
 
 
 def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
@@ -295,7 +348,7 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
     оплаченные ответы, и тот же код в другой копии — тот же ключ. Файл inventory не прочитать —
     тоже RepositoryError: промпт его называет, и карта без него вышла бы «полной», хотя его никто
     не читал. Вернёт отпечаток и какие файлы в снимок легли."""
-    fits(found.size)
+    fits(found)
     digest = hashlib.sha256()
     taken: dict[str, tuple[int, int]] = {}
     missed: list[str] = []
@@ -333,7 +386,7 @@ def stamp_of(path: Path) -> tuple[int, int] | None:
 def open_inside(root: Path, name: str) -> int:
     """Файл рабочей копии, открытый так, чтобы ни один каталог по дороге не был ссылкой: каждый
     — относительно предыдущего и без перехода по ссылке (O_NOFOLLOW). Где так нельзя (Windows),
-    — по пути без ссылок (realpath) и только внутри рабочей копии. FIFO не ждём: O_NONBLOCK."""
+    — только если на всём пути нет ни ссылки, ни junction (unlinked). FIFO не ждём: O_NONBLOCK."""
     flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
              | getattr(os, "O_BINARY", 0))
     folder_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -348,10 +401,9 @@ def open_inside(root: Path, name: str) -> int:
             return os.open(file, flags, dir_fd=handle)
         finally:
             os.close(handle)
-    real = os.path.realpath(root / name)
-    if not Path(real).is_relative_to(os.path.realpath(root)):
-        raise OSError(f"{name}: вне рабочей копии")
-    return os.open(real, flags)
+    if not unlinked(root, name):
+        raise OSError(f"{name}: путь идёт через ссылку")
+    return os.open(os.path.realpath(root / name), flags)
 
 
 def copied_file(root: Path, name: str, target: Path, *, executable: bool | None = None,
