@@ -479,6 +479,39 @@ def test_an_edit_hidden_by_an_index_flag_still_marks_the_copy_dirty(repo, flag):
     assert inventory(repo).dirty
 
 
+def test_a_deleted_file_marked_assume_unchanged_still_marks_the_copy_dirty(repo):
+    """Файла коммита нет на диске, а git status молчит: снимок — уже не показанный коммит."""
+    git(repo, "update-index", "--assume-unchanged", "api/deps.py")
+    (repo / "api" / "deps.py").unlink()
+    assert inventory(repo).dirty
+
+
+def test_a_skip_worktree_file_absent_from_disk_is_a_sparse_checkout_not_an_edit(repo):
+    git(repo, "update-index", "--skip-worktree", "api/deps.py")
+    (repo / "api" / "deps.py").unlink()
+    assert not inventory(repo).dirty
+
+
+def test_an_untracked_working_copy_inside_is_scanned_too(repo, tmp_path):
+    """Вложенная рабочая копия, не подмодуль: git показывает только её каталог, а код в ней
+    модели должны видеть — без её .git и игнорируемого."""
+    nested = repo / "tools" / "gen"
+    nested.mkdir(parents=True)
+    (nested / "gen.py").write_text("x = 1\n", encoding="utf-8")
+    (nested / ".gitignore").write_text("*.key\n", encoding="utf-8")
+    (nested / "secret.key").write_text("ключ\n", encoding="utf-8")
+    git(nested, "init", "-q")
+    git(nested, "add", ".")
+    git(nested, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "gen")
+    (nested / "fresh.py").write_text("y = 2\n", encoding="utf-8")
+    found = inventory(repo)
+    assert {"tools/gen/.gitignore", "tools/gen/gen.py", "tools/gen/fresh.py"} <= set(found.files)
+    assert "tools/gen/secret.key" not in found.files
+    assert not any("/.git/" in name for name in found.files)
+    into, _, _ = copy(found, tmp_path)
+    assert (into / "tools" / "gen" / "fresh.py").is_file()
+
+
 def test_a_flagged_file_edited_after_the_inventory_is_caught_by_the_snapshot(repo, tmp_path):
     git(repo, "update-index", "--assume-unchanged", "api/deps.py")
     found = inventory(repo)

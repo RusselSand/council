@@ -33,7 +33,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import inventory
+from spec_council.repository import inventory, working_copy
 
 client = TestClient(app)
 
@@ -968,6 +968,30 @@ def test_without_models_the_scan_is_recorded_failed_and_can_be_run_again(agents,
 
 def test_settings_tell_where_repositories_are(agents, repos):
     assert client.get("/api/settings").json()["repositories"] == str(repos.parent)
+
+
+def test_a_scan_is_refused_if_the_idea_changed_while_git_read_the_working_copy(agents, repos,
+                                                                              monkeypatch):
+    """Пока git читал рабочую копию, идею поменяли в другой вкладке: скан под идею, которой
+    человек не видел, оплачен зря — и сбросил бы то, что уже сделано под новую."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    read = working_copy
+
+    def meanwhile(*args):
+        found = read(*args)
+        council = get_store().get_council(council_id)
+        get_store().update_council(council_id, {"streams": [
+            stream.model_copy(update={"idea": stream.idea.model_copy(update={"text": "Другая"})})
+            if stream.group == "C" else stream for stream in council.streams]})
+        return found
+
+    monkeypatch.setattr("spec_council.api.streams.working_copy", meanwhile)
+    before = dict(agents.prompts)
+    assert scans(council_id, "C").status_code == 409
+    assert streams_of(council_id)["C"].scan is None
+    assert agents.prompts == before                              # модели не звали
 
 
 def test_a_scan_request_is_checked_before_git_reads_the_working_copy(agents, repos, monkeypatch):

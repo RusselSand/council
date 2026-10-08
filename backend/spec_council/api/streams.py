@@ -87,6 +87,8 @@ router = APIRouter(prefix="/councils", tags=["streams"])
 
 NO_STREAM = {409: {"description": "Групп уже других: потока нет, или группы не подтверждены"}}
 CHANGING = {503: {"description": "Состав совета меняется прямо сейчас"}}
+NO_IDEA = "Сначала утвердите идею потока"
+RESLICED = "Типы фрагментов поменялись после раскладки — сначала разложите заново"
 # Всё, что ниже шага «Репозиторий»: другой скан или другая идея это сбрасывает.
 BELOW_REPOSITORY = {"questions": None, "scope": None, "proposals": None, "choices": None,
                     "analysis": None, "decisions": None, "outcomes": None}
@@ -145,8 +147,7 @@ def start_discovery(council_id: str, group: str, store: StoreDep, config: Config
         if stream.idea is not None:
             raise HTTPException(409, "Идея потока уже утверждена")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
 
     return start_run(
         council_id, store, config, agents, launch, discovery(group), ready, None,
@@ -204,8 +205,8 @@ def idea_changed(stream: Stream, idea: StreamIdea) -> bool:
 
 @router.post("/{council_id}/streams/{group}/repository/scan", status_code=202,
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
-                        409: {"description": "Идея не утверждена, скан уже идёт или группы "
-                                             "уже другие"},
+                        409: {"description": "Идея не утверждена или её поменяли, скан уже "
+                                             "идёт или группы уже другие"},
                         422: {"description": "Путь не к рабочей копии git"},
                         423: {"description": "Совет ещё работает ниже по цепочке"}})
 def scan_repository(council_id: str, group: str, edit: ScanRepository, store: StoreDep,
@@ -214,19 +215,26 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     """Совет сканирует репозиторий под идею потока: inventory рабочей копии — сейчас, потом
     участники и судья исследуют код, только читая его. Скан заново — шаг «Репозиторий» заново:
     утверждённая карта, вопросы и всё ниже сбрасываются. Повтор после сбоя берёт уже
-    оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной."""
+    оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной.
+    Идея — та, что была при запросе: поменяли, пока git читал копию или проверялись модели, —
+    409, скан не под ту идею."""
+    seen: list[StreamIdea] = []
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         if stream.idea is None:
-            raise HTTPException(409, "Сначала утвердите идею потока")
+            raise HTTPException(409, NO_IDEA)
+        if seen and stream.idea != seen[0]:
+            raise HTTPException(409, "Идею потока поменяли, пока готовился скан, — запустите "
+                                     "скан снова")
+        seen[:] = [stream.idea]
         if running(stream.scan):
             raise HTTPException(409, "Скан уже идёт")
         if below_running(stream, "questions"):
             raise HTTPException(423, "Совет ещё работает ниже по цепочке — дождитесь его")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
         return council, True
 
     # Сначала дешёвое: устаревший или лишний запрос не должен ждать git на большой рабочей
@@ -299,7 +307,7 @@ def approve_repository(council_id: str, group: str, edit: ApproveRepository, sto
 def repository_step(stream: Stream, edit: ApproveRepository) -> RepositoryStep:
     """Как проходят шаг: без скана или с картой того скана, что на экране, — готового."""
     if stream.idea is None:
-        raise HTTPException(409, "Сначала утвердите идею потока")
+        raise HTTPException(409, NO_IDEA)
     if edit.scan_run is None:
         return RepositoryStep(by="skipped")
     scan = stream.scan
@@ -359,14 +367,13 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
     def ready(council: Council) -> None:
         stream = stream_in(council, group)
         if stream.idea is None:
-            raise HTTPException(409, "Сначала утвердите идею потока")
+            raise HTTPException(409, NO_IDEA)
         if stream.repository is None:
             raise HTTPException(409, "Сначала пройдите шаг «Репозиторий»")
         if stream.scope is not None:
             raise HTTPException(409, "Вопросы потока уже утверждены")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
 
     def build(council: Council, report: Callable) -> QuestionRun:
         stream = stream_in(council, group)
@@ -453,8 +460,7 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
         if stream.choices is not None:
             raise HTTPException(409, "Выбор по вопросам уже утверждён")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
 
     def build(council: Council, report: Callable) -> ProposalRun:
         stream = stream_in(council, group)
@@ -576,8 +582,7 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
         if stream.decisions is not None:
             raise HTTPException(409, "Решения уже зафиксированы")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
 
     def build(council: Council, report: Callable) -> DecisionRun:
         stream = stream_in(council, group)
@@ -665,8 +670,7 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
         if stream.outcomes is not None and stream.outcomes.state == "done":
             raise HTTPException(409, "Итоги уже собраны — заново они соберутся по другим решениям")
         if outdated(council.slicing, council.structure):
-            raise HTTPException(
-                409, "Типы фрагментов поменялись после раскладки — сначала разложите заново")
+            raise HTTPException(409, RESLICED)
 
     def build(council: Council, report: Callable) -> OutcomeRun:
         stream = stream_in(council, group)

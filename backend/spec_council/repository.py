@@ -122,28 +122,29 @@ def git(root: Path, *args: str) -> str:
     return git_bytes(root, *args).decode("utf-8", errors="replace")
 
 
-def listed(root: Path) -> list[str]:
-    """Отслеживаемые и новые, не игнорируемые файлы — и внутри checked-out подмодулей. В
-    подмодули git сам не заходит (--recurse-submodules споткнулся бы о подмодуль-ссылку, а
+def listed(copies: list[tuple[Path, str]]) -> list[str]:
+    """Отслеживаемые и новые, не игнорируемые файлы — каждой рабочей копии из copies_of. Во
+    вложенные git сам не заходит (--recurse-submodules споткнулся бы о подмодуль-ссылку, а
     --others его и вовсе не умеет): обходим их мы, без ссылок и кругов."""
     found: list[str] = []
-    for folder, prefix in [(root, ""), *submodules(root)]:
+    for folder, prefix in copies:
         for args in (("--cached",), ("--others", "--exclude-standard")):
             found += [prefix + name for name in names(git_bytes(folder, "ls-files", "-z", *args))]
     return found
 
 
-def submodules(root: Path) -> list[tuple[Path, str]]:
-    """Checked-out подмодули, и вложенные: (каталог, путь от корня с «/» на конце). Подмодуль,
-    подменённый ссылкой, и уже пройденный репозиторий не обходим: ссылка назад на родителя
-    водила бы по кругу, а наружу — за пределы рабочей копии."""
+def copies_of(root: Path) -> list[tuple[Path, str]]:
+    """Корень и вложенные рабочие копии — checked-out подмодули и просто репозитории внутри,
+    не подмодули, — и вложенные в них: (каталог, путь от корня с «/» на конце, у корня — "").
+    Подменённую ссылкой и уже пройденную не обходим: ссылка назад на родителя водила бы по
+    кругу, а наружу — за пределы рабочей копии."""
     top = os.path.realpath(root)
     seen = {top}
-    found: list[tuple[Path, str]] = []
+    found: list[tuple[Path, str]] = [(root, "")]
     queue = [(root, "")]
     while queue:
         folder, prefix = queue.pop(0)
-        for link in gitlinks(folder):
+        for link in [*gitlinks(folder), *embedded(folder)]:
             path = folder / link
             real = os.path.realpath(path)
             try:
@@ -157,6 +158,13 @@ def submodules(root: Path) -> list[tuple[Path, str]]:
             found.append((path, f"{prefix}{link}/"))
             queue.append((path, f"{prefix}{link}/"))
     return found
+
+
+def embedded(root: Path) -> list[str]:
+    """Репозитории внутри, не подмодули: --others показывает только их каталог («tools/gen/»),
+    а код в них модели должны видеть."""
+    others = names(git_bytes(root, "ls-files", "-z", "--others", "--exclude-standard"))
+    return [name.removesuffix("/") for name in others if name.endswith("/")]
 
 
 def gitlinks(root: Path) -> list[str]:
@@ -227,14 +235,12 @@ def head(root: Path) -> str:
         return ""
 
 
-def levels(root: Path) -> list[tuple[str, str, bytes]]:
-    """Корень и каждый подмодуль: (путь от корня, коммит, git status с каждым новым файлом).
-    В подмодули git status сам не заходит: обходим их мы, без ссылок и кругов, — и у каждого
-    свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в нём ни
-    правили."""
-    found = [("", head(root), changes_of(root))]
-    found += [(prefix, head(folder), changes_of(folder)) for folder, prefix in submodules(root)]
-    return found
+def levels(copies: list[tuple[Path, str]]) -> list[tuple[str, str, bytes]]:
+    """Каждая рабочая копия из copies_of: (путь от корня, коммит, git status с каждым новым
+    файлом). Во вложенные git status сам не заходит: обходим их мы, без ссылок и кругов, — и у
+    каждой свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в
+    нём ни правили."""
+    return [(prefix, head(folder), changes_of(folder)) for folder, prefix in copies]
 
 
 def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
@@ -253,10 +259,18 @@ def hidden_of(root: Path) -> bytes:
     """Правки в файлах с assume-unchanged или skip-worktree: их содержимое git status не
     сверяет, а модели читают уже не коммит. Такие файлы на диске сверяем сами — с индексом
     (hash-object — с теми же фильтрами, что и git add)."""
-    flagged = {name: sha for tag, mode, sha, name in index_of(root)
-               if (tag.islower() or tag == b"S") and mode != b"160000" and plain(root, name)}
+    flagged: dict[str, str] = {}
+    changed: list[str] = []
+    for tag, mode, sha, name in index_of(root):
+        if not (tag.islower() or tag == b"S") or mode not in (b"100644", b"100755"):
+            continue
+        if plain(root, name):
+            flagged[name] = sha
+        elif tag.upper() != b"S":
+            # assume-unchanged, а файла нет или он уже не файл — правка; у skip-worktree это
+            # обычный sparse checkout.
+            changed.append(name)
     names = list(flagged)
-    changed = []
     for start in range(0, len(names), 100):        # по сотне — командная строка не бесконечна
         chunk = names[start:start + 100]
         shas = git(root, "hash-object", "--", *chunk).split()
@@ -276,13 +290,13 @@ def index_of(root: Path) -> list[tuple[bytes, bytes, str, str]]:
     return found
 
 
-def modes_of(root: Path) -> dict[str, bool]:
+def modes_of(copies: list[tuple[Path, str]]) -> dict[str, bool]:
     """Бит исполняемости, которому git верит больше, чем диску: при core.fileMode=false — из
     индекса (на диске он бывает и у всех файлов сразу, как в bind mount из Windows). Снимок
     берёт его оттуда же, откуда взял бы коммит: иначе модели видели бы не показанный коммит, а
     копия числилась бы без правок."""
     modes: dict[str, bool] = {}
-    for folder, prefix in [(root, ""), *submodules(root)]:
+    for folder, prefix in copies:
         if not file_mode(folder):
             modes.update({prefix + name: mode == b"100755" for _, mode, _, name in index_of(folder)
                           if mode in (b"100644", b"100755")})
@@ -309,14 +323,15 @@ def inventory(path: Path) -> Inventory:
     что на диске есть, это обычные файлы и лежат в рабочей копии (удалённый, но отслеживаемый,
     вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
     root = Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
-    found = levels(root)
-    listing = set(listed(root))
+    copies = copies_of(root)
+    found = levels(copies)
+    listing = set(listed(copies))
     if len(listing) > FILES_MAX:
         raise too_many()                  # до lstat каждого: их может быть миллион
     files = tuple(sorted(name for name in listing if plain(root, name)))
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
     return Inventory(root, found[0][1], any(status for _, _, status in found), files,
-                     state_of(found), modes_of(root), size)
+                     state_of(found), modes_of(copies), size)
 
 
 def plain(root: Path, name: str) -> bool:
@@ -363,7 +378,7 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
         digest.update(os.fsencode(name) + b"\0" + part + b"\0")
         taken[name] = stamp
         written += (into / name).stat().st_size
-    if state_of(levels(found.root)) != found.state or any(
+    if state_of(levels(copies_of(found.root))) != found.state or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")
