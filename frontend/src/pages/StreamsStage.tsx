@@ -571,7 +571,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
       <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
       <section className="card panel" aria-label={t('repository.title')}>
         <form className="repo-scan" onSubmit={start}>
-          <input className="text-field" aria-label={t('repository.path')} value={path} maxLength={500}
+          <input className="text-field" aria-label={t('repository.path')} value={path}
                  readOnly={busy || sought} onChange={e => setPath(e.target.value)}
                  placeholder={repositories ? t('repository.pathRoot', { root: repositories }) : t('repository.pathAbsolute')} />
           <button type="submit" className="btn-secondary" disabled={busy || sought || below || stale || path.trim() === ''}>
@@ -624,6 +624,7 @@ function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
       </p>
       {scan.dirty && <p className="fragment-note">{t('repository.dirty')}</p>}
       {scan.outside > 0 && <p className="fragment-note">{t('repository.outside', { count: scan.outside })}</p>}
+      {scan.absent.length > 0 && <p className="fragment-note">{t('repository.absent', { paths: scan.absent.join(', ') })}</p>}
       {scan.state === 'done' && scan.complete && <p className="check ok">{t('repository.complete')}</p>}
       {scan.state === 'done' && !scan.complete && (
         <div className="check problem">

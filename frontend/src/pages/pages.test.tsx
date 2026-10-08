@@ -754,7 +754,7 @@ describe('Поток: репозиторий', () => {
   }
   const SCANNED: RepositoryScan = {
     state: 'done', run: 'sc1', idea: TEXT_IDEA.text, path: 'project', commit_sha: 'abcdef1234567890', dirty: true,
-    files: 12, outside: 3, rounds: 3, complete: false, error: null,
+    files: 12, outside: 3, absent: ['vendor/lib'], rounds: 3, complete: false, error: null,
     steps: [{ name: 'repository_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'repository_judge', state: 'done', runs: [run('fable', 'done')] }],
     result: {
@@ -801,6 +801,7 @@ describe('Поток: репозиторий', () => {
     expect(screen.getByText('project · коммит abcdef12 · файлов: 12 · проходов: 3')).toBeTruthy()
     expect(screen.getByText(ru['repository.dirty'])).toBeTruthy()
     expect(screen.getByText(ru['repository.outside'].replace('{{count}}', '3'))).toBeTruthy()
+    expect(screen.getByText(ru['repository.absent'].replace('{{paths}}', 'vendor/lib'))).toBeTruthy()
     expect(screen.getByText('worker/state.py · 10-30 · save')).toBeTruthy()
     expect(screen.getByText(ru['repository.status.verified'])).toBeTruthy()
     expect(screen.getAllByText(ru['repository.status.inferred'])).toHaveLength(1)

@@ -317,6 +317,7 @@ export const en: Dict = {
   'repository.failedNote': 'The scan stopped. Start it again or skip the step.',
   'repository.summary': '{{path}} · commit {{sha}} · files: {{files}} · passes: {{rounds}}',
   'repository.dirty': 'The working copy has uncommitted changes: the models read it, not the commit.',
+  'repository.absent': 'Submodules not checked out: {{paths}}. Their code is neither on disk nor in the snapshot: the models did not see it.',
   'repository.outside': 'Outside the sparse checkout — committed files: {{count}}. They are neither on disk nor in the snapshot: the models did not see them.',
   'repository.complete': 'The judge found the study sufficient.',
   'repository.incomplete': 'Gaps remain — three passes were not enough to close them:',

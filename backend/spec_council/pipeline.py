@@ -211,7 +211,7 @@ def start_scan(participants: list[str], judge: str, idea: str, path: str,
                found: Inventory) -> RepositoryScan:
     return RepositoryScan(state="running", run=uuid4().hex[:8], idea=idea, path=path,
                           commit_sha=found.commit_sha, dirty=found.dirty, files=len(found.files),
-                          outside=found.outside,
+                          outside=found.outside, absent=list(found.absent),
                           steps=steps(participants, judge, (StepName.repository_discovery,
                                                             StepName.repository_judge)))
 

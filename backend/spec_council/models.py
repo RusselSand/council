@@ -289,6 +289,8 @@ class RepositoryScan(BaseModel):
     files: int = 0
     # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
     outside: int = 0
+    # Подмодули, что не скачаны: их кода нет ни на диске, ни в снимке.
+    absent: list[str] = []
     rounds: int = 0
     steps: list[Step]
     # complete — судья счёл исследование достаточным; иначе остались задания follow_up.

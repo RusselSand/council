@@ -82,6 +82,8 @@ class Inventory:
     size: int = 0
     # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
     outside: int = 0
+    # Подмодули, что не скачаны: их кода нет ни на диске, ни в снимке.
+    absent: tuple[str, ...] = ()
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -144,6 +146,8 @@ class Copy(NamedTuple):
     others: list[str]
     embedded: bool = False
     outside: int = 0
+    # Её подмодули, что не скачаны (или подменены ссылкой): их кода в снимке нет.
+    absent: tuple[str, ...] = ()
 
 
 def listed(copies: list[Copy]) -> list[str]:
@@ -167,35 +171,52 @@ def copies_of(root: Path) -> list[Copy]:
     top = os.path.realpath(root)
     seen = {top}
     found: list[Copy] = []
+    counted = 0
     queue = [(root, "", False)]
     while queue:
         folder, prefix, embedded = queue.pop(0)
         index = index_of(folder)
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
-        # skip-worktree, а файла нет — он вне sparse checkout: в снимок не ляжет.
-        outside = sum(1 for tag, mode, _, name in index
-                      if tag.upper() == b"S" and mode in (b"100644", b"100755")
-                      and not plain(folder, name))
-        found.append(Copy(folder, prefix, cached, others, embedded, outside))
-        if sum(len(copy.cached) + len(copy.others) for copy in found) > FILES_MAX:
+        counted += len(cached) + len(others)
+        if counted > FILES_MAX:
             raise too_many()            # пока обходим: подмодулей бывает и тысяча
-        # Подмодуль записан в коммите своего родителя; репозиторий внутри — нигде.
-        links = [(name, embedded) for _, mode, _, name in index if mode == b"160000"]
-        links += [(name, True) for name in inner_copies(folder, cached, others)]
-        for link, inside in links:
+        # Подмодуль записан в коммите своего родителя (recorded); репозиторий внутри — нигде.
+        links = [(name, embedded, True) for _, mode, _, name in index if mode == b"160000"]
+        links += [(name, True, False) for name in inner_copies(folder, cached, others)]
+        absent: list[str] = []
+        for link, inside, recorded in links:
             path = folder / link
+            if not checked_out(path, top):
+                if recorded:
+                    absent.append(shown(prefix + link))   # подмодуль есть, а кода его нет
+                continue
             real = os.path.realpath(path)
-            try:
-                is_folder = stat.S_ISDIR(path.lstat().st_mode)
-            except OSError:
-                continue
-            if (not is_folder or real != os.path.abspath(path) or real in seen
-                    or not Path(real).is_relative_to(top) or not (path / ".git").exists()):
-                continue
-            seen.add(real)
-            queue.append((path, f"{prefix}{link}/", inside))
+            if real not in seen:
+                seen.add(real)
+                queue.append((path, f"{prefix}{link}/", inside))
+        found.append(Copy(folder, prefix, cached, others, embedded, outside_of(folder, index),
+                          tuple(absent)))
     return found
+
+
+def checked_out(path: Path, top: str) -> bool:
+    """Вложенная рабочая копия на месте: каталог, а не ссылка, внутри корня и со своим .git."""
+    try:
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            return False
+    except OSError:
+        return False
+    real = os.path.realpath(path)
+    return (real == os.path.abspath(path) and Path(real).is_relative_to(top)
+            and (path / ".git").exists())
+
+
+def outside_of(folder: Path, index: list[tuple[bytes, bytes, str, str]]) -> int:
+    """skip-worktree, а файла нет — он вне sparse checkout: в снимок не ляжет."""
+    return sum(1 for tag, mode, _, name in index
+               if tag.upper() == b"S" and mode in (b"100644", b"100755")
+               and not plain(folder, name))
 
 
 def inner_copies(folder: Path, *listings: list[str]) -> list[str]:
@@ -378,7 +399,8 @@ def inventory(path: Path) -> Inventory:
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
     return Inventory(root, found[0][1], dirty, files,
                      state_of(found), modes_of(copies), size,
-                     sum(copy.outside for copy in copies))
+                     sum(copy.outside for copy in copies),
+                     tuple(name for copy in copies for name in copy.absent))
 
 
 def plain(root: Path, name: str) -> bool:
@@ -513,6 +535,10 @@ def inventory_prompt(found: Inventory) -> str:
     if found.outside:
         text += (f"\n… файлов коммита вне sparse checkout: {found.outside} — их нет ни на диске, "
                  "ни в снимке: коммит виден не весь")
+    if found.absent:
+        more = f" и ещё {len(found.absent) - 20}" if len(found.absent) > 20 else ""
+        text += (f"\n… подмодули не скачаны: {', '.join(found.absent[:20])}{more} — их кода нет "
+                 "ни на диске, ни в снимке")
     return text
 
 
@@ -656,7 +682,7 @@ def entry_of(value: object, context: Context) -> str:
     """Точка входа потока — файл репозитория, можно с символом: «api/routes.py:handler». Путь —
     самое длинное начало, которое есть в inventory: в именах бывают и пробелы. Файла нет — точки
     входа нет: следующие шаги поверили бы несуществующему компоненту."""
-    text = path_text(value).strip()
+    text = path_text(value)       # как есть: пробел в начале — тоже имя; обрезает path_of
     ends = [len(text), *sorted({i for i, char in enumerate(text) if char in ": ("}, reverse=True)]
     for end in ends:
         path = context.path_of(text[:end])
@@ -755,13 +781,16 @@ def as_prompt(result: RepositoryMap) -> dict:
 
 
 def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
-                   dirty: bool = False, outside: int = 0) -> str:
+                   dirty: bool = False, outside: int = 0,
+                   absent: tuple[str, ...] | list[str] = ()) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
     сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
     правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
-    files_outside_checkout — сколько файлов коммита вне sparse checkout: их модели не видели."""
+    files_outside_checkout — сколько файлов коммита вне sparse checkout, а
+    submodules_not_checked_out — какие подмодули не скачаны: их модели не видели."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
     return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
-                       "files_outside_checkout": outside, **as_prompt(result)},
+                       "files_outside_checkout": outside,
+                       "submodules_not_checked_out": list(absent), **as_prompt(result)},
                       ensure_ascii=False, indent=2)

@@ -100,12 +100,13 @@ export interface RepositoryMap {
 }
 /**
  * Скан репозитория под идею: путь, как его ввёл человек, коммит рабочей копии (dirty — с
- * незакоммиченными правками), сколько файлов, сколько их вне sparse checkout и проходов. complete — судья счёл исследование
+ * незакоммиченными правками), сколько файлов, сколько их вне sparse checkout, какие подмодули
+ * не скачаны и сколько проходов. complete — судья счёл исследование
  * достаточным; иначе в follow_up — что доисследовать не успели.
  */
 export interface RepositoryScan {
   state: 'running' | 'done' | 'failed'; run: string; idea: string; path: string; commit_sha: string; dirty: boolean
-  files: number; outside: number; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
+  files: number; outside: number; absent: string[]; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
   follow_up: FollowUp[]; error: string | null
 }
 /** Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана scan_run. */

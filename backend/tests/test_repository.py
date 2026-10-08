@@ -602,6 +602,29 @@ def test_a_skip_worktree_file_absent_from_disk_is_a_sparse_checkout_not_an_edit(
     assert not inventory(repo).dirty
 
 
+def test_a_submodule_not_checked_out_is_told_not_hidden(with_submodule):
+    """Подмодуль не скачан: git status молчит, а кода его нет ни на диске, ни в снимке."""
+    git(with_submodule, "submodule", "deinit", "-q", "-f", "vendor/lib")
+    found = inventory(with_submodule)
+    assert found.absent == ("vendor/lib",)
+    assert "подмодули не скачаны: vendor/lib" in inventory_prompt(found)
+    result = map_of({"findings": []}, CONTEXT)
+    told = json.loads(context_prompt(result, "abc", absent=("vendor/lib",)))
+    assert told["submodules_not_checked_out"] == ["vendor/lib"]
+
+
+def test_an_entry_point_named_with_spaces_at_its_ends_is_that_file():
+    """Имя файла бывает и с пробелом в начале или в конце: точную ссылку не обрезаем, обрезанная
+    — лишь запасной ход."""
+    context = Context(files=frozenset({" api/main.py", "api/main.py", "notes.py "}))
+    result = map_of({"findings": [], "flows": [
+        {"name": "Один", "entry_point": " api/main.py:run", "steps": []},
+        {"name": "Два", "entry_point": "notes.py ", "steps": []},
+        {"name": "Три", "entry_point": "  api/main.py  ", "steps": []}]}, context)
+    assert [flow.entry_point for flow in result.flows] == [
+        " api/main.py:run", "notes.py ", "api/main.py"]
+
+
 def test_files_left_out_by_a_sparse_checkout_are_told_not_hidden(repo):
     """Файлов коммита вне sparse checkout нет ни на диске, ни в снимке: модели и следующие шаги
     должны знать, что видели не весь коммит."""
