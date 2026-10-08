@@ -10,6 +10,7 @@
 Список задач может быть и пустым: всё уже реализовано или заблокировано.
 """
 
+import itertools
 import json
 import re
 from collections import Counter
@@ -159,13 +160,16 @@ def candidate_of(item: object, context: Context, gaps: list[Gap], refs: dict[int
     if not outcome_ids:
         raise BadAnswer(f"{what}: ни одного утверждённого итога")
     current = reason_of(item.get("current_state"))
+    scope = texts_of(item.get("scope"))
+    if not scope:
+        raise BadAnswer(f"{what}: нечего делать — scope пуст")
     return Candidate(
         name_of(item.get("id")),
         text_of(item.get("title"), TITLE_MAX, f"{what}, title"),
         text_of(item.get("user_story"), STORY_MAX, f"{what}, user_story"),
         texts_of(item.get("main_entry_points")),
         current if len(current) <= STATE_MAX else "",
-        texts_of(item.get("scope")),
+        scope,
         outcome_ids,
         adrs_in(item.get("adr_ids"), context.adrs),
         fragments_in(item.get("constraint_ids"), context.constraints),
@@ -236,17 +240,20 @@ def cycle_of(issues: list[Candidate]) -> list[str]:
 
 def as_prompt(answer: Answer) -> dict:
     """Задачи для судьи — в той же форме, в какой их просили у участников, и пробелы с их
-    номерами: на них ссылается blocked_by."""
+    номерами: на них ссылается blocked_by. Задача без номера получает номер, которого нет ни у
+    одной другой: иначе судья не отличил бы её от тёзки."""
+    taken = {issue.name for issue in answer.issues if issue.name}
+    free = (f"I{n}" for n in itertools.count(1) if f"I{n}" not in taken)
     return {
         "issues": [{
-            "id": issue.name or f"I{n}", "title": issue.title, "user_story": issue.user_story,
+            "id": issue.name or next(free), "title": issue.title, "user_story": issue.user_story,
             "main_entry_points": list(issue.entry_points), "current_state": issue.current_state,
             "scope": list(issue.scope), "outcome_ids": list(issue.outcome_ids),
             "adr_ids": list(issue.adr_ids),
             "constraint_ids": [f"F{i}" for i in issue.constraint_ids],
             "risk_ids": [f"F{i}" for i in issue.risk_ids],
             "depends_on": list(issue.depends_on), "blocked_by": list(issue.blocked_by),
-        } for n, issue in enumerate(answer.issues, 1)],
+        } for issue in answer.issues],
         "gaps": [{"id": f"G{n}", "question": gap.question, "reason": gap.reason,
                   "outcome_ids": list(gap.outcome_ids)} for n, gap in enumerate(answer.gaps, 1)],
     }
@@ -254,14 +261,19 @@ def as_prompt(answer: Answer) -> dict:
 
 def same_issues(answer: Answer) -> str:
     """Набор задач для сравнения: порядок задач, их пунктов и пробелов модели не держат —
-    одинаковые наборы в разном порядке — один набор."""
+    одинаковые наборы в разном порядке — один набор. Номера задач в ответах свои, поэтому
+    зависимость сравнивается не номером, а тем, на какую задачу он указывает."""
     data = as_prompt(answer)
-    for issue in data["issues"]:
-        issue.pop("id")
+
+    def content(issue: dict) -> str:
+        own = {key: value for key, value in issue.items() if key not in ("id", "depends_on")}
         for key in ("main_entry_points", "scope"):
-            issue[key] = sorted(issue[key])
-    data["issues"] = sorted(json.dumps(issue, ensure_ascii=False, sort_keys=True)
-                            for issue in data["issues"])
-    data["gaps"] = sorted(json.dumps(gap, ensure_ascii=False, sort_keys=True)
-                          for gap in data["gaps"])
-    return json.dumps(data, ensure_ascii=False, sort_keys=True)
+            own[key] = sorted(own[key])
+        return json.dumps(own, ensure_ascii=False, sort_keys=True)
+
+    contents = {issue["id"]: content(issue) for issue in data["issues"]}
+    issues = sorted(json.dumps({"issue": contents[issue["id"]],
+                                "after": sorted(contents[name] for name in issue["depends_on"])},
+                               ensure_ascii=False, sort_keys=True) for issue in data["issues"])
+    gaps = sorted(json.dumps(gap, ensure_ascii=False, sort_keys=True) for gap in data["gaps"])
+    return json.dumps({"issues": issues, "gaps": gaps}, ensure_ascii=False, sort_keys=True)

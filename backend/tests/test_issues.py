@@ -91,3 +91,31 @@ def test_the_same_issues_in_another_order_are_one_set():
     other = issue_set({"issues": [issue("I1", "Выдача"), issue("I2")]}, CONTEXT)
     assert same_issues(one) == same_issues(other)
     assert as_prompt(one)["issues"][0]["constraint_ids"] == ["F5"]
+
+
+def test_issue_sets_with_other_dependency_graphs_are_not_one_set():
+    """Номера в ответах свои: «B после I1» — после разных задач, если I1 — разные задачи."""
+    one = issue_set({"issues": [issue("I1", "А"), issue("I2", "Б", depends_on=["I1"]),
+                                issue("I3", "В")]}, CONTEXT)
+    other = issue_set({"issues": [issue("I1", "В"), issue("I2", "Б", depends_on=["I1"]),
+                                  issue("I3", "А")]}, CONTEXT)
+    assert same_issues(one) != same_issues(other)
+    renumbered = issue_set({"issues": [issue("I5", "А"), issue("I7", "Б", depends_on=["I5"]),
+                                       issue("I9", "В")]}, CONTEXT)
+    assert same_issues(one) == same_issues(renumbered)
+
+
+def test_an_issue_with_nothing_to_do_is_dropped():
+    """Без scope coding agent'у нечего делать и нечем проверить, что готово."""
+    answer = issue_set({"issues": [issue(), issue("I2", "Пусто", scope=[]),
+                                   issue("I3", "Не список", scope="сделать")]}, CONTEXT)
+    assert [found.name for found in answer.issues] == ["I1"]
+
+
+def test_issues_without_a_number_get_one_nobody_else_has_for_the_judge():
+    answer = issue_set({"issues": [issue(None, "Без номера"), issue("I1", "С номером"),
+                                   issue("I2", "Ещё", depends_on=["I1"])]}, CONTEXT)
+    ids = [item["id"] for item in as_prompt(answer)["issues"]]
+    assert ids[1:] == ["I1", "I2"]
+    assert ids[0] not in ("I1", "I2")
+    assert len(set(ids)) == 3

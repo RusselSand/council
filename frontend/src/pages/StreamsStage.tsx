@@ -1454,7 +1454,8 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
         <p className="next-caps">{t('issues.caps')}</p>
         <h2 id="step-title" className="panel-title large">{t('issues.title')}</h2>
         <p className="panel-hint">{t('issues.hint')}</p>
-        <p className="muted">{code}</p>
+        {/* С какого кода нарезали — только у готовой нарезки: идущая или упавшая ещё ничего не прочла. */}
+        {run.state === 'done' && <p className="muted">{code}</p>}
       </section>
       {run.state === 'running' && <p className="muted">{t('issues.cutting')} {t('run.note')}</p>}
       {run.state === 'failed' && (

@@ -270,12 +270,9 @@ def start_outcomes(participants: list[str], judge: str,
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
 
 
-def start_issues(participants: list[str], judge: str, outcomes_run: str,
-                 found: Inventory | None) -> IssueDiscovery:
+def start_issues(participants: list[str], judge: str, outcomes_run: str) -> IssueDiscovery:
+    """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан."""
     return IssueDiscovery(state="running", run=uuid4().hex[:8], outcomes=outcomes_run,
-                          code=found is not None,
-                          commit_sha=found.commit_sha if found else "",
-                          dirty=found.dirty if found else False,
                           steps=steps(participants, judge,
                                       (StepName.issue_discovery, StepName.issue_judge)))
 
@@ -1108,7 +1105,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                  repository: str = context_prompt(None),
                  copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_issues(participants, judge, outcomes.run, found))
+                         start_issues(participants, judge, outcomes.run))
         self.idea = idea
         self.scope = scope
         self.decisions = {decision.question_id: decision for decision in decisions}
@@ -1121,7 +1118,14 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
-        with self._reading(self.found, self.copy):
+        with self._reading(self.found, self.copy) as folder:
+            if folder is not None and self.found is not None:
+                # Снимок есть — модели читают этот код: с какого он коммита и с правками ли.
+                with self._lock:
+                    self.state.code = True
+                    self.state.commit_sha = self.found.commit_sha
+                    self.state.dirty = self.found.dirty
+                    self._publish()
             return self._cut()
 
     def _cut(self) -> dict[str, Any]:

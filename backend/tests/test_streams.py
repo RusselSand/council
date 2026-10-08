@@ -1181,6 +1181,40 @@ def test_a_working_copy_gone_since_the_scan_refuses_the_approval(agents, repos):
     assert streams_of(council_id)["C"].issues is None
 
 
+def test_approving_the_same_outcomes_again_reads_no_code(agents, repos):
+    """Повтор утверждения (ответ потерялся) — те же итоги: рабочую копию не читают, даже если
+    её уже нет, и задачи те же."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    approves(council_id, "C")
+    first = streams_of(council_id)["C"].issues.run
+    shutil.rmtree(repos, onexc=lambda f, p, e: (os.chmod(p, 0o700), f(p)))
+    assert approves(council_id, "C").status_code == 200
+    assert streams_of(council_id)["C"].issues.run == first
+
+
+def test_without_models_a_scanned_stream_is_not_said_to_be_cut_from_code(agents, repos):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    agents.online = set()
+    approves(council_id, "C")
+    issues = streams_of(council_id)["C"].issues
+    assert issues.state == "failed"
+    assert (issues.code, issues.commit_sha) == (False, "")      # кода никто не читал
+
+
 def test_outcomes_of_another_assembly_are_not_approved(agents):
     council_id = grouped()
     confirm(council_id)
@@ -1209,7 +1243,7 @@ def test_nothing_upstream_changes_while_the_issues_are_cut(agents):
     confirm(council_id)
     decided_c(council_id)
     stream = streams_of(council_id)["C"]
-    cutting = start_issues(["sol"], "sol", stream.outcomes.run, None)
+    cutting = start_issues(["sol"], "sol", stream.outcomes.run)
     get_store().update_council(council_id, {"streams": [
         s.model_copy(update={"issues": cutting}) if s.group == "C" else s
         for s in get_store().get_council(council_id).streams]})

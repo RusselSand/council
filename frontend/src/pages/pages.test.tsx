@@ -1086,6 +1086,7 @@ describe('Поток: решения и итоги', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['outcomes.approve'] }))
     expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
     expect(screen.getByText(ru['issues.cutting'], { exact: false })).toBeTruthy()
+    expect(screen.queryByText('По коду коммита abcdef12.')).toBeNull()                 // ещё не прочитан
     expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes',
                                    body: { run: 'g1', revision: 0, outcomes_run: 'o1' } }])
   })

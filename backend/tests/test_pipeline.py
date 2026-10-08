@@ -981,3 +981,4 @@ def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
     result, _ = cut({}, copy=broken)
     assert result.state == "failed"
     assert "менялась" in result.error
+    assert (result.code, result.commit_sha) == (False, "")      # снимка нет — кода не читали

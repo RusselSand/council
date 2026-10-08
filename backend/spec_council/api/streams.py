@@ -717,7 +717,11 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
 
     # Сначала дешёвое: лишний запрос не должен ждать git на большой рабочей копии ради 409.
     with council_lock:
-        council, _ = plan()
+        council, anew = plan()
+    if not anew:
+        # Те же итоги (повтор, ответ потерялся): ничего не меняется, и код не читаем — его
+        # может уже и не быть.
+        return council
     found = code_of(stream_in(council, group), repositories)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -727,7 +731,7 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
             return council, runs
         if missing:
             issues = unconnected(start_issues(council.participants, council.judge,
-                                              edit.outcomes_run, found), missing)
+                                              edit.outcomes_run), missing)
         else:
             runs = [issue_run(council, group, stream, found, agents, store)]
             issues = runs[0].state.model_copy(deep=True)
