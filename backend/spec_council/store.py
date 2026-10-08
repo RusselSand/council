@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from .models import (
+    SKIPPED,
     STREAM_RUNS,
     Council,
     CouncilStatus,
@@ -24,6 +25,8 @@ from .models import (
     OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
+    RepositoryScan,
+    RepositoryStep,
     Slicing,
     Structure,
 )
@@ -121,7 +124,7 @@ class FileStore(InMemoryStore):
                 # Файл не трогаем: его можно поправить руками, и при следующем старте он вернётся.
                 log.warning("Совет из %s не прочитан, его нет в списке: %s", path, exc)
                 continue
-            stopped = interrupted(council)
+            stopped = interrupted(migrated(council))
             if stopped is not council:
                 self._keep(stopped)
             councils.append(stopped)
@@ -162,6 +165,20 @@ def writable(folder: Path) -> None:
             "под кем работает бэкенд, — см. README, «Где хранятся советы»") from exc
 
 
+def migrated(council: Council) -> Council:
+    """Совет, сохранённый до шага «Репозиторий»: у потока, где вопросы уже искали, шаг
+    считается пропущенным, и вопросы — найденными без карты. Иначе он вернулся бы на этот шаг,
+    а «Пропустить» пересчитало бы всё, что ниже. Менять нечего — тот же совет."""
+    streams = [stream.model_copy(update={
+        "repository": RepositoryStep(by="skipped"),
+        "questions": stream.questions.model_copy(update={"repository": SKIPPED})})
+        if stream.questions is not None and stream.repository is None else stream
+        for stream in council.streams or []]
+    if streams == (council.streams or []):
+        return council
+    return council.model_copy(update={"streams": streams})
+
+
 def interrupted(council: Council) -> Council:
     """Совет, прочитанный после перезапуска. Ходы, которые шли, уже не идут: процесс с ними
     остановлен. Записываем их упавшими — тогда их можно запустить снова, а ответы, за которые
@@ -180,13 +197,13 @@ def interrupted(council: Council) -> Council:
     return council.model_copy(update=changes) if changes else council
 
 
-def running(state: Slicing | Structure | IdeaDiscovery | QuestionDiscovery | ProposalDiscovery
-            | DecisionAnalysis | OutcomeDiscovery | None) -> bool:
+def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
+            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery | None) -> bool:
     return state is not None and state.state == "running"
 
 
-def halted[S: (Slicing, Structure, IdeaDiscovery, QuestionDiscovery, ProposalDiscovery,
-               DecisionAnalysis, OutcomeDiscovery)](state: S) -> S:
+def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
+               ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

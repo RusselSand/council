@@ -128,11 +128,13 @@ class AgentRunner:
             answers = pool.map(lambda alias: self.available(alias, fresh=fresh), unique)
             return dict(zip(unique, answers, strict=True))
 
-    def ask(self, model: str, prompt: str, key: str) -> str:
-        # Вход проверяет сам run (ensure_login): нет его — LoginRequired ниже.
+    def ask(self, model: str, prompt: str, key: str, workspace: Path | None = None) -> str:
+        # Вход проверяет сам run (ensure_login): нет его — LoginRequired ниже. С каталогом
+        # ход идёт в нём, и модель его только читает (agent-workers: workspace).
+        request = {"user": prompt, **({"workspace": str(workspace)} if workspace else {})}
         with self._locks[model]:
             try:
-                result = self._worker(model).run({"user": prompt}, key=key,
+                result = self._worker(model).run(request, key=key,
                                                   stop=STOP.is_set, ensure_login=True)
             except LoginRequired as exc:
                 login = f"python -m agent_workers login с AGENT_HOME={self.home(model)}"

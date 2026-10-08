@@ -8,6 +8,7 @@
 **/__pycache__/
 **/.pytest_cache/
 **/.ruff_cache/
+.repos/
 **/*.tsbuildinfo
 # Секреты: токен приходит build secret'ом, а не файлом из контекста сборки.
 **/.env

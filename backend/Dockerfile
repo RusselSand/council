@@ -8,7 +8,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# git нужен uv, чтобы забрать зависимость agent-workers из GitHub. Claude Code и Codex — CLI,
+# git нужен uv, чтобы забрать зависимость agent-workers из GitHub, и скану репозитория: его
+# inventory — список файлов рабочей копии от git. Claude Code и Codex — CLI,
 # через которые agent-workers зовёт модели совета. Версии закреплены, как в kromka-agent-worker:
 # разбор ответов завязан на их вывод, и тихое обновление внутри образа было бы тихой поломкой.
 ARG CLAUDE_CODE_VERSION=2.1.282

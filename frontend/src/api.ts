@@ -4,7 +4,8 @@ export const LABELS = ['idea', 'question', 'proposal', 'constraint', 'risk'] as 
 export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
-  | 'idea_discovery' | 'idea_judge' | 'question_discovery' | 'question_judge'
+  | 'idea_discovery' | 'idea_judge' | 'repository_discovery' | 'repository_judge'
+  | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
   | 'outcome_discovery' | 'outcome_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
@@ -76,6 +77,40 @@ export interface IdeaDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; steps: Step[]
   options: IdeaOption[]; proposal: IdeaProposal | null; error: string | null
 }
+/** Где в репозитории подтверждение: файл, строки, символ. */
+export interface Evidence { path: string; lines: string | null; symbol: string | null }
+/** Факт о том, как система устроена сейчас: verified — подтверждён кодом, inferred — вывод, unknown — не установлен. */
+export interface RepositoryFinding {
+  id: string; statement: string; status: 'verified' | 'inferred' | 'unknown'; evidence: Evidence[]; relevance: string
+}
+/** Как поведение проходит через систему: откуда начинается и через что идёт. */
+export interface RepositoryFlow {
+  name: string; entry_point: string; steps: { description: string; finding_ids: string[] }[]
+}
+export interface CoverageArea {
+  area: string; status: 'covered' | 'partial' | 'not_investigated' | 'not_applicable'; evidence_ids: string[]; reason: string
+}
+export interface RepositoryUnknown { question: string; reason: string; investigate: string[] }
+/** Задание на доисследование от судьи. */
+export interface FollowUp { objective: string; reason: string; targets: string[]; related_finding_ids: string[] }
+/** Проверенная карта существующей реализации — как система устроена сейчас, а не как её менять. */
+export interface RepositoryMap {
+  findings: RepositoryFinding[]; flows: RepositoryFlow[]; coverage: CoverageArea[]; unknowns: RepositoryUnknown[]
+  documentation_conflicts: string[]
+}
+/**
+ * Скан репозитория под идею: путь, как его ввёл человек, коммит рабочей копии (dirty — с
+ * незакоммиченными правками), сколько файлов, сколько их вне sparse checkout, чего нет в снимке
+ * (нескачанные подмодули, ссылки — с причиной) и сколько проходов. complete — судья счёл исследование
+ * достаточным; иначе в follow_up — что доисследовать не успели.
+ */
+export interface RepositoryScan {
+  state: 'running' | 'done' | 'failed'; run: string; idea: string; path: string; commit_sha: string; dirty: boolean
+  files: number; outside: number; omitted: string[]; omitted_count: number; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
+  follow_up: FollowUp[]; error: string | null
+}
+/** Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана scan_run. */
+export interface RepositoryStep { by: 'skipped' | 'scan'; scan_run: string }
 /** Идея потока, утверждённая человеком: записана в тексте, вариант совета как есть или своя. */
 export interface StreamIdea { text: string; by: 'text' | 'council' | 'human'; evidence: number[] }
 /**
@@ -86,9 +121,9 @@ export interface OpenQuestion {
   id: string; text: string; source: 'user' | 'inferred' | 'discovered' | 'added'
   source_question_id: number | null; proposal_ids: number[]; reason: string | null
 }
-/** Поиск вопросов к утверждённой идее (idea — к какой): идёт в фоне, фронт опрашивает совет. */
+/** Поиск вопросов к утверждённой идее (idea — к какой; repository — с какой картой): идёт в фоне. */
 export interface QuestionDiscovery {
-  state: 'running' | 'done' | 'failed'; run: string; idea: string; steps: Step[]
+  state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; steps: Step[]
   questions: OpenQuestion[]; error: string | null
 }
 /**
@@ -154,12 +189,14 @@ export interface OutcomeDiscovery {
 }
 /**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
- * тексте; questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
+ * тексте; scan — необязательный скан репозитория под идею, repository — как прошли этот шаг
+ * (карта идёт во все следующие); questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
  * proposals — поиск вариантов к ним; choices — выбор по каждому; analysis — его проверка;
  * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
+  scan: RepositoryScan | null; repository: RepositoryStep | null
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
@@ -178,6 +215,8 @@ export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participant
 export interface Model { alias: string; short_name: string; display_name: string; cli: string; available: boolean }
 export interface Settings {
   models: Model[]; min_participants: number; default_participants: string[]; default_judge: string
+  /** Каталог репозиториев для скана (COUNCIL_REPOS): пути — от него; null — путь абсолютный. */
+  repositories: string | null
 }
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
@@ -236,6 +275,18 @@ export const api = {
   /** Искать идею потока заново: после сбоя или без подключения к моделям. */
   seekIdea: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
+  /** Сканировать репозиторий под идею потока: путь — от каталога репозиториев или абсолютный. */
+  scanRepository: (id: string, at: GroupsVersion, group: string, path: string, idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository/scan`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, path, idea }),
+    }),
+  /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Совет сразу ищет вопросы. */
+  approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+    }),
   /** Искать вопросы к идее потока заново: после сбоя или без подключения к моделям. */
   seekQuestions: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/questions/discovery`, { method: 'POST' }),
@@ -326,9 +377,9 @@ export const structureIsStale = (council: Council): boolean => {
 export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
-/** Ходы потока: поиск идеи, вопросов, вариантов, проверка выбора и сборка итогов. */
+/** Ходы потока: поиск идеи, скан репозитория, поиск вопросов, вариантов, проверка выбора и сборка итогов. */
 export const searchesOf = (stream: Stream) =>
-  [stream.discovery, stream.questions, stream.proposals, stream.analysis, stream.outcomes]
+  [stream.discovery, stream.scan, stream.questions, stream.proposals, stream.analysis, stream.outcomes]
 
 /** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
 export const seeking = (council: Council): boolean =>

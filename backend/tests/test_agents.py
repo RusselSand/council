@@ -2,9 +2,15 @@
 
 import subprocess
 import threading
+from pathlib import Path
+
+import pytest
+from agent_workers.base import Profile, Worker
+from agent_workers.testing import QUIET, FakeAdapter
 
 from spec_council.agents import AgentRunner
 from spec_council.config import Agent
+from spec_council.pipeline import ModelFailed
 
 
 class Login:
@@ -93,3 +99,20 @@ def test_jobs_still_queued_at_shutdown_run_against_stop_instead_of_vanishing():
     threading.Timer(0.2, gate.set).start()
     agents.shutdown()
     assert seen == [True] * 6
+
+
+def test_a_workspace_reaches_the_model_through_agent_workers(tmp_path, monkeypatch):
+    """Каталог для чтения доходит до провайдера проверенным — это умеет agent-workers ≥ 0.2.0;
+    прежний молча его выбрасывал бы, и скан шёл бы вслепую."""
+    # STOP мог поднять другой тест (остановка пула) — у этого хода своя, опущенная.
+    monkeypatch.setattr("spec_council.agents.STOP", threading.Event())
+    adapter = FakeAdapter(tmp_path)
+    worker = Worker(adapter, Profile("sol", tmp_path / "home"), tmp_path / "runs", QUIET)
+    runner = AgentRunner({"sol": Agent(provider="codex", model="gpt-5.6-sol")})
+    monkeypatch.setattr(runner, "_worker", lambda alias: worker)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert runner.ask("sol", "привет", "k1", workspace=Path(f"{repo}/../repo")) == "привет"
+    assert adapter.asked[-1]["workspace"] == str(repo.resolve())
+    with pytest.raises(ModelFailed, match="workspace"):
+        runner.ask("sol", "привет", "k2", workspace=tmp_path / "нет")

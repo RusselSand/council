@@ -3,7 +3,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
   Council, CouncilPatch, DecisionAnalysis, IdeaDiscovery, Label, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
-  Settings, Slicing, Stream, StreamIdea, Structure,
+  RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -23,7 +23,7 @@ const SETTINGS: Settings = {
     { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude', available: true },
     { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini', available: false },
   ],
-  min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable',
+  min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -104,7 +104,7 @@ const FOUND: IdeaDiscovery = {
 /** Идея группы A — из текста: F1. */
 const TEXT_IDEA: StreamIdea = { text: 'Хочу воркер.', by: 'text', evidence: [1] }
 const QUESTIONS_SEEKING: QuestionDiscovery = {
-  state: 'running', run: 'q1', idea: 'Хочу воркер.', questions: [], error: null, steps: [
+  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', questions: [], error: null, steps: [
     { name: 'question_discovery', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'question_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
   ],
@@ -122,6 +122,8 @@ const QUESTIONS_FOUND: QuestionDiscovery = {
       proposal_ids: [], reason: 'без меры идею не проверить' },
   ],
 }
+/** Шаг «Репозиторий» пропущен: так у потока с утверждённой идеей, если тест не скажет иначе. */
+const SKIPPED = { by: 'skipped' as const, scan_run: '' }
 /**
  * Совет с подтверждёнными группами: у A идея записана в тексте, у B её ищет совет. more —
  * что ещё у потоков: вопросы, отбор.
@@ -131,10 +133,12 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
                    more: Partial<Record<'A' | 'B', Partial<Stream>>> = {}): Council => ({
   ...COUNCIL, status: 'review', slicing: DONE, structure,
   streams: [
-    { group: 'A', discovery: null, idea: ideas.A ?? null, questions: null, scope: null, proposals: null, choices: null,
-      analysis: null, decisions: null, outcomes: null, ...more.A },
-    { group: 'B', discovery: search, idea: ideas.B ?? null, questions: null, scope: null, proposals: null, choices: null,
-      analysis: null, decisions: null, outcomes: null, ...more.B },
+    { group: 'A', discovery: null, idea: ideas.A ?? null, scan: null, repository: ideas.A ? SKIPPED : null,
+      questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
+      ...more.A },
+    { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
+      questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
+      ...more.B },
   ] satisfies Stream[],
 })
 
@@ -184,7 +188,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|(?:questions|proposals|outcomes)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|(?:questions|proposals|outcomes)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -394,14 +398,18 @@ describe('Поток: группа и идея', () => {
     renderAt(`/councils/demo-1/streams/${group}`)
   }
 
-  it('идея из текста: её только утверждают, и поток уходит к вопросам — их ищет ИИ', async () => {
-    openStream('A', () => confirmed(),
-               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } })))
+  it('идея из текста: её только утверждают, шаг «Репозиторий» пропускают — и вопросы ищет ИИ', async () => {
+    const approved = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null } })
+    openStream('A', () => confirmed(), () => json(streamCalls.length === 1 ? approved
+      : confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } })))
     expect(await screen.findByText(ru['idea.textNote'])).toBeTruthy()
     expect(screen.queryByRole('textbox')).toBeNull()
     fireEvent.click(approveButton())
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.skip'] }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } }])
+    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } },
+                                 { group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } }])
     expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
     expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
@@ -413,7 +421,8 @@ describe('Поток: группа и идея', () => {
 
   it('идеи нет: в поле — выбор судьи, другой вариант можно взять и поправить', async () => {
     const mine = 'Результат переживает падение воркера'
-    openStream('B', () => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } })))
+    openStream('B', () => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } },
+                                                            { B: { repository: null } })))
     const field = await ideaField()
     expect(field.value).toBe('Результат переживает сбой')
     expect(screen.getByText('почему: F2 — шире')).toBeTruthy()
@@ -431,7 +440,7 @@ describe('Поток: группа и идея', () => {
     expect(screen.queryByText(/почему:/)).toBeNull()
     expect(screen.getByText(ru['idea.byYou'], { selector: '.source-tag' })).toBeTruthy()
     fireEvent.click(approveButton())
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'B', action: 'idea', body: { run: 'g1', revision: 0, text: mine } }])
   })
 
@@ -455,10 +464,10 @@ describe('Поток: группа и идея', () => {
     expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
     const segments = within(now).getAllByRole('listitem')
     expect(segments.map(segment => segment.className)).toEqual([
-      'segment running', 'segment idle', 'segment idle', 'segment idle', 'segment idle'])
+      'segment running', ...Array(5).fill('segment idle')])
     expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
     expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
-      ` (${ru['light.running']})`, ...Array(4).fill(` (${ru['light.idle']})`)])
+      ` (${ru['light.running']})`, ...Array(5).fill(` (${ru['light.idle']})`)])
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
@@ -513,7 +522,7 @@ describe('Поток: группа и идея', () => {
       vi.advanceTimersByTime(POLL_MS)               // опрос ушёл до утверждения, ответа пока нет
       expect(pending).toHaveLength(1)
       fireEvent.click(approveButton())
-      expect(await screen.findByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
+      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
 
       pending[0](confirmed(FOUND))                  // в нём A ещё без идеи и без поиска вопросов
       await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
@@ -524,7 +533,6 @@ describe('Поток: группа и идея', () => {
       pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }))
       await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.group.yours']))
       expect(link(/Воркер/).textContent).toContain(ru['streams.questions.yours'])
-      expect(await screen.findByText('Где хранить состояние?')).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }
@@ -738,6 +746,100 @@ describe('Поток: группа и идея', () => {
   })
 })
 
+
+describe('Поток: репозиторий', () => {
+  const openStream = (council: () => Council, stream?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, stream }))
+    renderAt('/councils/demo-1/streams/A')
+  }
+  const SCANNED: RepositoryScan = {
+    state: 'done', run: 'sc1', idea: TEXT_IDEA.text, path: 'project', commit_sha: 'abcdef1234567890', dirty: true,
+    files: 12, outside: 3, omitted: ['vendor/lib/ — подмодуль не скачан'], omitted_count: 1, rounds: 3, complete: false, error: null,
+    steps: [{ name: 'repository_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+            { name: 'repository_judge', state: 'done', runs: [run('fable', 'done')] }],
+    result: {
+      findings: [
+        { id: 'R1', statement: 'Состояние пишется в state.json', status: 'verified',
+          evidence: [{ path: 'worker/state.py', lines: '10-30', symbol: 'save' }], relevance: 'там же надо хранить итог' },
+        { id: 'R2', statement: 'Повторы не дедуплицируются', status: 'inferred', evidence: [], relevance: '' },
+      ],
+      flows: [{ name: 'Ход воркера', entry_point: 'worker/main.py',
+                steps: [{ description: 'берёт задачу из очереди', finding_ids: ['R1'] }] }],
+      coverage: [{ area: 'Хранение', status: 'covered', evidence_ids: ['R1'], reason: '' },
+                 { area: 'Очередь', status: 'not_investigated', evidence_ids: [], reason: 'вне репозитория' }],
+      unknowns: [{ question: 'Кто чистит state.json?', reason: 'влияет на потерю', investigate: ['cron'] }],
+      documentation_conflicts: ['README обещает базу, а в коде файлы'],
+    },
+    follow_up: [{ objective: 'Проверить очередь', reason: '', targets: ['infra/queue.yml'], related_finding_ids: [] }],
+  }
+  /** Поток A: идея из текста утверждена, шаг «Репозиторий» ещё не пройден. */
+  const atStep = (more: Partial<Stream> = {}) =>
+    confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, ...more } })
+  const path = () => screen.getByRole('textbox', { name: ru['repository.path'] }) as HTMLInputElement
+
+  it('идею поменяли в другой вкладке (409) — ошибка у скана, и новый скан — уже к нынешней идее', async () => {
+    let current = atStep()
+    openStream(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: { ...TEXT_IDEA, text: 'Другая идея.' } }, { A: { repository: null } })
+      return json({ detail: 'Идею потока поменяли — посмотрите на новую и повторите' }, 409)
+    })
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
+    fireEvent.change(path(), { target: { value: 'project' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Идею потока поменяли — посмотрите на новую и повторите')
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    await waitFor(() => expect(streamCalls).toHaveLength(2))
+    expect(streamCalls[1].body).toMatchObject({ idea: 'Другая идея.' })
+  })
+
+  it('скан запускают по пути к рабочей копии; пока он идёт, шаг не пройти', async () => {
+    const scanning: RepositoryScan = { ...SCANNED, state: 'running', rounds: 0, result: null, follow_up: [] }
+    openStream(() => atStep(), () => json(atStep({ scan: scanning })))
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
+    expect(path().placeholder).toBe(ru['repository.pathAbsolute'])
+    fireEvent.change(path(), { target: { value: 'D:\\PROJECTS\\worker' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    expect(await screen.findByText('ИИ исследует репозиторий, проход 1 из 3.', { exact: false })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'repository/scan',
+                                   body: { run: 'g1', revision: 0, path: 'D:\\PROJECTS\\worker', idea: TEXT_IDEA.text } }])
+    expect(screen.getByText(ru['repository.capsAi'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
+  })
+
+  it('карта скана видна по разделам; утверждённая — к вопросам', async () => {
+    openStream(() => atStep({ scan: SCANNED }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { scan: SCANNED, repository: { by: 'scan', scan_run: 'sc1' }, questions: QUESTIONS_SEEKING } })))
+    expect(await screen.findByText('Состояние пишется в state.json')).toBeTruthy()
+    expect(path().value).toBe('project')
+    expect(screen.getByText('project · коммит abcdef12 · файлов: 12 · проходов: 3')).toBeTruthy()
+    expect(screen.getByText(ru['repository.dirty'])).toBeTruthy()
+    expect(screen.getByText(ru['repository.outside'].replace('{{count}}', '3'))).toBeTruthy()
+    expect(screen.getByText(ru['repository.omitted'].replace('{{count}}', '1').replace('{{items}}', 'vendor/lib/ — подмодуль не скачан'))).toBeTruthy()
+    expect(screen.getByText('worker/state.py · 10-30 · save')).toBeTruthy()
+    expect(screen.getByText(ru['repository.status.verified'])).toBeTruthy()
+    expect(screen.getAllByText(ru['repository.status.inferred'])).toHaveLength(1)
+    expect(screen.getByText('Проверить очередь — infra/queue.yml')).toBeTruthy()
+    expect(screen.getByText(ru['repository.coverage.not_investigated'])).toBeTruthy()
+    expect(screen.getByText('Кто чистит state.json? — влияет на потерю')).toBeTruthy()
+    expect(screen.getByText('README обещает базу, а в коде файлы')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.approve'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1', idea: TEXT_IDEA.text } }])
+  })
+
+  it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {
+    const failed: RepositoryScan = { ...SCANNED, state: 'failed', result: null, error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    openStream(() => atStep({ scan: failed }))
+    expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
+    expect(screen.getByText(ru['repository.failedNote'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['repository.scan'] }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
+  })
+})
 
 describe('Поток: решения и итоги', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>) => {

@@ -1,6 +1,7 @@
 """Конвейер нарезки и разметки на поддельных моделях: кто что получает и когда нужен судья."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -22,8 +23,10 @@ from spec_council.pipeline import (
     OutcomeRun,
     ProposalRun,
     QuestionRun,
+    RepositoryRun,
     SlicingRun,
 )
+from spec_council.repository import Inventory
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -52,10 +55,12 @@ class FakeRunner:
         self.keys: list[str] = []
         self.forgotten: list[str] = []
         self.identities: dict[str, str] = {}
+        self.workspaces: dict[tuple[str, str], object] = {}
 
-    def ask(self, model, prompt, key):
+    def ask(self, model, prompt, key, workspace=None):
         step = next(s for s in STEPS if f"-{s}-{model}-" in key)
         self.asked[step, model] = prompt
+        self.workspaces[step, model] = workspace
         self.keys.append(key)
         reply = self.replies[step, model]
         if callable(reply):
@@ -785,3 +790,118 @@ def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
                           ("outcome_discovery", "fable"): {"outcomes": [gap]}})
     [found] = result.outcomes
     assert (found.blocked_by, found.gaps) == (["Q2"], [])
+
+
+
+# --- скан репозитория
+
+FOUND_REPO = Inventory(root=Path("/repos/project"), commit_sha="abc123", dirty=False,
+                       files=("api/deps.py", "api/routes.py"))
+FACT = {"id": "R1", "statement": "Контекст запроса — из зависимостей.", "status": "verified",
+        "evidence": [{"path": "api/deps.py", "symbol": "get_context"}], "relevance": "вход"}
+CHECK_PROXY = {"objective": "Проверить авторизацию в прокси", "targets": ["Caddyfile"]}
+
+
+def copy_as(fingerprint):
+    """Снимок без файлов: каталог настоящий, а отпечаток и состав — какие скажут."""
+    return lambda found, into: (fingerprint, frozenset(found.files))
+
+
+def scan(replies, copy=None):
+    runner, reports = FakeRunner(replies), []
+    result = RepositoryRun("c1", FIND, "project", FOUND_REPO, GROUP_FRAGMENTS, ["sol", "fable"],
+                           "fable", runner, reports.append,
+                           copy=copy or copy_as("снимок-1")).run()
+    return result, runner, reports
+
+
+def judge_until(rounds_needed):
+    """Судья просит доисследовать, пока не увидит столько прежних находок."""
+    def reply(prompt):
+        earlier = section(prompt, "PREVIOUS FINDINGS")
+        done = earlier != "[]" if rounds_needed == 2 else False
+        return {"status": "complete" if done else "needs_investigation", "findings": [FACT],
+                "follow_up": [] if done else [CHECK_PROXY]}
+    return reply
+
+
+def test_a_scan_reads_the_working_copy_and_follows_up_on_the_judges_gaps():
+    found = {"findings": [FACT], "flows": [], "coverage": [], "unknowns": []}
+    result, runner, reports = scan({("repository_discovery", "sol"): found,
+                                    ("repository_discovery", "fable"): found,
+                                    ("repository_judge", "fable"): judge_until(2)})
+    assert result.state == "done"
+    assert (result.rounds, result.complete, result.follow_up) == (2, True, [])
+    assert [f.id for f in result.result.findings] == ["R1"]
+    assert (result.commit_sha, result.files, result.path) == ("abc123", 2, "project")
+    # Второй проход участников — по заданиям судьи; судья видит прежнюю карту.
+    assert "Проверить авторизацию в прокси" in section(
+        runner.asked["repository_discovery", "sol"], "ADDITIONAL INVESTIGATION REQUESTS")
+    assert "get_context" in section(runner.asked["repository_judge", "fable"], "PREVIOUS FINDINGS")
+    assert "api/routes.py" in section(runner.asked["repository_discovery", "sol"],
+                                      "REPOSITORY INVENTORY")
+    # Модели — и участники, и судья — читают один снимок, а не саму рабочую копию; после скана
+    # его нет.
+    [place] = set(runner.workspaces.values())
+    assert place != FOUND_REPO.root
+    assert place.name.startswith("council-scan-")
+    assert not place.exists()
+    judge_prompt = runner.asked["repository_judge", "fable"]
+    assert '"sol"' not in judge_prompt and '"fable"' not in judge_prompt
+    assert any(r.rounds == 1 and r.state == "running" for r in reports)   # проход виден сразу
+
+
+def test_after_three_rounds_the_scan_ends_with_what_it_has():
+    found = {"findings": [FACT]}
+    result, _, _ = scan({("repository_discovery", "sol"): found,
+                         ("repository_discovery", "fable"): found,
+                         ("repository_judge", "fable"): judge_until(None)})
+    assert result.state == "done"
+    assert (result.rounds, result.complete) == (3, False)
+    assert [f.objective for f in result.follow_up] == ["Проверить авторизацию в прокси"]
+
+
+def test_the_repository_map_reaches_the_next_steps():
+    same = asked((HOW, "inferred", None, ["F2"]))
+    _, runner = question_it_with({("question_discovery", "sol"): same,
+                                  ("question_discovery", "fable"): same})
+    assert section(runner.asked["question_discovery", "sol"], "REPOSITORY CONTEXT").endswith(
+        "КАРТА РЕПОЗИТОРИЯ")
+    assert runner.workspaces["question_discovery", "sol"] is None    # дальше код не читают
+    same_set = {"outcomes": [result_of("Поиск")]}
+    runner = FakeRunner({("outcome_discovery", "sol"): same_set,
+                         ("outcome_discovery", "fable"): same_set})
+    OutcomeRun("c1", FIND, [SEARCH, WHERE], DECIDED, FOUND, GROUP_FRAGMENTS, ["sol", "fable"],
+               "fable", runner, lambda _: None, repository="КАРТА РЕПОЗИТОРИЯ").run()
+    assert section(runner.asked["outcome_discovery", "sol"], "REPOSITORY CONTEXT").endswith(
+        "КАРТА РЕПОЗИТОРИЯ")
+
+
+def question_it_with(replies):
+    runner = FakeRunner(replies)
+    result = QuestionRun("c1", FIND, QUESTION_FRAGMENTS, ["sol", "fable"], "fable", runner,
+                         lambda _: None, repository="r1",
+                         repository_map="КАРТА РЕПОЗИТОРИЯ").run()
+    return result, runner
+
+
+def test_another_snapshot_is_a_new_call_not_a_free_retry():
+    """Промпт тот же (коммит, inventory), а код в снимке другой — оплаченный ответ к прежнему
+    коду не годится; тот же код — тот же ключ."""
+    found = {"findings": [FACT]}
+    replies = {("repository_discovery", "sol"): found, ("repository_discovery", "fable"): found,
+               ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
+    _, first, _ = scan(replies)
+    _, same, _ = scan(replies)
+    _, other, _ = scan(replies, copy=copy_as("снимок-2"))
+    assert first.keys == same.keys
+    assert set(first.keys).isdisjoint(other.keys)
+
+
+def test_evidence_counts_only_files_that_made_it_into_the_snapshot():
+    """Файл из inventory, который не скопировался (пропал, не читается), модели не видели."""
+    replies = {("repository_discovery", "sol"): {"findings": [FACT]},
+               ("repository_discovery", "fable"): {"findings": [FACT]},
+               ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
+    result, _, _ = scan(replies, copy=lambda found, into: ("снимок", frozenset({"api/routes.py"})))
+    assert [(f.status, f.evidence) for f in result.result.findings] == [("inferred", [])]

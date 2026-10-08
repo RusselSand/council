@@ -15,8 +15,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# git нужен uv для agent-workers; Claude Code и Codex — CLI моделей совета. Версии — как в
-# backend/Dockerfile: разбор ответов завязан на их вывод.
+# git нужен uv для agent-workers и скану репозитория (inventory); Claude Code и Codex — CLI
+# моделей совета. Версии — как в backend/Dockerfile: разбор ответов завязан на их вывод.
 ARG CLAUDE_CODE_VERSION=2.1.282
 ARG CODEX_VERSION=0.155.0
 RUN apt-get update \

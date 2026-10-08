@@ -4,7 +4,7 @@ import { ApiError, type Council } from './api'
 
 /** Чем объяснить отказ, если сервер своих слов не дал. */
 type Failed = 'start.failed' | 'groups.editFailed' | 'idea.approveFailed' | 'questions.approveFailed'
-  | 'options.approveFailed' | 'decisions.approveFailed'
+  | 'options.approveFailed' | 'decisions.approveFailed' | 'repository.approveFailed'
 
 /**
  * Действие с кнопки, которое сервер может отклонить: запуск хода совета, правка групп,
