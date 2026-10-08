@@ -294,6 +294,7 @@ export const ru = {
   'chain.issuesGaps': 'пробелов: {{count}}',
   'chain.issuesUncovered': 'вне задач: {{ids}}',
   'chain.issuesLost': 'вне итогов и задач: {{ids}}',
+  'chain.issuesVague': 'без критериев: {{ids}}',
   'chain.issuesReady': 'готово {{count}} из {{total}}',
 
   'idea.caps': 'Группа · вы',
@@ -512,6 +513,7 @@ export const ru = {
   'issues.uncoveredTitle': 'Итоги без задач',
   'issues.heldBy': 'держит {{ids}}',
   'issues.lostDecisions': 'Решения, не вошедшие ни в один итог, нет и в задачах: {{ids}}.',
+  'issues.vagueOutcomes': 'У итогов нет критериев готовности: {{ids}} — задачи по ним не проверить.',
   'issues.change': 'Изменить итоги',
 
   'run.note': 'Это занимает минуты. Страницу можно закрыть: работа идёт на сервере.',

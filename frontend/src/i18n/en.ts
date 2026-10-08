@@ -298,6 +298,7 @@ export const en: Dict = {
   'chain.issuesGaps': 'gaps: {{count}}',
   'chain.issuesUncovered': 'outside the issues: {{ids}}',
   'chain.issuesLost': 'outside the outcomes and issues: {{ids}}',
+  'chain.issuesVague': 'no criteria: {{ids}}',
   'chain.issuesReady': 'ready {{count}} of {{total}}',
 
   'idea.caps': 'Group · you',
@@ -516,6 +517,7 @@ export const en: Dict = {
   'issues.uncoveredTitle': 'Outcomes without issues',
   'issues.heldBy': 'held by {{ids}}',
   'issues.lostDecisions': 'Decisions left out of every outcome are not in the issues either: {{ids}}.',
+  'issues.vagueOutcomes': 'Outcomes without acceptance criteria: {{ids}} — their issues cannot be checked.',
   'issues.change': 'Change the outcomes',
 
   'run.note': 'This takes minutes. You can close the page: the work goes on on the server.',

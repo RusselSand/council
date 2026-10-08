@@ -200,6 +200,10 @@ describe('светофор', () => {
     const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                             { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))
     expect(streamLight(unplaced)).toBe('yours')
+    // Итог без критериев готовности: задачу по нему не проверить — тоже не зелёный.
+    const vague = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
+                         assembled('done', [result({ acceptance_criteria: [] })]), cut('done', [task()]))
+    expect(streamLight(vague)).toBe('yours')
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {

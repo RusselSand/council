@@ -49,7 +49,8 @@ export const currentStep = (stream: Stream): ChainStep => {
  * Утверждённая идея проходит шаг, и прежний поиск идеи, даже упавший, уже не важен. Итоги
  * проходит их утверждение: до него ход за вами. Задачи — последний шаг: нарезаны, ни одну не
  * держит пробел или открытый вопрос, пробелов нет, каждый итог вошёл в задачу и каждое решение —
- * в итог — зелёные; иначе ход за вами, как и если не нарезалось ни одной.
+ * в итог, а у каждого итога есть критерии готовности — зелёные; иначе ход за вами, как и если не
+ * нарезалось ни одной.
  */
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
@@ -62,8 +63,10 @@ export const chainLight = (stream: Stream, step: ChainStep): Light => {
     const issues = stream.issues
     // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла.
     const lost = stream.outcomes?.uncovered_adr_ids.length ?? 0
+    // Итог без критериев готовности: задачи по нему не проверить.
+    const vague = stream.outcomes?.outcomes.some(outcome => outcome.acceptance_criteria.length === 0) ?? false
     const ready = issues.issues.length > 0 && issues.issues.every(issueReady) && issues.gaps.length === 0
-      && issues.uncovered_outcome_ids.length === 0 && lost === 0
+      && issues.uncovered_outcome_ids.length === 0 && lost === 0 && !vague
     return ofRun(issues) ?? (ready ? 'done' : 'yours')
   }
   return 'idle'

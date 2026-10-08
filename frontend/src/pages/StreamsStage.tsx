@@ -292,6 +292,8 @@ function issuesStatus(stream: Stream, t: T): string {
   if (run.uncovered_outcome_ids.length > 0) return t('chain.issuesUncovered', { ids: run.uncovered_outcome_ids.join(', ') })
   const lost = stream.outcomes?.uncovered_adr_ids ?? []
   if (lost.length > 0) return t('chain.issuesLost', { ids: lost.join(', ') })
+  const vague = (stream.outcomes?.outcomes ?? []).filter(o => o.acceptance_criteria.length === 0).map(o => o.id)
+  if (vague.length > 0) return t('chain.issuesVague', { ids: vague.join(', ') })
   return t('chain.issuesReady', { count: total, total })
 }
 
@@ -1445,6 +1447,8 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
   const outcomes = new Map((stream.outcomes?.outcomes ?? []).map(o => [o.id, o.title]))
   // Решения, не вошедшие ни в один итог, нет и в задачах: их видно и здесь.
   const lost = stream.outcomes?.uncovered_adr_ids ?? []
+  // Итоги без критериев готовности: задачи по ним не проверить — это видно и здесь.
+  const vague = (stream.outcomes?.outcomes ?? []).filter(o => o.acceptance_criteria.length === 0).map(o => o.id)
   const cut = () => void retry.go(() => startOrFollow(
     () => api.seekIssues(council.id, group.id), council, c => streamOf(c, group.id)?.issues))
   if (!run) return null
@@ -1511,6 +1515,7 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
         </section>
       )}
       {lost.length > 0 && <p className="fragment-note">{t('issues.lostDecisions', { ids: lost.join(', ') })}</p>}
+      {vague.length > 0 && <p className="fragment-note">{t('issues.vagueOutcomes', { ids: vague.join(', ') })}</p>}
       <div className="stream-actions">
         <button className="btn-link" onClick={onBack}>{t('issues.change')}</button>
       </div>

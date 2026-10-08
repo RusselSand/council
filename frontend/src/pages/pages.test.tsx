@@ -1131,6 +1131,13 @@ describe('Поток: решения и итоги', () => {
     expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
   })
 
+  it('итог без критериев готовности виден и на задачах — поток не готов', async () => {
+    const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: vague, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
+    expect(await screen.findByText('У итогов нет критериев готовности: O1 — задачи по ним не проверить.')).toBeTruthy()
+    expect(screen.getAllByText('без критериев: O1').length).toBeGreaterThan(0)
+  })
+
   it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
     openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
     await card('Сохранять состояние в файлы')
