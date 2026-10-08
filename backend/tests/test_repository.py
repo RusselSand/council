@@ -425,6 +425,38 @@ def test_a_path_too_long_for_the_snapshot_is_refused_with_its_name(repo, tmp_pat
         copy(found, tmp_path)
 
 
+def test_an_unreadable_name_not_in_utf8_makes_an_error_that_can_be_saved(repo, tmp_path):
+    """Причину отказа пишут в состояние: имя с байтом не из UTF-8 — в видимом виде, иначе
+    сохранить её нельзя, и скан остался бы «идущим»."""
+    found = inventory(repo)
+    name = "bad-\udcff.py"
+    forged = Inventory(found.root, found.commit_sha, found.dirty, (*found.files, name),
+                       found.state)
+    with pytest.raises(RepositoryError) as refused:
+        snapshot(forged, tmp_path / "snap")
+    str(refused.value).encode("utf-8")
+    assert repository.shown(name) in str(refused.value)
+    str(RepositoryError("Каталога нет: bad-\udcff")).encode("utf-8")
+
+
+def test_the_number_of_nested_copies_is_bounded(with_submodule, monkeypatch):
+    """У каждой вложенной копии — свои вызовы git: сотня тысяч пустых подмодулей заняла бы
+    сервер на часы, хоть каждый вызов и в своём пределе."""
+    monkeypatch.setattr(repository, "COPIES_MAX", 1)
+    with pytest.raises(RepositoryError, match="вложенных"):
+        repository.copies_of(with_submodule)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="на Windows имена файлов всегда Unicode")
+def test_a_nested_copy_named_not_in_utf8_is_its_own_root(repo):
+    """Корень от git — байтами файловой системы: «�» вместо байта сделал бы копию чужой."""
+    nested = Path(os.fsdecode(os.fsencode(repo) + b"/gen-\xff"))
+    nested.mkdir()
+    (nested / "gen.py").write_text("x = 1\n", encoding="utf-8")
+    git(nested, "init", "-q")
+    assert os.fsdecode(b"gen-\xff/") in [copy.prefix for copy in repository.copies_of(repo)]
+
+
 def test_a_path_with_nul_is_refused_as_a_path(tmp_path):
     with pytest.raises(RepositoryError, match="NUL"):
         located("pro\0ject", tmp_path)

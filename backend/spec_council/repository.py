@@ -58,6 +58,8 @@ FILES_MAX = 100_000
 # Больше вывода от одной команды git не читаем — и путей всех копий вместе не держим.
 OUTPUT_MAX = 64 * 2**20
 PATHS_MAX = 64 * 2**20
+# Вложенных рабочих копий (подмодулей и репозиториев внутри) — у каждой свои вызовы git.
+COPIES_MAX = 500
 GIT_TIMEOUT = 120
 TEXT_MAX = 2000
 # Путь в ответе: 4 КБ байтов имени, каждый — до четырёх знаков «\xNN», и символ точки входа.
@@ -69,7 +71,11 @@ COVERAGE = ("covered", "partial", "not_investigated", "not_applicable")
 
 class RepositoryError(ValueError):
     """Каталог не годится для скана: его нет, это не рабочая копия git или git не запускается.
-    Текст — для человека."""
+    Текст — для человека; его сохраняют и отдают в JSON, так что байт не из UTF-8 в имени
+    (у POSIX — суррогат) в нём виден как \\udcNN, а не ломает запись."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message.encode("utf-8", "backslashreplace").decode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -225,11 +231,7 @@ def copies_of(root: Path) -> list[Copy]:
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
         counted += len(cached) + len(others)
         chars += sum(map(len, cached)) + sum(map(len, others))
-        if counted > FILES_MAX:
-            raise too_many()            # пока обходим: подмодулей бывает и тысяча
-        if chars > PATHS_MAX:
-            raise RepositoryError(f"Рабочая копия слишком велика для скана: пути её файлов "
-                                  f"вместе длиннее {PATHS_MAX / 2**20:g} МБ")
+        within(counted, chars, len(seen))   # пока обходим: подмодулей бывает и тысяча
         # Подмодуль записан в коммите своего родителя (recorded); репозиторий внутри — нигде.
         links = [(name, embedded, True) for _, mode, _, name in index if mode == b"160000"]
         links += [(name, True, False) for name in inner_copies(folder, cached, others)]
@@ -243,10 +245,24 @@ def copies_of(root: Path) -> list[Copy]:
             real = os.path.realpath(path)
             if real not in seen:
                 seen.add(real)
+                within(counted, chars, len(seen))
                 queue.append((path, f"{prefix}{link}/", inside))
         found.append(Copy(folder, prefix, cached, others, embedded, outside_of(folder, index),
                           tuple(absent)))
     return found
+
+
+def within(files: int, chars: int, copies: int) -> None:
+    """Пределы обхода всех копий вместе — каждая команда git и так в своём, а вместе их много:
+    файлов, длины их путей и самих копий (у каждой свои вызовы git)."""
+    if files > FILES_MAX:
+        raise too_many()
+    if chars > PATHS_MAX:
+        raise RepositoryError(f"Рабочая копия слишком велика для скана: пути её файлов вместе "
+                              f"длиннее {PATHS_MAX / 2**20:g} МБ")
+    if copies > COPIES_MAX:
+        raise RepositoryError(f"Рабочая копия слишком велика для скана: вложенных рабочих копий "
+                              f"больше {COPIES_MAX}")
 
 
 def checked_out(path: Path, top: str) -> bool:
@@ -347,7 +363,9 @@ def working_copy(text: str, base: Path | None) -> Inventory:
 
 
 def top_of(path: Path) -> Path:
-    return Path(git(path, "rev-parse", "--show-toplevel").strip()).resolve()
+    """Корень по git — байтами файловой системы: «�» вместо байта дал бы другой каталог."""
+    output = git_bytes(path, "rev-parse", "--show-toplevel").removesuffix(b"\n")
+    return Path(os.fsdecode(output.removesuffix(b"\r"))).resolve()
 
 
 def fits(found: Inventory) -> None:
@@ -583,8 +601,9 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")
     if missed:
-        shown = ", ".join(missed[:5]) + (f" и ещё {len(missed) - 5}" if len(missed) > 5 else "")
-        raise RepositoryError(f"Не прочитать файлы рабочей копии: {shown} — без них карта вышла "
+        told = ", ".join(map(shown, missed[:5]))
+        told += f" и ещё {len(missed) - 5}" if len(missed) > 5 else ""
+        raise RepositoryError(f"Не прочитать файлы рабочей копии: {told} — без них карта вышла "
                               "бы неполной; дайте серверу права на чтение и запустите скан снова")
     return digest.hexdigest(), frozenset(taken)
 
