@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from .ideas import reason_of
 from .proposals import fragments_in, questions_in
+from .questions import QUESTION_MAX
 from .slicing import BadAnswer
 
 TITLE_MAX = 200
@@ -73,10 +74,13 @@ def criteria_of(value: object) -> tuple[str, ...]:
 
 
 def gaps_of(value: object) -> tuple[Gap, ...]:
+    """Пробелы. Человек добавляет пробел в вопросы, поэтому пустой или длиннее вопроса
+    отбрасывается: отбор его не примет."""
     items = value if isinstance(value, list) else []
     return tuple(Gap(reason_of(item.get("question")), reason_of(item.get("reason")))
                  for item in items
-                 if isinstance(item, dict) and reason_of(item.get("question")))
+                 if isinstance(item, dict)
+                 and 0 < len(reason_of(item.get("question"))) <= QUESTION_MAX)
 
 
 def candidate_of(item: object, context: Context, what: str) -> Candidate:

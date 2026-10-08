@@ -85,7 +85,7 @@ export const en: Dict = {
   'attention.outcomesFailed': 'Stream {{group}} · error',
   'attention.outcomesFailed.hint': 'Assembling the outcomes stopped — start it again.',
   'attention.outcomesWait': 'Stream {{group}} · outcomes',
-  'attention.outcomesWait.hint': 'Not all outcomes are ready: open questions or gaps hold them.',
+  'attention.outcomesWait.hint': 'The outcomes are not ready: decide the open questions, handle the gaps or change the decisions.',
 
   'council.untitled': 'Untitled',
   'council.notFound': 'Council not found',

@@ -59,3 +59,11 @@ def test_the_judge_sees_an_outcome_as_the_participants_were_asked_for_it():
         "adr_ids": ["ADR-1"], "constraint_ids": ["F4"], "risk_ids": [],
         "acceptance_criteria": ["Запрос возвращает подходящие статьи."], "blocked_by": ["Q2"],
         "gaps": []}
+
+
+def test_a_gap_longer_than_a_question_is_dropped():
+    """Пробел человек добавляет в вопросы: длиннее вопроса — отбор его не примет."""
+    [found] = outcome_list({"outcomes": [outcome(gaps=[{"question": "x" * 501, "reason": "длинно"},
+                                                       {"question": "Кто смотрит отчёт?"}])]},
+                           CONTEXT)
+    assert found.gaps == (Gap("Кто смотрит отчёт?", ""),)

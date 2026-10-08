@@ -81,7 +81,7 @@ export const ru = {
   'attention.outcomesFailed': 'Поток {{group}} · ошибка',
   'attention.outcomesFailed.hint': 'Сборка итогов остановилась — запустите снова.',
   'attention.outcomesWait': 'Поток {{group}} · итоги',
-  'attention.outcomesWait.hint': 'Не все итоги готовы: их держат открытые вопросы или пробелы.',
+  'attention.outcomesWait.hint': 'Итоги не готовы: решите открытые вопросы, разберите пробелы или поменяйте решения.',
 
   'council.untitled': 'Без названия',
   'council.notFound': 'Совет не найден',

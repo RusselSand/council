@@ -149,6 +149,10 @@ describe('светофор', () => {
       { light: 'yours', what: 'outcomesWait', group: 'A', to: '/councils/c1/streams/A' }])
     expect(attention(council(on(assembled('failed')))).map(a => a.what)).toEqual(['outcomesFailed'])
     expect(attention(council(ready))).toEqual([])
+    // Ни одного итога — решений не хватает даже на ожидаемое поведение: менять их — ход за вами.
+    const empty = on(assembled('done'))
+    expect([streamLight(empty), chainLight(empty, 'outcomes')]).toEqual(['yours', 'yours'])
+    expect(attention(council(empty)).map(a => a.what)).toEqual(['outcomesWait'])
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {
