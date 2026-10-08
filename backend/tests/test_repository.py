@@ -94,6 +94,45 @@ def test_names_shown_alike_before_are_never_taken_for_each_other():
     assert context.path_of(shown_literal) == literal
 
 
+def test_a_newline_in_a_name_is_shown_escaped_and_found_back():
+    """Имя с переводом строки показанным как есть — два «файла» списка, и оба настоящие."""
+    name = "src/a\nb.py"
+    context = Context(files=frozenset({name, "src/a", "b.py"}))
+    line = inventory_prompt(Inventory(Path("."), "", False, (name,)))
+    assert "\n" not in line
+    assert context.path_of(line) == name
+
+
+def test_a_long_or_spaced_path_is_looked_up_as_it_is():
+    """Путь бывает длиннее 2000 символов и с двумя пробелами подряд: ссылку модели не режем и
+    не схлопываем, иначе подтверждение отброшено."""
+    long_name = "deep/" + "d" * 2500 + ".py"
+    spaced = "docs/two  spaces.md"
+    context = Context(files=frozenset({long_name, spaced}))
+    result = map_of({"findings": [finding(path=long_name), finding("R2", path=spaced)], "flows": [
+        {"name": "Поток", "entry_point": f"{long_name}:main", "steps": []}]}, context)
+    assert [f.status for f in result.findings] == ["verified", "verified"]
+    assert result.flows[0].entry_point == f"{long_name}:main"
+
+
+def test_a_repository_inside_that_is_not_a_submodule_is_not_the_root_commit(repo):
+    """Кода вложенной копии, не подмодуля, в коммите корня нет: карта — не этого коммита, даже
+    когда обе копии чисты."""
+    nested = repo / "tools"
+    nested.mkdir()
+    (nested / "README.md").write_text("внешний\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("*.log\ntools/*\n!tools/README.md\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tools")
+    (nested / "gen.py").write_text("x = 1\n", encoding="utf-8")
+    git(nested, "init", "-q")
+    git(nested, "add", ".")
+    git(nested, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "gen")
+    found = inventory(repo)
+    assert "tools/gen.py" in found.files
+    assert found.dirty
+
+
 def test_a_folder_without_its_own_repository_is_refused_before_the_outer_one_is_read(
         tmp_path, monkeypatch):
     """Каталог репозиториев сам лежит в рабочей копии git: папку без своего репозитория git

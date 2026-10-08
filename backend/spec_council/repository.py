@@ -22,6 +22,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -54,6 +55,8 @@ FILES_MAX = 100_000
 OUTPUT_MAX = 64 * 2**20
 GIT_TIMEOUT = 120
 TEXT_MAX = 2000
+# Путь в ответе: 4 КБ байтов имени, каждый — до четырёх знаков «\xNN», и символ точки входа.
+PATH_CHARS = 20_000
 FINDING_ID = re.compile(r"R?(\d+)", re.IGNORECASE)
 STATUSES = ("verified", "inferred", "unknown")
 COVERAGE = ("covered", "partial", "not_investigated", "not_applicable")
@@ -130,12 +133,14 @@ def git(root: Path, *args: str) -> str:
 
 class Copy(NamedTuple):
     """Рабочая копия — корень или вложенная: каталог, путь от корня с «/» на конце (у корня —
-    ""), её отслеживаемые и новые, не игнорируемые файлы."""
+    ""), её отслеживаемые и новые, не игнорируемые файлы; embedded — не подмодуль, а просто
+    репозиторий внутри: её коммита в коммите корня нет."""
 
     folder: Path
     prefix: str
     cached: list[str]
     others: list[str]
+    embedded: bool = False
 
 
 def listed(copies: list[Copy]) -> list[str]:
@@ -159,17 +164,19 @@ def copies_of(root: Path) -> list[Copy]:
     top = os.path.realpath(root)
     seen = {top}
     found: list[Copy] = []
-    queue = [(root, "")]
+    queue = [(root, "", False)]
     while queue:
-        folder, prefix = queue.pop(0)
+        folder, prefix, embedded = queue.pop(0)
         index = index_of(folder)
         cached = [name for *_, name in index]
         others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
-        found.append(Copy(folder, prefix, cached, others))
+        found.append(Copy(folder, prefix, cached, others, embedded))
         if sum(len(copy.cached) + len(copy.others) for copy in found) > FILES_MAX:
             raise too_many()            # пока обходим: подмодулей бывает и тысяча
-        links = [name for _, mode, _, name in index if mode == b"160000"]
-        for link in [*links, *inner_copies(folder, cached, others)]:
+        # Подмодуль записан в коммите своего родителя; репозиторий внутри — нигде.
+        links = [(name, embedded) for _, mode, _, name in index if mode == b"160000"]
+        links += [(name, True) for name in inner_copies(folder, cached, others)]
+        for link, inside in links:
             path = folder / link
             real = os.path.realpath(path)
             try:
@@ -180,7 +187,7 @@ def copies_of(root: Path) -> list[Copy]:
                     or not Path(real).is_relative_to(top) or not (path / ".git").exists()):
                 continue
             seen.add(real)
-            queue.append((path, f"{prefix}{link}/"))
+            queue.append((path, f"{prefix}{link}/", inside))
     return found
 
 
@@ -360,7 +367,9 @@ def inventory(path: Path) -> Inventory:
         raise too_many()                  # до lstat каждого: их может быть миллион
     files = tuple(sorted(name for name in listing if plain(root, name)))
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
-    return Inventory(root, found[0][1], any(status for _, _, status in found), files,
+    # Правки — и вложенный репозиторий, не подмодуль: его кода в коммите корня нет.
+    dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
+    return Inventory(root, found[0][1], dirty, files,
                      state_of(found), modes_of(copies), size)
 
 
@@ -497,11 +506,20 @@ def inventory_prompt(found: Inventory) -> str:
 
 
 def shown(name: str) -> str:
-    """Имя файла, каким его видят модели и человек: байты не из UTF-8 — как \\xNN (как есть
-    его в промпт не положить и не сохранить), а сама «\\» — как «\\\\»: иначе байт и те же
-    буквы в имени другого файла выглядели бы одинаково. Обратно переводит Context.path_of."""
-    return "\\\\".join(part.decode("utf-8", "backslashreplace")
+    """Имя файла, каким его видят модели и человек: байты не из UTF-8 и управляющие символы
+    (перевод строки разбил бы имя на два «файла» списка) — как \\xNN, байтами (как есть их в
+    промпт не положить и не сохранить), а сама «\\» — как «\\\\»: иначе байт и те же буквы в
+    имени другого файла выглядели бы одинаково. Обратно переводит Context.path_of."""
+    if name.isprintable() and "\\" not in name:
+        return name
+    return "\\\\".join("".join(map(escaped, part.decode("utf-8", "backslashreplace")))
                        for part in os.fsencode(name).split(b"\\"))
+
+
+def escaped(char: str) -> str:
+    if unicodedata.category(char)[0] == "C" or unicodedata.category(char) in ("Zl", "Zp"):
+        return "".join(f"\\x{byte:02x}" for byte in char.encode())
+    return char
 
 
 def sha_prompt(found: Inventory) -> str:
@@ -526,9 +544,10 @@ class Context:
         """Путь файла, как его назвала модель, — относительный, как в inventory. Сначала как
         есть: в POSIX «\\» — буква имени; «/» вместо «\\» — запасной ход для ссылок в духе
         Windows. Имя, каким его показали моделям (shown), — прежде всего: модель берёт его
-        из списка."""
-        text = text_of(value)
-        named = [self.relative(path) for path in dict.fromkeys((text, text.replace("\\", "/")))]
+        из списка. Путь — как есть, не прозой: не режем и пробелы не схлопываем."""
+        text = path_text(value)
+        variants = (text, text.replace("\\", "/"), text.strip(), text.strip().replace("\\", "/"))
+        named = [self.relative(path) for path in dict.fromkeys(variants)]
         for path in named:
             if path in self.originals:
                 return self.originals[path]
@@ -552,6 +571,11 @@ class Context:
 
 def text_of(value: object) -> str:
     return reason_of(value)[:TEXT_MAX]
+
+
+def path_text(value: object) -> str:
+    """Путь из ответа — как есть: в имени бывают и два пробела подряд, и 4 КБ."""
+    return value[:PATH_CHARS] if isinstance(value, str) else ""
 
 
 def strings(value: object) -> list[str]:
@@ -621,12 +645,13 @@ def entry_of(value: object, context: Context) -> str:
     """Точка входа потока — файл репозитория, можно с символом: «api/routes.py:handler». Путь —
     самое длинное начало, которое есть в inventory: в именах бывают и пробелы. Файла нет — точки
     входа нет: следующие шаги поверили бы несуществующему компоненту."""
-    text = text_of(value)
+    text = path_text(value).strip()
     ends = [len(text), *sorted({i for i, char in enumerate(text) if char in ": ("}, reverse=True)]
     for end in ends:
         path = context.path_of(text[:end])
         if path in context.files:
-            return shown(path) + text[end:]
+            rest = text[end:]
+            return shown(path) + (rest[:1] + reason_of(rest[1:]))[:TEXT_MAX]
     return ""
 
 
