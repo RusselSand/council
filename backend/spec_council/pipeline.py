@@ -109,6 +109,7 @@ from .models import (
     Slicing,
     Step,
     StepName,
+    Stream,
     Structure,
     StructureDecision,
     StructureProposal,
@@ -1098,21 +1099,21 @@ class IssueRun(CouncilRun[IssueDiscovery]):
 
     what = "нарезка на задачи"
 
-    def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
-                 decisions: list[Decision], proposals: ProposalDiscovery | None,
-                 outcomes: OutcomeDiscovery, fragments: list[LabeledFragment],
+    def __init__(self, council_id: str, stream: Stream, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
                  report: Callable[[IssueDiscovery], None], *, found: Inventory | None,
                  repository: str = context_prompt(None),
                  copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
+        """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
-                         start_issues(participants, judge, outcomes.run))
-        self.idea = idea
-        self.scope = scope
-        self.decisions = {decision.question_id: decision for decision in decisions}
+                         start_issues(participants, judge, stream.outcomes.run))
+        self.idea = stream.idea.text
+        self.scope = stream.scope or []
+        self.decisions = {decision.question_id: decision for decision in stream.decisions or []}
         self.found_proposals = {options.question_id: options.proposals
-                                for options in (proposals.options if proposals else [])}
-        self.outcomes = outcomes.outcomes
+                                for options in (stream.proposals.options
+                                                if stream.proposals else [])}
+        self.outcomes = stream.outcomes.outcomes
         self.fragments = {fragment.id: fragment for fragment in fragments}
         self.found = found
         self.repository = repository
@@ -1197,6 +1198,30 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                   for n, c in enumerate(chosen.issues, 1)]
         gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,
                          outcome_ids=list(g.outcome_ids)) for n, g in enumerate(chosen.gaps, 1)]
+        self._inherit_blockers(issues, gaps)
         covered = {name for issue in issues for name in issue.outcome_ids}
         return {"issues": issues, "gaps": gaps,
                 "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
+
+    def _inherit_blockers(self, issues: list[Issue], gaps: list[IssueGap]) -> None:
+        """Что держит итог, держит и каждую его задачу: модель может забыть это повторить, а
+        задача без решения не «можно брать». Открытый вопрос итога — в blocked_by задачи, пробел
+        итога — пробел нарезки (тот же вопрос — тот же пробел), и он тоже её держит."""
+        outcomes = {outcome.id: outcome for outcome in self.outcomes}
+
+        def gap_for(question: str, reason: str, outcome_id: str) -> str:
+            for gap in gaps:
+                if same_question(gap.question) == same_question(question):
+                    if outcome_id not in gap.outcome_ids:
+                        gap.outcome_ids.append(outcome_id)
+                    return gap.id
+            gaps.append(IssueGap(id=f"G{len(gaps) + 1}", question=question, reason=reason,
+                                 outcome_ids=[outcome_id]))
+            return gaps[-1].id
+
+        for issue in issues:
+            held = set(issue.blocked_by)
+            for outcome in (outcomes[name] for name in issue.outcome_ids if name in outcomes):
+                held.update(outcome.blocked_by)
+                held.update(gap_for(gap.question, gap.reason, outcome.id) for gap in outcome.gaps)
+            issue.blocked_by = sorted(held)

@@ -12,10 +12,13 @@ from spec_council.models import (
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
+    OutcomeGap,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
     StepName,
+    Stream,
+    StreamIdea,
 )
 from spec_council.pipeline import (
     DecisionRun,
@@ -927,9 +930,11 @@ def task(id_, title, outcomes=("O1",), **extra):
             **extra}
 
 
-def cut(replies, found=FOUND_REPO, copy=None):
+def cut(replies, found=FOUND_REPO, copy=None, outcomes=APPROVED):
     runner, reports = FakeRunner(replies), []
-    result = IssueRun("c1", FIND, [SEARCH, WHERE], DECIDED, FOUND, APPROVED, GROUP_FRAGMENTS,
+    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
+                    decisions=DECIDED, proposals=FOUND, outcomes=outcomes)
+    result = IssueRun("c1", stream, GROUP_FRAGMENTS,
                       ["sol", "fable"], "fable", runner, reports.append, found=found,
                       repository="КАРТА РЕПОЗИТОРИЯ", copy=copy or copy_as("снимок-1")).run()
     return result, runner
@@ -985,3 +990,18 @@ def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
     assert result.state == "failed"
     assert "менялась" in result.error
     assert (result.code, result.commit_sha) == (False, "")      # снимка нет — кода не читали
+
+
+def test_an_issue_inherits_what_blocks_its_outcomes():
+    """Модель забыла, что итог держит открытый вопрос или пробел: задача по нему не «можно
+    брать» — блокировки итога переходят к ней, пробел итога становится пробелом нарезки."""
+    gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
+    outcomes = APPROVED.model_copy(update={"outcomes": [
+        APPROVED.outcomes[0].model_copy(update={"gaps": [gap]}), APPROVED.outcomes[1]]})
+    same = {"issues": [task("I1", "Индекс"), task("I2", "Хранение", outcomes=("O2",))],
+            "gaps": [{"question": "Сколько хранить историю?", "reason": "свой"}]}
+    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                    found=None, outcomes=outcomes)
+    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
+    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
+        ("G1", "Сколько хранить историю?", ["O1"])]

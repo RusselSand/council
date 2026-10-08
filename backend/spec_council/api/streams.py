@@ -818,9 +818,7 @@ def code_of(stream: Stream, repositories: Path | None) -> Inventory | None:
 
 def issue_run(council: Council, group: str, stream: Stream, found: Inventory | None,
               runner: Runner, store: Store, report: Callable | None = None) -> IssueRun:
-    return IssueRun(council.id, stream.idea.text, stream.scope, stream.decisions,
-                    stream.proposals, stream.outcomes,
-                    fragments_of(council, group_of(council, group)),
+    return IssueRun(council.id, stream, fragments_of(council, group_of(council, group)),
                     council.participants, council.judge, runner,
                     report or reporter(store, council.id, cutting(group)), found=found,
                     repository=repository_map(stream))
