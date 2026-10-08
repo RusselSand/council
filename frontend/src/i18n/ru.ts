@@ -509,7 +509,8 @@ export const ru = {
   'issues.gapsTitle': 'Чего не хватает',
   'issues.gapOutcomes': 'итоги {{ids}}',
   'issues.toQuestions': 'Добавить в вопросы',
-  'issues.uncovered': 'Не вошли ни в одну задачу: {{ids}}.',
+  'issues.uncoveredTitle': 'Итоги без задач',
+  'issues.heldBy': 'держит {{ids}}',
   'issues.lostDecisions': 'Решения, не вошедшие ни в один итог, нет и в задачах: {{ids}}.',
   'issues.change': 'Изменить итоги',
 

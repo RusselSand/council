@@ -1207,33 +1207,28 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
         повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
         сделал бы ей наперекор. Решения, ограничения и риски итога — и у задачи; открытый вопрос
-        итога — в её blocked_by, пробел итога — пробел нарезки (тот же вопрос — тот же пробел), и
-        он тоже её держит; как и пробел нарезки, названный для этого итога."""
+        итога — в её blocked_by. Пробел каждого утверждённого итога — пробел нарезки (тот же
+        вопрос — тот же пробел), даже если задач по итогу нет: иначе его не отнести в вопросы; и
+        пробел нарезки держит каждую задачу итогов, для которых он назван."""
         outcomes = {outcome.id: outcome for outcome in self.outcomes}
-
-        def gap_for(question: str, reason: str, outcome_id: str) -> str:
-            for gap in gaps:
-                if same_question(gap.question) == same_question(question):
-                    if outcome_id not in gap.outcome_ids:
-                        gap.outcome_ids.append(outcome_id)
-                    return gap.id
-            gaps.append(IssueGap(id=f"G{len(gaps) + 1}", question=question, reason=reason,
-                                 outcome_ids=[outcome_id]))
-            return gaps[-1].id
-
+        for outcome in self.outcomes:
+            for found in outcome.gaps:
+                same = next((gap for gap in gaps
+                             if same_question(gap.question) == same_question(found.question)), None)
+                if same is None:
+                    gaps.append(IssueGap(id=f"G{len(gaps) + 1}", question=found.question,
+                                         reason=found.reason, outcome_ids=[outcome.id]))
+                elif outcome.id not in same.outcome_ids:
+                    same.outcome_ids.append(outcome.id)
         for issue in issues:
             held = set(issue.blocked_by)
             adrs, limits, risks = set(issue.adr_ids), set(issue.constraint_ids), set(issue.risk_ids)
             for outcome in (outcomes[name] for name in issue.outcome_ids if name in outcomes):
                 held.update(outcome.blocked_by)
-                held.update(gap_for(gap.question, gap.reason, outcome.id) for gap in outcome.gaps)
                 adrs.update(outcome.adr_ids)
                 limits.update(outcome.constraint_ids)
                 risks.update(outcome.risk_ids)
+            held.update(gap.id for gap in gaps if set(gap.outcome_ids) & set(issue.outcome_ids))
             issue.blocked_by = sorted(held)
             issue.adr_ids = sorted(adrs, key=lambda name: int(name.split("-")[1]))
             issue.constraint_ids, issue.risk_ids = sorted(limits), sorted(risks)
-        for issue in issues:
-            held = set(issue.blocked_by)
-            held.update(gap.id for gap in gaps if set(gap.outcome_ids) & set(issue.outcome_ids))
-            issue.blocked_by = sorted(held)

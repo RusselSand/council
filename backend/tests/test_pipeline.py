@@ -1027,3 +1027,18 @@ def test_an_issue_inherits_the_decisions_and_limits_of_its_outcomes():
                     found=None)
     [issue] = result.issues
     assert (issue.adr_ids, issue.constraint_ids) == (["ADR-1"], [5])
+
+
+def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
+    """Итог, по которому не нарезали ни одной задачи (его держит пробел): пробел не теряется —
+    он среди пробелов нарезки, его несут в вопросы."""
+    gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
+    outcomes = APPROVED.model_copy(update={"outcomes": [
+        APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={"gaps": [gap]})]})
+    same = {"issues": [task("I1", "Индекс")]}
+    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                    found=None, outcomes=outcomes)
+    assert result.uncovered_outcome_ids == ["O2"]
+    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
+        ("G1", "Сколько хранить историю?", ["O2"])]
+    assert result.issues[0].blocked_by == []                     # I1 — про O1, его не держит

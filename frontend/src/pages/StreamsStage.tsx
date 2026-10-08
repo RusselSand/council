@@ -1492,7 +1492,23 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
         </section>
       )}
       {run.uncovered_outcome_ids.length > 0 && (
-        <p className="fragment-note">{t('issues.uncovered', { ids: run.uncovered_outcome_ids.join(', ') })}</p>
+        // Итог без задач — с тем, что его держит: иначе не понять, что сделать, чтобы его нарезать.
+        <section className="card panel" aria-labelledby="issue-uncovered-title">
+          <h3 id="issue-uncovered-title" className="panel-title">{t('issues.uncoveredTitle')}</h3>
+          <ul className="issue-gaps">{run.uncovered_outcome_ids.map(id => {
+            const outcome = stream.outcomes?.outcomes.find(o => o.id === id)
+            const open = outcome?.blocked_by ?? []
+            return (
+              <li key={id} className="outcome-gap">
+                <span>
+                  <span className="fragment-id">{id}</span> {outcomes.get(id) ?? id}
+                  {open.length > 0 && <span className="outcome-open"> — {t('issues.heldBy', { ids: open.join(', ') })}</span>}
+                </span>
+                {open.length > 0 && <button className="btn-link" onClick={() => onQuestion(open[0])}>{t('outcomes.back')}</button>}
+              </li>
+            )
+          })}</ul>
+        </section>
       )}
       {lost.length > 0 && <p className="fragment-note">{t('issues.lostDecisions', { ids: lost.join(', ') })}</p>}
       <div className="stream-actions">

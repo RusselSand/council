@@ -809,8 +809,11 @@ def code_of(stream: Stream, repositories: Path | None) -> Inventory | None:
     except RepositoryError as exc:
         raise HTTPException(422, f"Рабочую копию {scan.path} не прочитать: {exc}") from None
     # Тот же путь от другого каталога репозиториев — уже другая рабочая копия: читать её под
-    # картой прежней нельзя.
-    if scan.root and os.path.normcase(str(found.root)) != os.path.normcase(scan.root):
+    # картой прежней нельзя. Скан, что корня не помнит (сделан раньше), этого не проверит.
+    if not scan.root:
+        raise HTTPException(422, "Скан сделан, когда совет ещё не запоминал, какую рабочую копию "
+                                 "читал, — просканируйте репозиторий заново")
+    if os.path.normcase(str(found.root)) != os.path.normcase(scan.root):
         raise HTTPException(422, f"По пути {scan.path} теперь другая рабочая копия: сканировали "
                                  f"{scan.root}, а сейчас это {found.root} — просканируйте заново")
     return found

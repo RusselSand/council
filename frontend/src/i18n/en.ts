@@ -513,7 +513,8 @@ export const en: Dict = {
   'issues.gapsTitle': 'What is missing',
   'issues.gapOutcomes': 'outcomes {{ids}}',
   'issues.toQuestions': 'Add to the questions',
-  'issues.uncovered': 'Not part of any issue: {{ids}}.',
+  'issues.uncoveredTitle': 'Outcomes without issues',
+  'issues.heldBy': 'held by {{ids}}',
   'issues.lostDecisions': 'Decisions left out of every outcome are not in the issues either: {{ids}}.',
   'issues.change': 'Change the outcomes',
 

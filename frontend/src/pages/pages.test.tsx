@@ -1121,6 +1121,16 @@ describe('Поток: решения и итоги', () => {
     expect(screen.getAllByText('вне итогов и задач: ADR-1').length).toBeGreaterThan(0)
   })
 
+  it('итог без задач виден с тем, что его держит, — из него назад, к вопросу', async () => {
+    const onlyFirst: IssueDiscovery = { ...CUT, issues: [CUT.issues[0]], gaps: [], uncovered_outcome_ids: ['O2'] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: onlyFirst }))
+    const left = await screen.findByRole('region', { name: ru['issues.uncoveredTitle'] })
+    expect(within(left).getByText('Замер потерь', { exact: false })).toBeTruthy()
+    expect(within(left).getByText('держит Q2', { exact: false })).toBeTruthy()
+    fireEvent.click(within(left).getByRole('button', { name: ru['outcomes.back'] }))
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+  })
+
   it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
     openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
     await card('Сохранять состояние в файлы')

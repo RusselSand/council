@@ -1188,6 +1188,26 @@ def test_another_repositories_folder_is_not_taken_for_the_scanned_copy(agents, r
     assert streams_of(council_id)["C"].issues is None
 
 
+def test_a_scan_that_does_not_know_its_root_is_scanned_again_before_the_cut(agents, repos):
+    """Скан, сделанный до того, как совет стал помнить корень рабочей копии: та ли это копия,
+    не проверить — её не читают, а сканируют заново."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    council = get_store().get_council(council_id)
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"scan": s.scan.model_copy(update={"root": ""})}) if s.group == "C"
+        else s for s in council.streams]})
+    res = approves(council_id, "C")
+    assert res.status_code == 422
+    assert "заново" in res.json()["detail"]
+
+
 def test_a_working_copy_gone_since_the_scan_refuses_the_approval(agents, repos):
     council_id = grouped()
     confirm(council_id)
