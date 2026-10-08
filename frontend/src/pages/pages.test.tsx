@@ -409,7 +409,7 @@ describe('Поток: группа и идея', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['repository.skip'] }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } },
-                                 { group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: null } }])
+                                 { group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } }])
     expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
     expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
@@ -754,7 +754,7 @@ describe('Поток: репозиторий', () => {
   }
   const SCANNED: RepositoryScan = {
     state: 'done', run: 'sc1', idea: TEXT_IDEA.text, path: 'project', commit_sha: 'abcdef1234567890', dirty: true,
-    files: 12, outside: 3, absent: ['vendor/lib'], rounds: 3, complete: false, error: null,
+    files: 12, outside: 3, absent: ['vendor/lib'], absent_count: 1, rounds: 3, complete: false, error: null,
     steps: [{ name: 'repository_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'repository_judge', state: 'done', runs: [run('fable', 'done')] }],
     result: {
@@ -777,6 +777,21 @@ describe('Поток: репозиторий', () => {
     confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, ...more } })
   const path = () => screen.getByRole('textbox', { name: ru['repository.path'] }) as HTMLInputElement
 
+  it('идею поменяли в другой вкладке (409) — ошибка у скана, и новый скан — уже к нынешней идее', async () => {
+    let current = atStep()
+    openStream(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: { ...TEXT_IDEA, text: 'Другая идея.' } }, { A: { repository: null } })
+      return json({ detail: 'Идею потока поменяли — посмотрите на новую и повторите' }, 409)
+    })
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
+    fireEvent.change(path(), { target: { value: 'project' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Идею потока поменяли — посмотрите на новую и повторите')
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    await waitFor(() => expect(streamCalls).toHaveLength(2))
+    expect(streamCalls[1].body).toMatchObject({ idea: 'Другая идея.' })
+  })
+
   it('скан запускают по пути к рабочей копии; пока он идёт, шаг не пройти', async () => {
     const scanning: RepositoryScan = { ...SCANNED, state: 'running', rounds: 0, result: null, follow_up: [] }
     openStream(() => atStep(), () => json(atStep({ scan: scanning })))
@@ -786,7 +801,7 @@ describe('Поток: репозиторий', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
     expect(await screen.findByText('ИИ исследует репозиторий, проход 1 из 3.', { exact: false })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'repository/scan',
-                                   body: { run: 'g1', revision: 0, path: 'D:\\PROJECTS\\worker' } }])
+                                   body: { run: 'g1', revision: 0, path: 'D:\\PROJECTS\\worker', idea: TEXT_IDEA.text } }])
     expect(screen.getByText(ru['repository.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
@@ -801,7 +816,7 @@ describe('Поток: репозиторий', () => {
     expect(screen.getByText('project · коммит abcdef12 · файлов: 12 · проходов: 3')).toBeTruthy()
     expect(screen.getByText(ru['repository.dirty'])).toBeTruthy()
     expect(screen.getByText(ru['repository.outside'].replace('{{count}}', '3'))).toBeTruthy()
-    expect(screen.getByText(ru['repository.absent'].replace('{{paths}}', 'vendor/lib'))).toBeTruthy()
+    expect(screen.getByText(ru['repository.absent'].replace('{{count}}', '1').replace('{{paths}}', 'vendor/lib'))).toBeTruthy()
     expect(screen.getByText('worker/state.py · 10-30 · save')).toBeTruthy()
     expect(screen.getByText(ru['repository.status.verified'])).toBeTruthy()
     expect(screen.getAllByText(ru['repository.status.inferred'])).toHaveLength(1)
@@ -812,7 +827,7 @@ describe('Поток: репозиторий', () => {
 
     fireEvent.click(screen.getByRole('button', { name: ru['repository.approve'] }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1' } }])
+    expect(streamCalls).toEqual([{ group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1', idea: TEXT_IDEA.text } }])
   })
 
   it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {

@@ -216,15 +216,13 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     участники и судья исследуют код, только читая его. Скан заново — шаг «Репозиторий» заново:
     утверждённая карта, вопросы и всё ниже сбрасываются. Повтор после сбоя берёт уже
     оплаченные ответы даром. Нет подключения к моделям — скан записан упавшим с причиной.
-    Идея — та, что была при запросе (same_idea)."""
-    seen: list[StreamIdea | None] = []
-
+    Идея — та, что человек видел (seen_idea)."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         if stream.idea is None:
             raise HTTPException(409, NO_IDEA)
-        same_idea(seen, stream)
+        seen_idea(stream, edit)
         if running(stream.scan):
             raise HTTPException(409, "Скан уже идёт")
         if below_running(stream, "questions"):
@@ -271,13 +269,11 @@ def approve_repository(council_id: str, group: str, edit: ApproveRepository, sto
     """Человек проходит шаг «Репозиторий»: утверждает карту скана или пропускает шаг, — и
     совет сразу ищет открытые вопросы, а карта идёт во все следующие шаги. Пройти шаг заново
     иначе — вопросы и всё ниже ищутся заново; так же — ничего не меняется. Карта — того скана,
-    что был на экране: сканировали заново — 409; идея — та, что была при запросе (same_idea)."""
-    seen: list[StreamIdea | None] = []
-
+    что был на экране: сканировали заново — 409; идея — та, что человек видел (seen_idea)."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
-        same_idea(seen, stream)
+        seen_idea(stream, edit)
         step = repository_step(stream, edit)
         anew = asks_anew(stream, step)
         if anew and below_running(stream, "scan"):
@@ -339,7 +335,8 @@ def repository_map(stream: Stream) -> str:
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return context_prompt(None)
     return context_prompt(scan.result, scan.commit_sha, dirty=scan.dirty,
-                          outside=scan.outside, absent=scan.absent)
+                          outside=scan.outside, absent=scan.absent,
+                          absent_count=scan.absent_count)
 
 
 def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:
@@ -737,14 +734,12 @@ def scoped(search: QuestionDiscovery, keep: list[str], added: list[str]) -> list
                      for n, text in enumerate(own, start))]
 
 
-def same_idea(seen: list[StreamIdea | None], stream: Stream) -> None:
-    """Правка — к той идее, что была при запросе: plan() зовётся и до, и после проверки моделей
-    (и git), и если идею поменяли в другой вкладке — 409, а не скан или поиск вопросов под идею,
-    которой человек не видел."""
-    if seen and stream.idea != seen[0]:
-        raise HTTPException(409, "Идею потока поменяли, пока шла проверка, — посмотрите на новую "
-                                 "и повторите")
-    seen[:] = [stream.idea]
+def seen_idea(stream: Stream, edit: ScanRepository | ApproveRepository) -> None:
+    """Правка — к той идее, что человек видел (edit.idea): её поменяли в другой вкладке — до
+    запроса или пока шла проверка моделей и git (plan() зовётся и до, и после), — 409, а не скан
+    или поиск вопросов под идею, которой он не видел."""
+    if stream.idea is not None and stream.idea.text != edit.idea:
+        raise HTTPException(409, "Идею потока поменяли — посмотрите на новую и повторите")
 
 
 def probed[T](config: AppConfig, agents: AgentRunner, plan: Callable[[], tuple[Council, bool]],

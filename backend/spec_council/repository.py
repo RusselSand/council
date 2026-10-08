@@ -24,7 +24,7 @@ import tempfile
 import threading
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -47,6 +47,9 @@ from .slicing import BadAnswer
 INVENTORY_MAX = 5000
 # И не длиннее этого: путь бывает и в 4 КБ, а список идёт в каждый промпт скана.
 INVENTORY_CHARS = 150_000
+# Нескачанных подмодулей в промптах — не больше стольких и стольких символов.
+ABSENT_SHOWN = 20
+ABSENT_CHARS = 4000
 # Снимок ложится на диск сервера: рабочую копию больше этого не копируем, а отказываем, —
 # и по байтам, и по числу файлов (крошечных их бывает миллион: кончились бы память и inode).
 SNAPSHOT_MAX = 512 * 2**20
@@ -240,8 +243,7 @@ def names(output: bytes) -> list[str]:
 def located(text: str, base: Path | None) -> Path:
     """Каталог рабочей копии по тексту человека. С каталогом репозиториев путь — от него и
     только внутри него; без него — абсолютный."""
-    text = text.strip()
-    if not text:
+    if not text.strip():           # пробелы по краям — часть имени: « repo» — не «repo»
         raise RepositoryError("Укажите путь к рабочей копии репозитория")
     path = Path(text)
     if base is not None:
@@ -322,14 +324,18 @@ def changes_of(root: Path) -> bytes:
 def hidden_of(root: Path) -> bytes:
     """Правки в файлах с assume-unchanged или skip-worktree: их содержимое git status не
     сверяет, а модели читают уже не коммит. Такие файлы на диске сверяем сами — с индексом
-    (hash-object — с теми же фильтрами, что и git add)."""
+    (hash-object — с теми же фильтрами, что и git add), и бит исполняемости тоже, если git ему
+    на диске верит: снимок его сохранит."""
     flagged: dict[str, str] = {}
     changed: list[str] = []
+    modes = file_mode(root) and os.name != "nt"
     for tag, mode, sha, name in index_of(root):
         if not (tag.islower() or tag == b"S") or mode not in (b"100644", b"100755"):
             continue
         if plain(root, name):
             flagged[name] = sha
+            if modes and executable_on_disk(root / name) != (mode == b"100755"):
+                changed.append(name)
         elif tag.upper() != b"S":
             # assume-unchanged, а файла нет или он уже не файл — правка; у skip-worktree это
             # обычный sparse checkout.
@@ -340,6 +346,13 @@ def hidden_of(root: Path) -> bytes:
         shas = git(root, "hash-object", "--", *chunk).split()
         changed += [name for name, sha in zip(chunk, shas, strict=True) if sha != flagged[name]]
     return b"\0".join(os.fsencode(name) for name in changed)
+
+
+def executable_on_disk(path: Path) -> bool:
+    try:
+        return bool(path.lstat().st_mode & 0o111)
+    except OSError:
+        return False
 
 
 def index_of(root: Path) -> list[tuple[bytes, bytes, str, str]]:
@@ -536,10 +549,23 @@ def inventory_prompt(found: Inventory) -> str:
         text += (f"\n… файлов коммита вне sparse checkout: {found.outside} — их нет ни на диске, "
                  "ни в снимке: коммит виден не весь")
     if found.absent:
-        more = f" и ещё {len(found.absent) - 20}" if len(found.absent) > 20 else ""
-        text += (f"\n… подмодули не скачаны: {', '.join(found.absent[:20])}{more} — их кода нет "
-                 "ни на диске, ни в снимке")
+        shown_absent = capped(found.absent)
+        more = len(found.absent) - len(shown_absent)
+        text += (f"\n… подмодули не скачаны: {', '.join(shown_absent)}"
+                 f"{f' и ещё {more}' if more else ''} — их кода нет ни на диске, ни в снимке")
     return text
+
+
+def capped(names: Sequence[str]) -> list[str]:
+    """Первые имена — не больше ABSENT_SHOWN и ABSENT_CHARS символов: список идёт в промпты."""
+    taken: list[str] = []
+    used = 0
+    for name in names[:ABSENT_SHOWN]:
+        used += len(name) + 2
+        if used > ABSENT_CHARS:
+            break
+        taken.append(name)
+    return taken
 
 
 def shown(name: str) -> str:
@@ -781,16 +807,19 @@ def as_prompt(result: RepositoryMap) -> dict:
 
 
 def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
-                   dirty: bool = False, outside: int = 0,
-                   absent: tuple[str, ...] | list[str] = ()) -> str:
+                   dirty: bool = False, outside: int = 0, absent: Sequence[str] = (),
+                   absent_count: int = 0) -> str:
     """Что получают следующие шаги: проверенная карта репозитория или честное «не
     сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
     правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
     files_outside_checkout — сколько файлов коммита вне sparse checkout, а
-    submodules_not_checked_out — какие подмодули не скачаны: их модели не видели."""
+    submodules_not_checked_out — какие подмодули не скачаны (первые, всего — _count): их модели
+    не видели."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
     return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
                        "files_outside_checkout": outside,
-                       "submodules_not_checked_out": list(absent), **as_prompt(result)},
+                       "submodules_not_checked_out": capped(absent),
+                       "submodules_not_checked_out_count": max(absent_count, len(absent)),
+                       **as_prompt(result)},
                       ensure_ascii=False, indent=2)

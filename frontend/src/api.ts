@@ -106,7 +106,7 @@ export interface RepositoryMap {
  */
 export interface RepositoryScan {
   state: 'running' | 'done' | 'failed'; run: string; idea: string; path: string; commit_sha: string; dirty: boolean
-  files: number; outside: number; absent: string[]; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
+  files: number; outside: number; absent: string[]; absent_count: number; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
   follow_up: FollowUp[]; error: string | null
 }
 /** Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана scan_run. */
@@ -276,16 +276,16 @@ export const api = {
   seekIdea: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
   /** Сканировать репозиторий под идею потока: путь — от каталога репозиториев или абсолютный. */
-  scanRepository: (id: string, at: GroupsVersion, group: string, path: string) =>
+  scanRepository: (id: string, at: GroupsVersion, group: string, path: string, idea: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, path }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, path, idea }),
     }),
   /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Совет сразу ищет вопросы. */
-  approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null) =>
+  approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
     }),
   /** Искать вопросы к идее потока заново: после сбоя или без подключения к моделям. */
   seekQuestions: (id: string, group: string) =>

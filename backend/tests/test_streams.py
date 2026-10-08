@@ -292,10 +292,21 @@ def asks(council_id, group):
     return client.post(f"/api/councils/{council_id}/streams/{group}/questions/discovery")
 
 
-def skip(council_id, group, revision=0):
+def skip(council_id, group, revision=0, idea=None):
     """Шаг «Репозиторий» — пропустить: совет сразу ищет вопросы."""
     return client.post(f"/api/councils/{council_id}/streams/{group}/repository",
-                       json={"run": "g1", "revision": revision, "scan_run": None})
+                       json={"run": "g1", "revision": revision, "scan_run": None,
+                             "idea": seen_idea(council_id, group, idea)})
+
+
+def seen_idea(council_id, group, idea=None):
+    """Идея, которую видит человек: по умолчанию — нынешняя."""
+    if idea is not None:
+        return idea
+    council = get_store().get_council(council_id)
+    streams = (council.streams or []) if council else []
+    stream = next((stream for stream in streams if stream.group == group), None)
+    return stream.idea.text if stream and stream.idea else ""
 
 
 def questioned(council_id, group, text=None):
@@ -338,7 +349,8 @@ def test_the_same_idea_keeps_everything_below_and_another_one_starts_over(agents
     assert choose(council_id, "B", ["Q1"]).status_code == 200
     approve(council_id, "B", f" {IDEA_B} ")
     stream = streams_of(council_id)["B"]
-    assert stream.questions.run == first and stream.scope is not None
+    assert stream.questions.run == first
+    assert stream.scope is not None
     assert skip(council_id, "B").status_code == 200              # тот же шаг — повтор
     assert streams_of(council_id)["B"].questions.run == first
 
@@ -547,7 +559,8 @@ def test_a_choice_for_an_earlier_search_or_before_proposals_is_refused(agents):
     assert chose(council_id, "C", [], proposals_run="нет").status_code == 409
     choose(council_id, "C", ["Q1", "Q2"])
     res = chose(council_id, "C", [("Q1", None), ("Q2", None)], proposals_run="прежний")
-    assert res.status_code == 409 and "заново" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "заново" in res.json()["detail"]
 
 
 def test_without_models_the_scope_is_approved_and_the_proposal_search_can_be_retried(agents):
@@ -686,7 +699,8 @@ def test_decisions_for_an_earlier_check_or_before_the_choice_are_refused(agents)
     chose(council_id, "C", [("Q1", None), ("Q2", None)])
     res = decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)],
                  analysis_run="прежний")
-    assert res.status_code == 409 and "заново" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "заново" in res.json()["detail"]
 
 
 def test_without_models_the_choice_is_approved_and_the_check_can_be_retried(agents):
@@ -828,15 +842,31 @@ def repos(tmp_path):
     app.dependency_overrides.pop(get_repositories)
 
 
-def scans(council_id, group, path="project", revision=0):
+def scans(council_id, group, path="project", revision=0, idea=None):
     return client.post(f"/api/councils/{council_id}/streams/{group}/repository/scan",
-                       json={"run": "g1", "revision": revision, "path": path})
+                       json={"run": "g1", "revision": revision, "path": path,
+                             "idea": seen_idea(council_id, group, idea)})
 
 
 def takes(council_id, group, scan_run=None, revision=0):
     run = scan_run or streams_of(council_id)[group].scan.run
     return client.post(f"/api/councils/{council_id}/streams/{group}/repository",
-                       json={"run": "g1", "revision": revision, "scan_run": run})
+                       json={"run": "g1", "revision": revision, "scan_run": run,
+                             "idea": seen_idea(council_id, group)})
+
+
+def test_a_scan_or_a_skip_from_a_tab_that_saw_another_idea_is_refused(agents, repos):
+    """Идею поменяли в другой вкладке ещё до запроса: эта вкладка просит скан или пропуск под
+    идею, которой уже нет, — 409, и модели не зовут."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    before = dict(agents.prompts)
+    assert scans(council_id, "C", idea="Старая идея").status_code == 409
+    assert skip(council_id, "C", idea="Старая идея").status_code == 409
+    assert streams_of(council_id)["C"].scan is None
+    assert streams_of(council_id)["C"].questions is None
+    assert agents.prompts == before
 
 
 def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
@@ -849,7 +879,9 @@ def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
     assert res.status_code == 202
     assert res.json()["streams"][2]["scan"]["state"] == "running"
     scan = streams_of(council_id)["C"].scan
-    assert scan.state == "done" and scan.complete and scan.rounds == 1
+    assert scan.state == "done"
+    assert scan.complete
+    assert scan.rounds == 1
     assert (scan.path, scan.files, scan.idea) == ("project", 2, IDEA_C)   # app.py и .gitignore
     assert scan.commit_sha == inventory(repos).commit_sha
     assert [(f.id, f.statement, f.status) for f in scan.result.findings] == [
@@ -933,7 +965,8 @@ def test_a_scan_of_something_that_is_not_a_working_copy_is_refused(agents, repos
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
     res = scans(council_id, "C", path)
-    assert res.status_code == status and problem in res.json()["detail"]
+    assert res.status_code == status
+    assert problem in res.json()["detail"]
     assert streams_of(council_id)["C"].scan is None
 
 
@@ -945,7 +978,8 @@ def test_no_scan_before_the_idea_and_no_map_of_another_scan(agents, repos):
     approve(council_id, "C", IDEA_C)
     scans(council_id, "C")
     res = takes(council_id, "C", scan_run="прежний")
-    assert res.status_code == 409 and "заново" in res.json()["detail"]
+    assert res.status_code == 409
+    assert "заново" in res.json()["detail"]
 
 
 def test_nothing_changes_while_the_council_scans_or_works_below(agents, repos):
@@ -976,7 +1010,8 @@ def test_without_models_the_scan_is_recorded_failed_and_can_be_run_again(agents,
     agents.online = set()
     assert scans(council_id, "C").status_code == 202
     scan = streams_of(council_id)["C"].scan
-    assert scan.state == "failed" and scan.error.startswith("Нет подключения")
+    assert scan.state == "failed"
+    assert scan.error.startswith("Нет подключения")
     assert takes(council_id, "C").status_code == 409                   # упавший не утвердить
     agents.online = {"sol", "fable"}
     assert scans(council_id, "C").status_code == 202
@@ -1044,4 +1079,5 @@ def test_a_scan_request_is_checked_before_git_reads_the_working_copy(agents, rep
     approve(council_id, "C", IDEA_C)
     assert scans(council_id, "C", revision=7).status_code == 409       # группы уже другие
     assert client.post("/api/councils/нет/streams/C/repository/scan",
-                       json={"run": "g1", "revision": 0, "path": "project"}).status_code == 404
+                       json={"run": "g1", "revision": 0, "path": "project",
+                             "idea": IDEA_C}).status_code == 404

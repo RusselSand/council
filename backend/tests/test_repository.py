@@ -611,6 +611,35 @@ def test_a_submodule_not_checked_out_is_told_not_hidden(with_submodule):
     result = map_of({"findings": []}, CONTEXT)
     told = json.loads(context_prompt(result, "abc", absent=("vendor/lib",)))
     assert told["submodules_not_checked_out"] == ["vendor/lib"]
+    assert told["submodules_not_checked_out_count"] == 1
+
+
+def test_many_submodules_not_checked_out_are_told_within_a_budget():
+    """Нескачанных подмодулей бывают тысячи: карта идёт в каждый промпт ниже — список в ней
+    ограничен, а сколько всего — сказано."""
+    absent = tuple(f"vendor/lib{n}" for n in range(1000))
+    found = Inventory(Path("."), "", False, (), absent=absent)
+    assert "и ещё 980" in inventory_prompt(found)
+    told = json.loads(context_prompt(map_of({"findings": []}, CONTEXT), "abc", absent=absent))
+    assert len(told["submodules_not_checked_out"]) == 20
+    assert told["submodules_not_checked_out_count"] == 1000
+
+
+@pytest.mark.skipif(os.name == "nt", reason="бита исполняемости на Windows нет")
+def test_a_flagged_file_made_executable_marks_the_copy_dirty(repo):
+    """С флагом git status и смену бита не покажет, а снимок его сохранит."""
+    git(repo, "update-index", "--assume-unchanged", "api/deps.py")
+    (repo / "api" / "deps.py").chmod(0o755)
+    assert inventory(repo).dirty
+
+
+def test_a_repository_path_keeps_the_spaces_at_its_ends(tmp_path):
+    """Каталог « repo» — не «repo»: путь человека не обрезаем, пустой — только из пробелов."""
+    (tmp_path / " repo").mkdir()
+    (tmp_path / "repo").mkdir()
+    assert located(" repo", tmp_path) == (tmp_path / " repo").resolve()
+    with pytest.raises(RepositoryError, match="Укажите"):
+        located("   ", tmp_path)
 
 
 def test_an_entry_point_named_with_spaces_at_its_ends_is_that_file():

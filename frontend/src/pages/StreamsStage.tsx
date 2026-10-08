@@ -545,12 +545,20 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 
   const start = (event: FormEvent) => {
     event.preventDefault()
-    void retry.go(() => startOrFollow(() => api.scanRepository(council.id, at, group.id, path), council,
-                                      c => streamOf(c, group.id)?.scan))
+    void retry.go(async () => {
+      try {
+        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, path, idea.text), council,
+                                   c => streamOf(c, group.id)?.scan)
+      } catch (e) {
+        // Идею поменяли в другой вкладке — показываем нынешнюю: скан пойдёт уже к ней.
+        if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+        throw e
+      }
+    })
   }
   const pass = (scanRun: string | null) => void approve.go(async () => {
     try {
-      return await api.approveRepository(council.id, at, group.id, scanRun)
+      return await api.approveRepository(council.id, at, group.id, scanRun, idea.text)
     } catch (e) {
       // Группы уже другие или скан уже другой (другая вкладка) — показываем нынешнее.
       if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
@@ -624,7 +632,8 @@ function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
       </p>
       {scan.dirty && <p className="fragment-note">{t('repository.dirty')}</p>}
       {scan.outside > 0 && <p className="fragment-note">{t('repository.outside', { count: scan.outside })}</p>}
-      {scan.absent.length > 0 && <p className="fragment-note">{t('repository.absent', { paths: scan.absent.join(', ') })}</p>}
+      {scan.absent_count > 0 && <p className="fragment-note">{t('repository.absent', {
+        count: scan.absent_count, paths: scan.absent.join(', ') + (scan.absent_count > scan.absent.length ? ', …' : '') })}</p>}
       {scan.state === 'done' && scan.complete && <p className="check ok">{t('repository.complete')}</p>}
       {scan.state === 'done' && !scan.complete && (
         <div className="check problem">

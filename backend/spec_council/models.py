@@ -289,8 +289,10 @@ class RepositoryScan(BaseModel):
     files: int = 0
     # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
     outside: int = 0
-    # Подмодули, что не скачаны: их кода нет ни на диске, ни в снимке.
+    # Подмодули, что не скачаны: их кода нет ни на диске, ни в снимке. Список — первые, в
+    # пределах бюджета (карта идёт в каждый промпт ниже), absent_count — сколько всего.
     absent: list[str] = []
+    absent_count: int = 0
     rounds: int = 0
     steps: list[Step]
     # complete — судья счёл исследование достаточным; иначе остались задания follow_up.
@@ -587,16 +589,19 @@ class ApproveIdea(GroupsEdit):
 
 class ScanRepository(GroupsEdit):
     """Человек запускает скан репозитория потока: путь к рабочей копии — абсолютный или от
-    каталога репозиториев (COUNCIL_REPOS)."""
+    каталога репозиториев (COUNCIL_REPOS). idea — идея, которую человек видел: её поменяли в
+    другой вкладке — 409, а не скан под идею, которой он не видел."""
 
     path: str
+    idea: str
 
 
 class ApproveRepository(GroupsEdit):
     """Человек проходит шаг «Репозиторий»: scan_run — утверждает карту этого скана, None —
-    пропускает шаг. И совет сразу ищет вопросы."""
+    пропускает шаг. И совет сразу ищет вопросы. idea — идея, которую человек видел."""
 
     scan_run: str | None = None
+    idea: str
 
 
 class ApproveScope(GroupsEdit):
