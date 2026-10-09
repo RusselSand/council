@@ -296,6 +296,9 @@ button.chain-step:hover { background: var(--surface-sunken) }
 .option:has(input:checked) { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg) }
 .option:has(input:disabled) { cursor: default }
 .option.unresolved { border-style: dashed; background: none; color: var(--fg-soft) }
+/* Свой вариант пишут под его строкой: поле — вровень с текстом вариантов. */
+.option-own { margin: 6px 0 0 38px }
+.option-own .idea-text { min-height: 76px; font-size: 14px }
 .option input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--fg) }
 .option-body { display: grid; gap: 3px; min-width: 0 }
 .option-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px }
@@ -305,6 +308,7 @@ section > .option-note { margin: 8px 0 0 18px }
 .question-head h3.question-text { margin: 0; font-size: inherit }
 @media (max-width: 600px) {
   .option-list, section > .option-note { margin-left: 0 }
+  .option-own { margin-left: 0 }
 }
 
 /* Шаг «Решения»: по вопросу — что сказал совет, черновик ADR и само решение кнопками. */

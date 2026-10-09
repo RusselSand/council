@@ -35,6 +35,7 @@ from .models import (
     VanishedNote,
 )
 from .notes import Catalog, Note, NotesError, declared_issues, issues_in, path_of, rendered
+from .proposals import found_by_question
 from .questions import same_question
 from .slicing import BadAnswer
 
@@ -135,7 +136,7 @@ def option_key(option: Mapping[str, object]) -> str:
 
 def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
                found: Mapping[str, list[Proposal]]) -> list[dict[str, str]]:
-    """Варианты вопроса: из текста группы и найденные советом."""
+    """Варианты вопроса: из текста группы, найденные советом и свой вариант человека."""
     return ([{"id": f"F{i}", "text": fragments[i].text} for i in question.proposal_ids
              if i in fragments]
             + [{"id": p.id, "text": p.text} for p in found.get(question.id, [])])
@@ -177,8 +178,7 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
     выгружается — с причиной, и номера задач: number раздаёт их задачам тех итогов, что лягут в
     каталог."""
-    found = {options.question_id: options.proposals
-             for options in (stream.proposals.options if stream.proposals else [])}
+    found = found_by_question(stream.proposals, stream.choices)
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
     questions: list[Part] = []
     proposals: list[Part] = []

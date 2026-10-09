@@ -155,7 +155,7 @@ from .project import (
 )
 from .project import selected as selected_decisions
 from .prompts import PromptError, render
-from .proposals import Context, Verdict, judged_proposals, proposal_list
+from .proposals import Context, Verdict, found_by_question, judged_proposals, proposal_list
 from .proposals import as_prompt as proposal_prompt
 from .proposals import merged as merged_proposals
 from .questions import (
@@ -306,8 +306,9 @@ def start_proposals(participants: list[str], judge: str,
 
 
 def choices_key(choices: list[Choice]) -> list[str]:
-    """Выбор, как его помнит проверка: поменялся — проверять заново."""
-    return [f"{choice.question_id}: {choice.proposal or '-'}" for choice in choices]
+    """Выбор, как его помнит проверка: поменялся — и свой вариант тоже — проверять заново."""
+    return [f"{choice.question_id}: {choice.proposal or '-'}"
+            + (f": {choice.text}" if choice.text is not None else "") for choice in choices]
 
 
 def start_analysis(participants: list[str], judge: str, choices: list[Choice]) -> DecisionAnalysis:
@@ -947,8 +948,7 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
         self.accepted = accepted_prompt(accepted)
         self.scope = scope
         self.choices = {choice.question_id: choice.proposal for choice in choices}
-        self.found = {options.question_id: options.proposals
-                      for options in (proposals.options if proposals else [])}
+        self.found = found_by_question(proposals, choices)
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
@@ -1028,12 +1028,14 @@ def analysis_of_question(question: OpenQuestion, verdict: Analysis) -> QuestionA
 
 def offered(question: OpenQuestion, fragments: dict[int, LabeledFragment],
             found: dict[str, list[Proposal]]) -> list[dict]:
-    """Варианты вопроса для промпта: из текста группы и найденные к нему советом."""
+    """Варианты вопроса для промпта: из текста группы, найденные к нему советом и свой вариант
+    человека — у него только текст."""
     group = [{"id": f"F{i}", "source": "group", "text": fragments[i].text}
              for i in question.proposal_ids if i in fragments]
     council = [{"id": p.id, "source": "council", "text": p.text, "reason": p.reason,
                 "constraint_ids": as_ids(p.constraint_ids), "risk_ids": as_ids(p.risk_ids),
                 "depends_on_question_ids": p.depends_on}
+               if p.source == "council" else {"id": p.id, "source": "user", "text": p.text}
                for p in found.get(question.id, [])]
     return group + council
 
@@ -1083,8 +1085,10 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
                  decisions: list[Decision], proposals: ProposalDiscovery | None,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[OutcomeDiscovery], None], *,
+                 choices: Sequence[Choice] = (),
                  repository: str = context_prompt(None),
                  design: str = design_context(None)) -> None:
+        """choices — выбор человека: из него свои варианты, которыми можно было решить."""
         super().__init__(council_id, participants, judge, runner, report,
                          start_outcomes(participants, judge, decisions))
         self.idea = idea
@@ -1092,8 +1096,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         self.design = design
         self.scope = scope
         self.decisions = {decision.question_id: decision for decision in decisions}
-        self.found = {options.question_id: options.proposals
-                      for options in (proposals.options if proposals else [])}
+        self.found = found_by_question(proposals, choices)
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
@@ -1261,9 +1264,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         self.idea = stream.idea.text
         self.scope = stream.scope or []
         self.decisions = {decision.question_id: decision for decision in stream.decisions or []}
-        self.found_proposals = {options.question_id: options.proposals
-                                for options in (stream.proposals.options
-                                                if stream.proposals else [])}
+        self.found_proposals = found_by_question(stream.proposals, stream.choices)
         self.outcomes = stream.outcomes.outcomes
         self.fragments = {fragment.id: fragment for fragment in fragments}
         self.sources = sources
