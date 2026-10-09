@@ -102,6 +102,24 @@ def entry_on_disk(entry: str, roots: Mapping[str, Path]) -> str:
     return ""
 
 
+def traced_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
+    """Файлы карты, по которым искать след: только в рабочих копиях, что всё ещё те, что
+    сканировали, — сканированный коммит в них есть. Папку заменили другим репозиторием — его
+    история к карте отношения не имеет; скан без коммита этого не проверит."""
+    same = {Path(source.root) for source in scan.repositories
+            if source.root and source.commit_sha
+            and has_commit(Path(source.root), source.commit_sha)}
+    return [found for found in evidence_files(scan) if found[0] in same]
+
+
+def has_commit(root: Path, sha: str) -> bool:
+    try:
+        git_bytes(root, "cat-file", "-e", f"{sha}^{{commit}}")
+    except RepositoryError:
+        return False
+    return True
+
+
 def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | None:
     """Путь из карты в рабочей копии: (корень, путь в ней, путь в карте)."""
     folder, _, rest = shown.partition("/") if len(roots) > 1 else ("", "", shown)

@@ -271,8 +271,14 @@ def link_problems(note: Note, notes: Mapping[str, Note]) -> list[str]:
 
 
 def issues_in(text: str) -> list[str]:
-    """Номера задач (ISS-…) в тексте — в заметке итога или сообщении коммита."""
-    return list(dict.fromkeys(ISSUE_ID.findall(text)))
+    """Номера задач (ISS-…) в тексте — в заметке итога или сообщении коммита — в одном
+    написании (issue_key)."""
+    return list(dict.fromkeys(issue_key(issue) for issue in ISSUE_ID.findall(text)))
+
+
+def issue_key(issue: str) -> str:
+    """Номер задачи как его раздаёт совет: ISS-7 и ISS-0007 — одна задача."""
+    return f"ISS-{int(issue[4:]):04d}"
 
 
 def declared_issues(text: str) -> list[str]:
@@ -287,7 +293,7 @@ def declared_issues(text: str) -> list[str]:
     found = [ISSUE_LINE.match(line) for line in lines[1:]]
     if not all(found):
         return []
-    return list(dict.fromkeys(match.group(1) for match in found if match))
+    return list(dict.fromkeys(issue_key(match.group(1)) for match in found if match))
 
 
 def number_of(note_id: str) -> tuple[str, int]:

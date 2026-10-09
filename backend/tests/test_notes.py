@@ -77,6 +77,11 @@ def test_the_next_number_skips_a_file_name_already_taken(tmp_path):
     assert Catalog.load(tmp_path).next_id("adr") == "ADR-0003"
 
 
+def test_an_issue_number_is_read_in_one_spelling():
+    assert issues_in("Сделано ISS-7, а ISS-0007 — то же") == ["ISS-0007"]
+    assert declared_issues("Поиск\n\nЗадачи:\n- ISS-12: Поиск") == ["ISS-0012"]
+
+
 def test_issues_of_an_outcome_are_the_lines_of_its_issue_list():
     body = ("Поиск\n\nКритерии готовности:\n- ISS-0042: регресс не вернулся\n\n"
             "Задачи:\n- ISS-0010: Поправить поиск\n- ISS-0011: Тесты поиска")

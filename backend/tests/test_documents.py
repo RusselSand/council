@@ -122,6 +122,21 @@ def test_a_stale_draft_or_a_changed_catalog_is_not_written(agents, notes_dir):
     assert path.read_text(encoding="utf-8") == rendered(other)
 
 
+def test_a_hand_edited_note_deleted_after_the_draft_is_not_recreated(agents, notes_dir):
+    council_id = cut_c()
+    drafts(council_id)
+    assert writes(council_id).status_code == 200
+    path = notes_dir / "ideas" / "IDEA-0001.md"
+    path.write_text(path.read_text(encoding="utf-8") + "Дописали руками.\n", encoding="utf-8")
+    drafts(council_id)
+    actions = {n.id: n.action for n in streams_of(council_id)["C"].notes_draft.notes}
+    assert actions["IDEA-0001"] == "edited"                       # черновик обещал не трогать
+    path.unlink()                                                  # а файл удалили
+    res = writes(council_id)
+    assert res.status_code == 409 and "поменялся" in res.json()["detail"]
+    assert not path.exists()
+
+
 def test_a_draft_in_the_previous_notes_language_is_not_written(agents, notes_dir, monkeypatch):
     council_id = cut_c()
     drafts(council_id)                                             # по-русски

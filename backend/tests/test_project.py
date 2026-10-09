@@ -31,6 +31,7 @@ from spec_council.project import (
     records,
     same_selection,
     selected,
+    traced_files,
     trails_of,
 )
 from spec_council.slicing import BadAnswer
@@ -118,6 +119,30 @@ def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path)
     assert (trail.issue, trail.outcome, trail.file) == ("ISS-0003", "OUT-0001", "app.py")
     assert records(catalog, trails)[0].found_in_code == [trail]
     assert trails_of([(tmp_path / "нет", "app.py", "app.py")], issue_outcomes(catalog)) == {}
+
+
+def test_an_issue_number_without_zeros_is_the_same_issue(tmp_path):
+    # В итоге руками — «ISS-3», в коммите — «ISS-0003»: одна задача.
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    outcome = Note("OUT-0001", "outcome", "Поиск\n\nЗадачи:\n- ISS-3: Поиск по базе",
+                   ("ADR-0001",))
+    catalog = Catalog.load(put(tmp_path / "notes", [*PAST[:4], outcome]))
+    trails = trails_of(evidence_files(scan_of(("", repo))), issue_outcomes(catalog))
+    assert [trail.issue for trail in trails["ADR-0001"]] == ["ISS-0003"]
+
+
+def test_a_working_copy_replaced_by_another_repository_leaves_no_trail(tmp_path):
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scanned = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                             capture_output=True, text=True).stdout.strip()
+    scan = scan_of(("", repo))
+    scan.repositories[0].commit_sha = scanned
+    assert traced_files(scan) == [(repo, "app.py", "app.py")]
+    # На том же месте — другой репозиторий: сканированного коммита в нём нет.
+    scan.repositories[0].commit_sha = "0" * 40
+    assert traced_files(scan) == []
+    scan.repositories[0].commit_sha = ""                # скан без коммита — не проверить
+    assert traced_files(scan) == []
 
 
 def test_only_the_issue_lines_of_an_outcome_declare_its_issues(tmp_path):

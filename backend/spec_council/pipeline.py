@@ -142,11 +142,11 @@ from .outcomes import as_prompt as outcome_prompt
 from .outcomes import outcome_list, same_outcomes
 from .project import (
     catalog_prompt,
-    evidence_files,
     fingerprint,
     issue_outcomes,
     records,
     same_selection,
+    traced_files,
     trails_of,
 )
 from .project import selected as selected_decisions
@@ -1416,7 +1416,7 @@ class DecisionsRun(CouncilRun[DecisionsSearch]):
         self.own = list(own)
 
     def work(self) -> dict[str, Any]:
-        files = evidence_files(self.scan) if self.scan and self.scan.result else []
+        files = traced_files(self.scan) if self.scan and self.scan.result else []
         trails = trails_of(files, issue_outcomes(self.catalog)) if files else {}
         catalog = records(self.catalog, trails, self.own)
         with self._lock:

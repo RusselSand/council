@@ -195,6 +195,12 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         before = {note.key: note for note in previous.notes} if previous else {}
         planned = [settled(note, previous_of(note, before), catalog, root)
                    for note in draft.notes]
+        # И что будет с каждой заметкой: файл, правленный руками, удалили — запись создала бы его
+        # заново, хотя черновик обещал его не трогать.
+        if [(n.action, n.current) for n in planned] != [(n.action, n.current)
+                                                        for n in draft.notes]:
+            raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
+                                     "соберите его заново")
         saved: list[Council | None] = []
 
         def keep(exported: list[ExportedNote]) -> None:
