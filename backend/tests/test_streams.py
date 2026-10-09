@@ -17,6 +17,7 @@ from spec_council.app import app
 from spec_council.deps import get_agents, get_launcher, get_repositories, get_store
 from spec_council.groups import arranged
 from spec_council.models import (
+    REPOSITORIES_MAX,
     CouncilStatus,
     DecisionAnalysis,
     DecisionDraft,
@@ -37,7 +38,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import inventory, working_copy
+from spec_council.repository import Source, inventory, working_copy
 
 client = TestClient(app)
 
@@ -860,10 +861,24 @@ def repos(tmp_path):
     app.dependency_overrides.pop(get_repositories)
 
 
-def scans(council_id, group, path="project", revision=0, idea=None):
+def scans(council_id, group, path="project", revision=0, idea=None, paths=None):
     return client.post(f"/api/councils/{council_id}/streams/{group}/repository/scan",
-                       json={"run": "g1", "revision": revision, "path": path,
+                       json={"run": "g1", "revision": revision,
+                             "paths": [path] if paths is None else paths,
                              "idea": seen_idea(council_id, group, idea)})
+
+
+def another_repo(repos, name, files):
+    """Ещё одна рабочая копия в каталоге репозиториев — рядом с project."""
+    root = repos.parent / name
+    root.mkdir(parents=True)
+    for file, text in files.items():
+        (root / file).parent.mkdir(parents=True, exist_ok=True)
+        (root / file).write_text(text, encoding="utf-8")
+    for args in (["init", "-q"], ["add", "."],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+    return root
 
 
 def takes(council_id, group, scan_run=None, revision=0):
@@ -900,8 +915,9 @@ def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
     assert scan.state == "done"
     assert scan.complete
     assert scan.rounds == 1
-    assert (scan.path, scan.files, scan.idea) == ("project", 2, IDEA_C)   # app.py и .gitignore
-    assert scan.commit_sha == inventory(repos).commit_sha
+    assert scan.idea == IDEA_C
+    assert [(r.name, r.path, r.files, r.commit_sha) for r in scan.repositories] == [
+        ("", "project", 2, inventory(repos).commit_sha)]                # app.py и .gitignore
     assert [(f.id, f.statement, f.status) for f in scan.result.findings] == [
         ("R1", FACT, "verified")]
     # Рабочую копию читают и участники, и судья.
@@ -947,7 +963,7 @@ def test_files_outside_a_sparse_checkout_are_on_record_and_in_the_map_below(agen
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
     scans(council_id, "C")
-    assert streams_of(council_id)["C"].scan.outside == 1
+    assert streams_of(council_id)["C"].scan.repositories[0].outside == 1
     assert "вне sparse checkout: 1" in agents.prompts["repository_discovery"]
     takes(council_id, "C")
     assert '"files_outside_checkout": 1' in agents.prompts["question_discovery"]
@@ -1005,8 +1021,7 @@ def test_nothing_changes_while_the_council_scans_or_works_below(agents, repos):
     council_id = grouped()
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
-    found = inventory(repos)
-    scanning = start_scan(["sol"], "sol", IDEA_C, "project", found)
+    scanning = start_scan(["sol"], "sol", IDEA_C, [Source("", "project", inventory(repos))])
     get_store().update_council(council_id, {"streams": [
         s.model_copy(update={"scan": scanning}) if s.group == "C" else s
         for s in get_store().get_council(council_id).streams]})
@@ -1098,7 +1113,7 @@ def test_a_scan_request_is_checked_before_git_reads_the_working_copy(agents, rep
     approve(council_id, "C", IDEA_C)
     assert scans(council_id, "C", revision=7).status_code == 409       # группы уже другие
     assert client.post("/api/councils/нет/streams/C/repository/scan",
-                       json={"run": "g1", "revision": 0, "path": "project",
+                       json={"run": "g1", "revision": 0, "paths": ["project"],
                              "idea": IDEA_C}).status_code == 404
 
 
@@ -1156,7 +1171,8 @@ def test_with_an_approved_scan_the_issues_are_cut_reading_the_code_anew(agents, 
     assert approves(council_id, "C").status_code == 200
     issues = streams_of(council_id)["C"].issues
     assert issues.state == "done"
-    assert (issues.code, issues.dirty) == (True, True)
+    assert issues.code
+    assert [(s.name, s.path, s.dirty) for s in issues.sources] == [("", "project", True)]
     place = agents.workspaces["issue_discovery"]                     # судья не понадобился
     assert place is not None
     assert not place.exists()
@@ -1201,7 +1217,8 @@ def test_a_scan_that_does_not_know_its_root_is_scanned_again_before_the_cut(agen
     decide(council_id, "C", DECIDED)
     council = get_store().get_council(council_id)
     get_store().update_council(council_id, {"streams": [
-        s.model_copy(update={"scan": s.scan.model_copy(update={"root": ""})}) if s.group == "C"
+        s.model_copy(update={"scan": s.scan.model_copy(update={"repositories": [
+            s.scan.repositories[0].model_copy(update={"root": ""})]})}) if s.group == "C"
         else s for s in council.streams]})
     res = approves(council_id, "C")
     assert res.status_code == 422
@@ -1255,7 +1272,81 @@ def test_without_models_a_scanned_stream_is_not_said_to_be_cut_from_code(agents,
     approves(council_id, "C")
     issues = streams_of(council_id)["C"].issues
     assert issues.state == "failed"
-    assert (issues.code, issues.commit_sha) == (False, "")      # кода никто не читал
+    assert (issues.code, issues.sources) == (False, [])         # кода никто не читал
+
+
+# --- несколько репозиториев
+
+
+def test_the_council_scans_several_repositories_together(agents, repos):
+    """Бэкенд и фронтенд в разных репозиториях: оба в одном снимке, каждый в своей папке, и
+    скан помнит каждый."""
+    another_repo(repos, "web/front", {"src/App.tsx": "export {}\n"})
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert scans(council_id, "C", paths=["project", "web/front"]).status_code == 202
+    scan = streams_of(council_id)["C"].scan
+    assert scan.state == "done"
+    assert [(r.name, r.path, r.files) for r in scan.repositories] == [
+        ("project", "project", 1), ("front", "web/front", 1)]
+    assert agents.seen == ["front/src/App.tsx", "project/app.py"]
+    prompt = agents.prompts["repository_discovery"]
+    assert "project/app.py" in prompt and "front/src/App.tsx" in prompt
+    takes(council_id, "C")
+    context = section(agents.prompts["question_discovery"], "REPOSITORY CONTEXT")
+    assert '"folder": "project"' in context and '"folder": "front"' in context
+
+
+def test_issues_are_cut_from_every_scanned_repository_read_anew(agents, repos):
+    front = another_repo(repos, "front", {"src/App.tsx": "export {}\n"})
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C", paths=["project", "front"])
+    takes(council_id, "C")
+    (front / "src" / "later.tsx").write_text("export {}\n", encoding="utf-8")   # после скана
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    assert approves(council_id, "C").status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert issues.state == "done"
+    assert [(s.name, s.dirty) for s in issues.sources] == [("project", False), ("front", True)]
+    assert agents.seen == ["front/src/App.tsx", "front/src/later.tsx", "project/app.py"]
+    # Одной из рабочих копий уже нет — нарезать без неё нельзя.
+    shutil.rmtree(front, onexc=lambda f, p, e: (os.chmod(p, 0o700), f(p)))
+    assert cuts(council_id, "C").status_code == 409                    # уже нарезаны
+    get_store().update_council(council_id, {"streams": [
+        st.model_copy(update={"issues": None}) if st.group == "C" else st
+        for st in get_store().get_council(council_id).streams]})
+    res = approves(council_id, "C")
+    assert res.status_code == 422
+    assert "front" in res.json()["detail"]
+
+
+@pytest.mark.parametrize(("paths", "problem"), [
+    (["project", "project"], "дважды"),
+    (["project", "project/sub"], "дважды"),
+])
+def test_the_same_repository_twice_is_refused(agents, repos, paths, problem):
+    (repos / "sub").mkdir()
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    res = scans(council_id, "C", paths=paths)
+    assert res.status_code == 422
+    assert problem in res.json()["detail"]
+    assert streams_of(council_id)["C"].scan is None
+
+
+@pytest.mark.parametrize("paths", [[], ["project"] * (REPOSITORIES_MAX + 1)])
+def test_a_scan_needs_one_to_a_few_repositories(agents, repos, paths):
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert scans(council_id, "C", paths=paths).status_code == 422
+    assert streams_of(council_id)["C"].scan is None
 
 
 def test_outcomes_of_another_assembly_are_not_approved(agents):

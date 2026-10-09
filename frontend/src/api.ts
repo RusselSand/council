@@ -98,15 +98,24 @@ export interface RepositoryMap {
   findings: RepositoryFinding[]; flows: RepositoryFlow[]; coverage: CoverageArea[]; unknowns: RepositoryUnknown[]
   documentation_conflicts: string[]
 }
+/** Сколько рабочих копий можно сканировать разом — как на сервере. */
+export const REPOSITORIES_MAX = 10
 /**
- * Скан репозитория под идею: путь, как его ввёл человек, коммит рабочей копии (dirty — с
- * незакоммиченными правками), сколько файлов, сколько их вне sparse checkout, чего нет в снимке
- * (нескачанные подмодули, ссылки — с причиной) и сколько проходов. complete — судья счёл исследование
+ * Рабочая копия скана: name — её папка в снимке (у нескольких пути карты начинаются с неё, у одной —
+ * пусто), путь, как его ввёл человек, коммит (dirty — с незакоммиченными правками), сколько файлов,
+ * сколько их вне sparse checkout и чего нет в снимке (нескачанные подмодули, ссылки — с причиной).
+ */
+export interface ScannedRepository {
+  name: string; path: string; root: string; commit_sha: string; dirty: boolean
+  files: number; outside: number; omitted: string[]; omitted_count: number
+}
+/**
+ * Скан репозиториев под идею: какие рабочие копии и сколько проходов. complete — судья счёл исследование
  * достаточным; иначе в follow_up — что доисследовать не успели.
  */
 export interface RepositoryScan {
-  state: 'running' | 'done' | 'failed'; run: string; idea: string; path: string; commit_sha: string; dirty: boolean
-  files: number; outside: number; omitted: string[]; omitted_count: number; rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
+  state: 'running' | 'done' | 'failed'; run: string; idea: string; repositories: ScannedRepository[]
+  rounds: number; steps: Step[]; complete: boolean; result: RepositoryMap | null
   follow_up: FollowUp[]; error: string | null
 }
 /** Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана scan_run. */
@@ -202,11 +211,11 @@ export interface Issue {
 }
 /**
  * Нарезка утверждённых итогов (outcomes — каких) на задачи. code — читали ли модели код (без
- * скана — нет), commit_sha и dirty — какой; uncovered_outcome_ids — итоги, не вошедшие ни в одну задачу.
+ * скана — нет), sources — каких рабочих копий; uncovered_outcome_ids — итоги, не вошедшие ни в одну задачу.
  */
 export interface IssueDiscovery {
-  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; code: boolean; commit_sha: string
-  dirty: boolean; steps: Step[]; issues: Issue[]; gaps: IssueGap[]; uncovered_outcome_ids: string[]
+  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; code: boolean; sources: ScannedRepository[]
+  steps: Step[]; issues: Issue[]; gaps: IssueGap[]; uncovered_outcome_ids: string[]
   error: string | null
 }
 /**
@@ -298,11 +307,11 @@ export const api = {
   /** Искать идею потока заново: после сбоя или без подключения к моделям. */
   seekIdea: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
-  /** Сканировать репозиторий под идею потока: путь — от каталога репозиториев или абсолютный. */
-  scanRepository: (id: string, at: GroupsVersion, group: string, path: string, idea: string) =>
+  /** Сканировать репозитории под идею потока: пути — от каталога репозиториев или абсолютные. */
+  scanRepository: (id: string, at: GroupsVersion, group: string, paths: string[], idea: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, path, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, paths, idea }),
     }),
   /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Совет сразу ищет вопросы. */
   approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>

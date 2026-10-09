@@ -41,6 +41,7 @@ from .models import (
     RepositoryFlow,
     RepositoryMap,
     RepositoryUnknown,
+    ScannedRepository,
 )
 from .slicing import BadAnswer
 
@@ -621,7 +622,8 @@ def unlinked(root: Path, name: str) -> bool:
     return os.path.normcase(real) == os.path.normcase(expected)
 
 
-def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
+def snapshot(found: Inventory, into: Path, *,
+             budget: int | None = None) -> tuple[str, frozenset[str]]:
     """Снимок рабочей копии, который читают модели: только файлы inventory — без .git и
     игнорируемого (там бывают .env и ключи) — и только обычные файлы внутри неё. Пока идёт
     скан, рабочую копию могут править, а снимок неподвижен: все участники и все проходы читают
@@ -629,15 +631,19 @@ def snapshot(found: Inventory, into: Path) -> tuple[str, frozenset[str]]:
     RepositoryError. Отпечаток — по содержимому снимка и битам исполняемости: им ключуются
     оплаченные ответы, и тот же код в другой копии — тот же ключ. Файл inventory не прочитать —
     тоже RepositoryError: промпт его называет, и карта без него вышла бы «полной», хотя его никто
-    не читал. Вернёт отпечаток и какие файлы в снимок легли."""
+    не читал. budget — сколько байтов ещё влезет (у нескольких рабочих копий предел общий).
+    Вернёт отпечаток и какие файлы в снимок легли."""
     fits(found)
+    budget = SNAPSHOT_MAX if budget is None else budget
+    if found.size > budget:
+        raise too_big()
     digest = hashlib.sha256()
     taken: dict[str, tuple[int, int]] = {}
     missed: list[str] = []
     written = 0
     for name in found.files:
         copied = copied_file(found.root, name, into / name, executable=found.modes.get(name),
-                             limit=SNAPSHOT_MAX - written)
+                             limit=budget - written)
         if copied is None:
             missed.append(name)
             continue
@@ -734,6 +740,122 @@ def written(target: Path, name: str) -> Iterator[BinaryIO]:
                               f"{exc.strerror or exc}") from exc
     with file:
         yield file
+
+
+@dataclass(frozen=True)
+class Source:
+    """Рабочая копия скана: путь, как его ввёл человек, её inventory и имя в снимке. У
+    нескольких копий файлы каждой — в её папке, «name/…»; у одной имени нет, и пути — как в ней
+    самой."""
+
+    name: str
+    path: str
+    found: Inventory
+
+    @property
+    def prefix(self) -> str:
+        return f"{self.name}/" if self.name else ""
+
+
+def sources_of(chosen: Sequence[tuple[str, Inventory]]) -> list[Source]:
+    """Рабочие копии скана с их именами в снимке: одна — без имени; несколько — по имени
+    каталога, у тёзок (и тех, что отличаются лишь регистром или нормализацией Unicode, —
+    снимок может лечь на систему, где это одно имя) с номером. Одна и та же копия дважды или
+    копия внутри другой, чьи файлы её уже включают, — RepositoryError: эти файлы легли бы в
+    снимок дважды."""
+    for n, (_, found) in enumerate(chosen):
+        for _, other in chosen[n + 1:]:
+            overlapping(found, other)
+            overlapping(other, found)
+    if len(chosen) == 1:
+        path, found = chosen[0]
+        return [Source("", path, found)]
+    sources: list[Source] = []
+    taken: set[str] = set()
+    for path, found in chosen:
+        base = found.root.name or "repository"
+        name, n = base, 2
+        while folded(name) in taken:
+            name, n = f"{base}-{n}", n + 1
+        taken.add(folded(name))
+        sources.append(Source(name, path, found))
+    return sources
+
+
+def overlapping(inner: Inventory, outer: Inventory) -> None:
+    """Файлы inner уже есть среди файлов outer — RepositoryError. Вложенную рабочую копию скан
+    outer обходит сам, если git её не игнорирует."""
+    if inner.root == outer.root:
+        raise RepositoryError(f"Рабочая копия {inner.root} выбрана дважды")
+    if not inner.root.is_relative_to(outer.root):
+        return
+    folder = inner.root.relative_to(outer.root).as_posix() + "/"
+    if any(name.startswith(folder) for name in outer.files):
+        raise RepositoryError(f"Рабочая копия {inner.root} лежит внутри {outer.root}, и её "
+                              "файлы скан той уже видит — выберите одну из них")
+
+
+def folded(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def scanned(source: Source) -> ScannedRepository:
+    """Что скан помнит о рабочей копии."""
+    found = source.found
+    return ScannedRepository(name=source.name, path=source.path, root=str(found.root),
+                             commit_sha=found.commit_sha, dirty=found.dirty,
+                             files=len(found.files), outside=found.outside,
+                             omitted=capped(found.omitted), omitted_count=len(found.omitted))
+
+
+def merged(sources: Sequence[Source]) -> Inventory:
+    """Все рабочие копии скана как одна — для промпта и общих пределов: пути с папкой копии."""
+    if len(sources) == 1:
+        return sources[0].found
+    return Inventory(
+        root=Path(), commit_sha="", dirty=any(source.found.dirty for source in sources),
+        files=tuple(source.prefix + name for source in sources for name in source.found.files),
+        size=sum(source.found.size for source in sources),
+        outside=sum(source.found.outside for source in sources),
+        omitted=tuple(shown(source.prefix) + entry for source in sources
+                      for entry in source.found.omitted))
+
+
+def snapshot_all(sources: Sequence[Source], into: Path) -> tuple[str, frozenset[str]]:
+    """Снимок всех рабочих копий скана: каждая — в своей папке (одна — прямо в into, и её
+    отпечаток — как у снимка одной копии). Пределы — на все вместе. Вернёт отпечаток и какие
+    файлы, с папкой копии, в снимок легли."""
+    if len(sources) == 1:
+        return snapshot(sources[0].found, into)
+    fits(merged(sources))
+    digest = hashlib.sha256()
+    copied: set[str] = set()
+    budget = SNAPSHOT_MAX
+    for source in sources:
+        folder = into / source.name
+        folder.mkdir()
+        part, files = snapshot(source.found, folder, budget=budget)
+        budget -= sum((folder / name).stat().st_size for name in files)
+        digest.update(os.fsencode(source.name) + b"\0" + part.encode() + b"\0")
+        copied.update(source.prefix + name for name in files)
+    return digest.hexdigest(), frozenset(copied)
+
+
+def commits_prompt(sources: Sequence[Source]) -> str:
+    """Коммит каждой рабочей копии; у нескольких — с её папкой."""
+    if len(sources) == 1:
+        return sha_prompt(sources[0].found)
+    return "\n".join(f"{source.name}: {sha_prompt(source.found)}" for source in sources)
+
+
+def sources_prompt(sources: Sequence[Source]) -> str:
+    """Inventory всех рабочих копий скана; у нескольких — сначала, где какая."""
+    text = inventory_prompt(merged(sources))
+    if len(sources) == 1:
+        return text
+    where = ", ".join(f"{shown(source.name)}/ — {shown(source.path)}" for source in sources)
+    return (f"Рабочих копий несколько, каждая — в своей папке снимка: {where}. Пути файлов — "
+            f"с этой папкой.\n{text}")
 
 
 def inventory_prompt(found: Inventory) -> str:
@@ -1007,23 +1129,28 @@ def as_prompt(result: RepositoryMap) -> dict:
     return result.model_dump(mode="json")
 
 
-def context_prompt(result: RepositoryMap | None, commit_sha: str = "", *,
-                   dirty: bool = False, outside: int = 0, omitted: Sequence[str] = (),
-                   omitted_count: int = 0, complete: bool = True,
+def context_prompt(result: RepositoryMap | None,
+                   repositories: Sequence[ScannedRepository] = (), *, complete: bool = True,
                    follow_up: Sequence[FollowUp] = ()) -> str:
-    """Что получают следующие шаги: проверенная карта репозитория или честное «не
-    сканировали». uncommitted_changes — карта снята с рабочей копии с незакоммиченными
-    правками, а не с самого коммита: следующие шаги не припишут ему то, чего в нём нет;
-    files_outside_checkout — сколько файлов коммита вне sparse checkout, а not_in_snapshot —
-    чего ещё нет в снимке (нескачанные подмодули, ссылки; первые, всего — _count): этого модели
-    не видели; complete — судья счёл исследование достаточным, а remaining_follow_up — что
-    доисследовать не успели: недоисследованное — не установленное."""
+    """Что получают следующие шаги: проверенная карта или честное «не сканировали». По каждой
+    рабочей копии (repositories): folder — папка её файлов в путях карты ("" — одна копия, пути
+    без папки), commit_sha; uncommitted_changes — карта снята с рабочей копии с
+    незакоммиченными правками, а не с самого коммита: следующие шаги не припишут ему то, чего в
+    нём нет; files_outside_checkout — сколько файлов коммита вне sparse checkout, а
+    not_in_snapshot — чего ещё нет в снимке (нескачанные подмодули, ссылки; первые, всего —
+    _count): этого модели не видели. complete — судья счёл исследование достаточным, а
+    remaining_follow_up — что доисследовать не успели: недоисследованное — не установленное."""
     if result is None:
         return "Репозиторий не исследовался: существующей реализации шаг не видел."
-    return json.dumps({"commit_sha": commit_sha, "uncommitted_changes": dirty,
-                       "files_outside_checkout": outside,
-                       "not_in_snapshot": capped(omitted),
-                       "not_in_snapshot_count": max(omitted_count, len(omitted)),
+    return json.dumps({"repositories": [{
+                           "folder": source.name, "path": source.path,
+                           "commit_sha": source.commit_sha,
+                           "uncommitted_changes": source.dirty,
+                           "files_outside_checkout": source.outside,
+                           "not_in_snapshot": capped(source.omitted),
+                           "not_in_snapshot_count": max(source.omitted_count,
+                                                        len(source.omitted))}
+                           for source in repositories],
                        "complete": complete,
                        "remaining_follow_up": [
                            {"objective": item.objective, "reason": item.reason,

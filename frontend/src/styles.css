@@ -351,8 +351,13 @@ section > .option-note { margin: 8px 0 0 18px }
 }
 
 /* Шаг «Репозиторий»: путь и скан, карта находок — по разделам, как строки итога. */
-.repo-scan { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0 }
+.repo-scan { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 12px 0 0 }
 .repo-scan .text-field { flex: 1; min-width: 16ch; padding: 8px 12px; font-family: var(--mono); font-size: 13px }
+.repo-paths { flex: 1; display: grid; gap: 6px; min-width: 16ch }
+.repo-path { display: flex; align-items: center; gap: 6px }
+.repo-path .text-field { min-width: 0 }
+.repo-add { justify-self: start }
+.repo-remove { padding: 4px 8px; font-size: 18px; line-height: 1; text-decoration: none }
 .repo-summary { margin: 12px 0 0; color: var(--fg-soft); font: 12.5px var(--mono); overflow-wrap: anywhere }
 .repo-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none }
 .repo-finding { display: grid; gap: 2px }

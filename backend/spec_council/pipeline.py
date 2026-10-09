@@ -62,7 +62,7 @@ import hashlib
 import json
 import logging
 import tempfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
@@ -132,15 +132,15 @@ from .questions import (
 )
 from .repository import Context as RepositoryContext
 from .repository import (
-    Inventory,
     RepositoryError,
-    capped,
+    Source,
+    commits_prompt,
     context_prompt,
-    inventory_prompt,
     judged_map,
     map_of,
-    sha_prompt,
-    snapshot,
+    scanned,
+    snapshot_all,
+    sources_prompt,
 )
 from .repository import as_prompt as map_prompt
 from .slicing import (
@@ -217,13 +217,14 @@ def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
 SCAN_ROUNDS = 3
 
 
-def start_scan(participants: list[str], judge: str, idea: str, path: str,
-               found: Inventory) -> RepositoryScan:
-    return RepositoryScan(state="running", run=uuid4().hex[:8], idea=idea, path=path,
-                          root=str(found.root), commit_sha=found.commit_sha, dirty=found.dirty,
-                          files=len(found.files),
-                          outside=found.outside, omitted=capped(found.omitted),
-                          omitted_count=len(found.omitted),
+# Снимок рабочих копий хода в каталог: его отпечаток и какие файлы легли.
+type Copier = Callable[[Sequence[Source], Path], tuple[str, frozenset[str]]]
+
+
+def start_scan(participants: list[str], judge: str, idea: str,
+               sources: Sequence[Source]) -> RepositoryScan:
+    return RepositoryScan(state="running", run=uuid4().hex[:8], idea=idea,
+                          repositories=[scanned(source) for source in sources],
                           steps=steps(participants, judge, (StepName.repository_discovery,
                                                             StepName.repository_judge)))
 
@@ -341,20 +342,18 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
         raise NotImplementedError
 
     @contextmanager
-    def _reading(self, found: Inventory | None,
-                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]]
-                 ) -> Iterator[Path | None]:
-        """Модели этого хода читают снимок рабочей копии: только файлы inventory, без .git и
+    def _reading(self, sources: Sequence[Source], copy: Copier) -> Iterator[Path | None]:
+        """Модели этого хода читают снимок рабочих копий: только файлы inventory, без .git и
         игнорируемого, неподвижный, пока ход идёт, — только на чтение. Его отпечаток ключует
         ответы: к другому коду оплаченный ответ не годится. Снимок удаляется с концом хода.
-        found None — кода нет: ход без файлов."""
-        if found is None:
+        Рабочих копий нет — кода нет: ход без файлов."""
+        if not sources:
             yield None
             return
         with tempfile.TemporaryDirectory(prefix="council-scan-") as place:
             folder = Path(place)
             try:
-                self.fingerprint, self.copied = copy(found, folder)
+                self.fingerprint, self.copied = copy(sources, folder)
             except RepositoryError as exc:
                 raise StageFailed(str(exc)) from exc
             self.workspace = folder
@@ -1027,9 +1026,10 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
 
 
 class RepositoryRun(CouncilRun[RepositoryScan]):
-    """Скан репозитория под идею потока. Inventory — список файлов рабочей копии на момент
-    запуска; модели читают не её, а снимок: только файлы inventory, без .git и игнорируемого,
-    неподвижный, пока идёт скан, — только на чтение. Его отпечаток ключует ответы. Участники
+    """Скан репозиториев под идею потока. Inventory — список файлов каждой рабочей копии на
+    момент запуска; модели читают не их, а снимок: только файлы inventory, без .git и
+    игнорируемого, у нескольких копий — каждая в своей папке, неподвижный, пока идёт скан, —
+    только на чтение. Его отпечаток ключует ответы. Участники
     по отдельности устанавливают, как система устроена сейчас, судья проверяет их находки по
     коду и сводит в одну карту. Если он видит существенные пробелы, участники доисследуют
     именно их — до двух раз; судья видит и прежнюю карту. Одинаковые находки судья видит
@@ -1037,19 +1037,19 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
 
     what = "скан репозитория"
 
-    def __init__(self, council_id: str, idea: str, path: str, found: Inventory,
+    def __init__(self, council_id: str, idea: str, sources: Sequence[Source],
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[RepositoryScan], None], *,
-                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
+                 copy: Copier = snapshot_all) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_scan(participants, judge, idea, path, found))
+                         start_scan(participants, judge, idea, sources))
         self.idea = idea
-        self.found = found
+        self.sources = sources
         self.fragments = fragments
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
-        with self._reading(self.found, self.copy) as folder:
+        with self._reading(self.sources, self.copy) as folder:
             return self._rounds(RepositoryContext(self.copied, (folder,)))
 
     def _rounds(self, context: RepositoryContext) -> dict[str, Any]:
@@ -1057,8 +1057,8 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
             "idea": self.idea,
             "fragments": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
                                   for f in self.fragments]),
-            "inventory": inventory_prompt(self.found),
-            "commit_sha": sha_prompt(self.found),
+            "inventory": sources_prompt(self.sources),
+            "commit_sha": commits_prompt(self.sources),
         }
         requests: list[dict] = []
         previous: list | dict = []
@@ -1091,7 +1091,7 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
 class IssueRun(CouncilRun[IssueDiscovery]):
     """Нарезка утверждённых итогов на задачи для coding agents: участники по отдельности,
     судья сводит их нарезки в итоговый набор. Если шаг «Репозиторий» пройден сканом, модели
-    читают снимок той же рабочей копии заново (_reading) — точки входа и нынешнее состояние
+    читают снимок тех же рабочих копий заново (_reading) — точки входа и нынешнее состояние
     проверяются по коду, а карта скана идёт им в помощь; без скана кода нет. Задачу, которой
     не хватает решения, блокирует пробел или открытый вопрос — недостающее не додумывается.
     Номера задач (I-n) и пробелов (G-n) — по порядку у судьи; какие итоги не вошли ни в одну
@@ -1101,9 +1101,10 @@ class IssueRun(CouncilRun[IssueDiscovery]):
 
     def __init__(self, council_id: str, stream: Stream, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
-                 report: Callable[[IssueDiscovery], None], *, found: Inventory | None,
+                 report: Callable[[IssueDiscovery], None], *,
+                 sources: Sequence[Source] = (),
                  repository: str = context_prompt(None),
-                 copy: Callable[[Inventory, Path], tuple[str, frozenset[str]]] = snapshot) -> None:
+                 copy: Copier = snapshot_all) -> None:
         """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
                          start_issues(participants, judge, stream.outcomes.run))
@@ -1115,18 +1116,17 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                                                 if stream.proposals else [])}
         self.outcomes = stream.outcomes.outcomes
         self.fragments = {fragment.id: fragment for fragment in fragments}
-        self.found = found
+        self.sources = sources
         self.repository = repository
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
-        with self._reading(self.found, self.copy) as folder:
-            if folder is not None and self.found is not None:
-                # Снимок есть — модели читают этот код: с какого он коммита и с правками ли.
+        with self._reading(self.sources, self.copy) as folder:
+            if folder is not None:
+                # Снимок есть — модели читают этот код: с каких он коммитов и с правками ли.
                 with self._lock:
                     self.state.code = True
-                    self.state.commit_sha = self.found.commit_sha
-                    self.state.dirty = self.found.dirty
+                    self.state.sources = [scanned(source) for source in self.sources]
                     self._publish()
             return self._cut()
 
@@ -1181,11 +1181,15 @@ class IssueRun(CouncilRun[IssueDiscovery]):
 
     def _code_note(self) -> str:
         """Где код: снимок — текущий каталог хода; без скана его нет."""
-        if self.found is None:
+        if not self.sources:
             return ""
-        return (f"Код рабочей копии — в текущем каталоге: её снимок, только на чтение, коммит "
-                f"{sha_prompt(self.found)}. Проверяй по нему точки входа и текущее состояние; "
-                f"карта ниже — с шага Repository Discovery.\n\n")
+        if len(self.sources) == 1:
+            where = f"её снимок, только на чтение, коммит {commits_prompt(self.sources)}"
+        else:
+            where = ("их снимок, только на чтение, каждая — в своей папке (folder в карте ниже), "
+                     f"коммиты:\n{commits_prompt(self.sources)}\n")
+        return (f"Код рабочих копий — в текущем каталоге: {where}. Проверяй по нему точки входа "
+                f"и текущее состояние; карта ниже — с шага Repository Discovery.\n\n")
 
     def _numbered(self, chosen: IssueAnswer) -> dict[str, Any]:
         """Номера по порядку: задачи — I-n, пробелы — G-n (в ответе они уже по порядку);
