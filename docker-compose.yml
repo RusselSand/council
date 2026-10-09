@@ -12,6 +12,8 @@ x-paths: &paths
   COUNCIL_JUDGE: ${COUNCIL_JUDGE:-}
   COUNCIL_DATA: /data/councils
   COUNCIL_REPOS: /repos
+  # Токен Figma для скана макета (шаг «Дизайн»): только file_content:read, см. README.
+  FIGMA_TOKEN: ${FIGMA_TOKEN:-}
   HOME: /tmp
 
 # Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста, советы — в .data.

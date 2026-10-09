@@ -20,26 +20,29 @@ GIVEN = {
                              "investigation_requests"},
     "repository_judge": {"idea", "fragments", "inventory", "commit_sha", "discovery_results",
                          "previous_findings"},
-    "question_discovery": {"idea", "fragments", "repository"},
-    "question_judge": {"idea", "fragments", "question_candidates", "repository"},
+    "design_discovery": {"idea", "fragments", "figma_source", "investigation_requests"},
+    "design_judge": {"idea", "fragments", "figma_source", "discovery_results",
+                     "previous_findings"},
+    "question_discovery": {"idea", "fragments", "repository", "design"},
+    "question_judge": {"idea", "fragments", "question_candidates", "repository", "design"},
     "proposal_discovery": {"idea", "question", "existing_proposals", "constraints_and_risks",
-                           "accepted_decisions", "repository"},
+                           "accepted_decisions", "repository", "design"},
     "proposal_judge": {"idea", "question", "existing_proposals", "constraints_and_risks",
-                       "accepted_adrs", "proposal_candidates", "repository"},
+                       "accepted_adrs", "proposal_candidates", "repository", "design"},
     "decision_analysis": {"idea", "question", "proposals", "user_selection",
                           "constraints_and_risks", "related_questions", "accepted_decisions",
-                          "repository"},
+                          "repository", "design"},
     "decision_judge": {"idea", "question", "proposals", "user_selection",
                        "constraints_and_risks", "related_questions", "accepted_adrs",
-                       "decision_analyses", "repository"},
+                       "decision_analyses", "repository", "design"},
     "outcome_discovery": {"idea", "questions_and_proposals", "accepted_adrs",
-                          "constraints_and_risks", "repository"},
+                          "constraints_and_risks", "repository", "design"},
     "outcome_judge": {"idea", "questions_and_proposals", "accepted_adrs", "constraints_and_risks",
-                      "outcome_candidates", "repository"},
+                      "outcome_candidates", "repository", "design"},
     "issue_discovery": {"idea", "outcomes", "accepted_adrs", "constraints_and_risks",
-                        "repository_context"},
+                        "repository_context", "design"},
     "issue_judge": {"idea", "outcomes", "accepted_adrs", "constraints_and_risks",
-                    "repository_context", "issue_candidates"},
+                    "repository_context", "design", "issue_candidates"},
 }
 
 
@@ -78,3 +81,10 @@ def test_every_step_after_the_scan_gets_the_repository_map(name):
     """Карта репозитория передаётся дальше: каждый следующий шаг её видит."""
     values = {key: f"<{key}>" for key in GIVEN[name]}
     assert "<repository>" in render(name, **values)
+
+
+@pytest.mark.parametrize("name", [name for name, given in GIVEN.items() if "design" in given])
+def test_every_step_after_the_design_step_gets_the_design(name):
+    """Описание макета передаётся дальше: каждый следующий шаг его видит."""
+    values = {key: f"<{key}>" for key in GIVEN[name]}
+    assert "<design>" in render(name, **values)

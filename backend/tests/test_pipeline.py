@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from spec_council.figma import FigmaError, link_of
 from spec_council.models import (
     Choice,
     Decision,
@@ -22,6 +23,7 @@ from spec_council.models import (
 )
 from spec_council.pipeline import (
     DecisionRun,
+    DesignRun,
     GroupingRun,
     IdeaRun,
     IssueRun,
@@ -33,6 +35,7 @@ from spec_council.pipeline import (
     SlicingRun,
 )
 from spec_council.repository import Inventory, RepositoryError, Source
+from tests.figma_fake import LINK, FakeFigma
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -944,6 +947,71 @@ def test_evidence_counts_only_files_that_made_it_into_the_snapshot():
                ("repository_judge", "fable"): {"status": "complete", "findings": [FACT]}}
     result, _, _ = scan(replies, copy=lambda found, into: ("снимок", frozenset({"api/routes.py"})))
     assert [(f.status, f.evidence) for f in result.result.findings] == [("inferred", [])]
+
+
+# --- скан макета
+
+SCREEN = {"id": "D1", "statement": "Экран тредов с поиском", "status": "verified",
+          "evidence": [{"page_id": "1:0", "node_id": "2:1", "name": "Threads"}]}
+CHECK_EMPTY = {"objective": "Проверить пустой результат поиска",
+               "targets": [{"page_id": "1:0", "node_id": "2:3"}]}
+
+
+def design(replies, fetch=None):
+    runner, reports = FakeRunner(replies), []
+    fetch = fetch or FakeFigma()
+    result = DesignRun("c1", FIND, [link_of(LINK)], GROUP_FRAGMENTS, ["sol", "fable"], "fable",
+                       runner, reports.append, fetch=fetch).run()
+    return result, runner, reports
+
+
+def design_judge_until(rounds_needed):
+    def reply(prompt):
+        done = section(prompt, "PREVIOUS FINDINGS") != "[]" if rounds_needed == 2 else False
+        return {"status": "complete" if done else "needs_investigation", "findings": [SCREEN],
+                "follow_up": [] if done else [CHECK_EMPTY]}
+    return reply
+
+
+def test_the_design_scan_reads_one_snapshot_of_the_figma_file_and_follows_up():
+    found = {"findings": [SCREEN], "screens": [{"name": "Threads", "node_id": "2:1"}]}
+    result, runner, reports = design({("design_discovery", "sol"): found,
+                                      ("design_discovery", "fable"): found,
+                                      ("design_judge", "fable"): design_judge_until(2)})
+    assert result.state == "done"
+    assert (result.rounds, result.complete, result.follow_up) == (2, True, [])
+    assert [(f.id, f.status) for f in result.result.findings] == [("D1", "verified")]
+    assert (result.source.name, result.source.version, result.source.images) == (
+        "Billing", "v1", 2)
+    assert result.links == [LINK]
+    source = section(runner.asked["design_discovery", "sol"], "FIGMA SOURCE")
+    assert "2:1 «Threads»" in source and "frames/2-1 Threads.png" in source
+    assert "Проверить пустой результат поиска" in section(
+        runner.asked["design_discovery", "sol"], "ADDITIONAL INVESTIGATION REQUESTS")
+    # И участники, и судья читают один снимок; после скана его нет.
+    [place] = set(runner.workspaces.values())
+    assert place.name.startswith("council-design-")
+    assert not place.exists()
+    # Что легло в снимок, видно раньше, чем ответили модели.
+    assert any(r.source is not None and r.rounds == 0 for r in reports)
+
+
+def test_another_version_of_the_file_is_a_new_call_and_the_same_one_is_free():
+    replies = {("design_discovery", "sol"): {"findings": [SCREEN]},
+               ("design_discovery", "fable"): {"findings": [SCREEN]},
+               ("design_judge", "fable"): {"status": "complete", "findings": [SCREEN]}}
+    _, first, _ = design(replies)
+    _, same, _ = design(replies)
+    _, other, _ = design(replies, fetch=FakeFigma(version="v2"))
+    assert first.keys == same.keys
+    assert set(first.keys).isdisjoint(other.keys)
+
+
+def test_a_figma_refusal_fails_the_scan_before_any_model_is_asked():
+    result, runner, _ = design({}, fetch=FakeFigma(fail=FigmaError("Токен Figma не подходит")))
+    assert result.state == "failed"
+    assert "Токен Figma не подходит" in result.error
+    assert runner.keys == [] and result.source is None
 
 
 # --- нарезка на задачи

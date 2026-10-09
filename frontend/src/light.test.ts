@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type {
   Issue, IssueDiscovery,
-  Council, DecisionAnalysis, IdeaDiscovery, Outcome, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
+  Council, DecisionAnalysis, DesignScan, IdeaDiscovery, Outcome, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
   RepositoryScan, Slicing, Stream, Structure,
 } from './api'
 import { attention, CHAIN, chainLight, councilLight, currentStep, stageLight, streamLight } from './light'
@@ -22,7 +22,7 @@ const structure = (state: Structure['state'], labels: Structure['labels'] = { 1:
 const search = (state: IdeaDiscovery['state']): IdeaDiscovery =>
   ({ state, run: 'i1', steps: [], options: [], proposal: null, error: null })
 const asked = (state: QuestionDiscovery['state']): QuestionDiscovery =>
-  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', steps: [], questions: [], error: null })
+  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', steps: [], questions: [], error: null })
 const offered = (state: ProposalDiscovery['state']): ProposalDiscovery =>
   ({ state, run: 'p1', scope: [], steps: [], options: [], error: null })
 const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>
@@ -49,8 +49,9 @@ const stream = (discovery: IdeaDiscovery | null, approved = false, questions: Qu
                 analysis: DecisionAnalysis | null = null, decided = false,
                 outcomes: OutcomeDiscovery | null = null, issues: IssueDiscovery | null = null): Stream => ({
   group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions,
-  // Утверждённая идея — шаг «Репозиторий» пропущен: его проверяет свой тест.
+  // Утверждённая идея — шаги «Репозиторий» и «Дизайн» пропущены: их проверяют свои тесты.
   scan: null, repository: approved ? { by: 'skipped', scan_run: '' } : null,
+  design_scan: null, design: approved ? { by: 'skipped', scan_run: '' } : null,
   scope: chosen ? [{ id: 'Q1', text: 'Как?', source: 'discovered', source_question_id: null, proposal_ids: [], reason: null }]
     : null,
   proposals, choices: picked ? [{ question_id: 'Q1', proposal: null }] : null,
@@ -89,7 +90,7 @@ describe('светофор', () => {
     expect(streamLight(stream(search('done')))).toBe('yours')
     const picked = stream(search('done'), true, asked('done'), true, offered('done'), true)
     expect(streamLight(picked)).toBe('yours')
-    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'yours', 'idle', 'idle'])
+    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'yours', 'idle', 'idle'])
   })
 
   it('своя идея после упавшего поиска: поток прошёл шаг, ошибки больше нет', () => {
@@ -137,7 +138,7 @@ describe('светофор', () => {
       state, run: 's1', idea: 'Идея', rounds: 1,
       repositories: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abc', dirty: false, files: 1, outside: 0, omitted: [], omitted_count: 0 }],
       steps: [], complete: true, result: null, follow_up: [], error: null })
-    const on = (scan: RepositoryScan | null) => ({ ...stream(null, true), scan, repository: null })
+    const on = (scan: RepositoryScan | null) => ({ ...stream(null, true), scan, repository: null, design: null })
     expect([on(scanned('running')), on(scanned('failed')), on(scanned('done')), on(null)].map(streamLight))
       .toEqual(['running', 'failed', 'yours', 'yours'])
     expect(currentStep(on(null))).toBe('repository')
@@ -145,8 +146,25 @@ describe('светофор', () => {
     const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
     expect(attention(council(on(scanned('failed')))).map(a => a.what)).toEqual(['repositoryFailed'])
     expect(attention(council(on(null))).map(a => a.what)).toEqual(['repositoryWait'])
+    const passed = { ...stream(null, true), design: null }
+    expect([currentStep(passed), chainLight(passed, 'repository')]).toEqual(['design', 'done'])
+  })
+
+  it('дизайн: после репозитория; сканирует ИИ, скан упал, ждёт вас; пройденный — дальше вопросы', () => {
+    const scanned = (state: DesignScan['state']): DesignScan => ({
+      state, run: 'd1', idea: 'Идея', links: ['https://www.figma.com/design/K/x'], source: null, rounds: 1,
+      steps: [], complete: true, result: null, follow_up: [], error: null })
+    const on = (scan: DesignScan | null) => ({ ...stream(null, true), design_scan: scan, design: null })
+    expect([on(scanned('running')), on(scanned('failed')), on(scanned('done')), on(null)].map(streamLight))
+      .toEqual(['running', 'failed', 'yours', 'yours'])
+    expect(currentStep(on(null))).toBe('design')
+    expect(chainLight(on(null), 'questions')).toBe('idle')
+    expect(chainLight({ ...on(null), repository: null }, 'design')).toBe('idle')     // сначала — репозиторий
+    const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
+    expect(attention(council(on(scanned('failed')))).map(a => a.what)).toEqual(['designFailed'])
+    expect(attention(council(on(null))).map(a => a.what)).toEqual(['designWait'])
     const passed = stream(null, true)
-    expect([currentStep(passed), chainLight(passed, 'repository')]).toEqual(['questions', 'done'])
+    expect([currentStep(passed), chainLight(passed, 'design')]).toEqual(['questions', 'done'])
   })
 
   it('решения: проверяет ИИ, проверка упала, ждут фиксации; зафиксированные ведут к итогам', () => {
@@ -178,7 +196,7 @@ describe('светофор', () => {
     const approved = on(assembled('done', [result({ blocked_by: ['Q1'] })]), cut('running'))
     expect(currentStep(approved)).toBe('issues')
     expect(CHAIN.map(step => chainLight(approved, step)))
-      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'running'])
+      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'running'])
   })
 
   it('задачи: нарезает ИИ, нарезка упала; все готовы и каждый итог в задаче — поток готов', () => {
@@ -192,7 +210,7 @@ describe('светофор', () => {
     const none = on(cut('done'))
     expect([on(cut('running')), on(cut('failed')), ready, blocked, gaps, lost, none].map(streamLight))
       .toEqual(['running', 'failed', 'done', 'yours', 'yours', 'yours', 'yours'])
-    expect(CHAIN.map(step => chainLight(ready, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done'])
+    expect(CHAIN.map(step => chainLight(ready, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done'])
     const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
     expect(attention(council(blocked)).map(a => a.what)).toEqual(['issuesWait'])
     expect(attention(council(on(cut('failed')))).map(a => a.what)).toEqual(['issuesFailed'])

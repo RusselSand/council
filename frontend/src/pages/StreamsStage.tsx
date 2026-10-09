@@ -1,11 +1,11 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issueReady, outcomeReady, REPOSITORIES_MAX, startOrFollow, streamOf,
-  structureIsStale, type Council, type Group, type IdeaDiscovery, type Issue, type IssueGap, type LabeledFragment,
-  type Model, type OpenQuestion, type Outcome, type QuestionAnalysis, type QuestionOptions, type RepositoryScan,
-  type ScannedRepository, type Settings, type Stream, type Structure,
+  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, outcomeReady, REPOSITORIES_MAX, startOrFollow,
+  streamOf, structureIsStale, type Council, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
+  type IssueGap, type LabeledFragment, type Model, type OpenQuestion, type Outcome, type QuestionAnalysis,
+  type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
@@ -36,11 +36,12 @@ export function StreamsStage({ council, settings, onChange }: Readonly<{
   )
   // Свой экземпляр на поток: открытый шаг и черновик идеи — у каждого потока свои.
   return <StreamPage key={stream.group} council={council} structure={structure} stream={stream}
-                     models={settings.models} repositories={settings.repositories} onChange={onChange} />
+                     models={settings.models} repositories={settings.repositories} figma={settings.figma}
+                     onChange={onChange} />
 }
 
-function StreamPage({ council, structure, stream, models, repositories, onChange }: Readonly<{
-  council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null
+function StreamPage({ council, structure, stream, models, repositories, figma, onChange }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null; figma: boolean
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -48,6 +49,7 @@ function StreamPage({ council, structure, stream, models, repositories, onChange
   // Утверждение отбора — здесь, а не в шаге: отказ (409) приносит новый поиск, шаг рисуется
   // заново, а ошибка должна остаться видна.
   const passing = useAction(onChange, 'repository.approveFailed')
+  const designing = useAction(onChange, 'design.approveFailed')
   const choosing = useAction(onChange, 'questions.approveFailed')
   const picking = useAction(onChange, 'options.approveFailed')
   const fixing = useAction(onChange, 'decisions.approveFailed')
@@ -61,8 +63,8 @@ function StreamPage({ council, structure, stream, models, repositories, onChange
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
   const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(currentStep(stream)) ? chosen : currentStep(stream)
   const search = stream.discovery
-  const runs = { group: search, repository: stream.scan, questions: stream.questions, options: stream.proposals,
-                 decisions: stream.analysis, outcomes: stream.outcomes, issues: stream.issues }
+  const runs = { group: search, repository: stream.scan, design: stream.design_scan, questions: stream.questions,
+                 options: stream.proposals, decisions: stream.analysis, outcomes: stream.outcomes, issues: stream.issues }
   const run = runs[view]
   const open = (step: ChainStep) => {
     setFocus(null)
@@ -94,7 +96,13 @@ function StreamPage({ council, structure, stream, models, repositories, onChange
           // Новый скан — и путь заново, из него.
           <RepositoryStep key={stream.scan?.run ?? ''} council={council} structure={structure} stream={stream}
                           group={group} repositories={repositories} onChange={onChange} approve={passing}
-                          onApproved={() => open('questions')} />
+                          onApproved={() => open('design')} />
+        )}
+        {view === 'design' && (
+          // Новый скан — и ссылки заново, из него.
+          <DesignStep key={stream.design_scan?.run ?? ''} council={council} structure={structure} stream={stream}
+                      group={group} figma={figma} onChange={onChange} approve={designing}
+                      onApproved={() => open('questions')} />
         )}
         {view === 'questions' && (
           // Новый поиск вопросов — и отбор заново, к его вопросам.
@@ -167,9 +175,9 @@ function StreamList({ council, structure, open }: Readonly<{
 /** Где поток и чей ход. */
 function whereIs(stream: Stream, t: T): string {
   const step = currentStep(stream)
-  const run = { group: stream.discovery, repository: stream.scan, questions: stream.questions,
-                options: stream.proposals, decisions: stream.analysis, outcomes: stream.outcomes,
-                issues: stream.issues }[step]
+  const run = { group: stream.discovery, repository: stream.scan, design: stream.design_scan,
+                questions: stream.questions, options: stream.proposals, decisions: stream.analysis,
+                outcomes: stream.outcomes, issues: stream.issues }[step]
   if (run?.state === 'running') return t(`streams.${step}.seeking`)
   if (run?.state === 'failed') return t(`streams.${step}.failed`)
   if (step === 'issues' && streamLight(stream) === 'done') return t('streams.issues.done')
@@ -197,7 +205,10 @@ function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
               {step === 'repository' && stream.idea && (
                 <span className="segment-sub">{repositoryStatus(stream, t)}</span>
               )}
-              {step === 'questions' && stream.repository && (
+              {step === 'design' && stream.repository && (
+                <span className="segment-sub">{designStatus(stream, t)}</span>
+              )}
+              {step === 'questions' && stream.design && (
                 <span className="segment-sub">{questionsStatus(stream, t)}</span>
               )}
               {step === 'options' && stream.scope && <span className="segment-sub">{optionsStatus(stream, t)}</span>}
@@ -225,7 +236,8 @@ function Chain({ stream, group, view, onView }: Readonly<{
   const status = (step: ChainStep, i: number) => {
     if (step === 'group') return groupStatus(stream, group, t)
     if (step === 'repository' && stream.idea) return repositoryStatus(stream, t)
-    if (step === 'questions' && stream.repository) return questionsStatus(stream, t)
+    if (step === 'design' && stream.repository) return designStatus(stream, t)
+    if (step === 'questions' && stream.design) return questionsStatus(stream, t)
     if (step === 'options' && stream.scope) return optionsStatus(stream, t)
     if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
     if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
@@ -347,6 +359,16 @@ function repositoryStatus(stream: Stream, t: T): string {
   if (scan?.state === 'failed') return t('chain.repositoryFailed')
   if (scan) return t('chain.repositoryScanned')
   return t('chain.repositoryNone')
+}
+
+/** Что с шагом «Дизайн»: пройден (с описанием или без), скан идёт, упал, готов или его не было. */
+function designStatus(stream: Stream, t: T): string {
+  const scan = stream.design_scan
+  if (stream.design) return t(stream.design.by === 'scan' ? 'chain.designTaken' : 'chain.designSkipped')
+  if (scan?.state === 'running') return t('chain.designScanning')
+  if (scan?.state === 'failed') return t('chain.designFailed')
+  if (scan) return t('chain.designScanned')
+  return t('chain.designNone')
 }
 
 /** Что с вопросами потока: ищутся, упали, найдены, отобраны или ещё не искались. */
@@ -562,7 +584,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 }>) {
   const { t } = useTranslation()
   const scan = stream.scan
-  const [paths, setPaths] = useState(() => scan?.repositories.length ? scan.repositories.map(r => pathField(r.path)) : [pathField()])
+  const [paths, setPaths] = useState(() => scan?.repositories.length ? scan.repositories.map(r => listField(r.path)) : [listField()])
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = scan?.state === 'running'
@@ -578,7 +600,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
     event.preventDefault()
     void retry.go(async () => {
       try {
-        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, paths.map(f => f.path), idea.text), council,
+        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, paths.map(f => f.value), idea.text), council,
                                    c => streamOf(c, group.id)?.scan)
       } catch (e) {
         // Идею поменяли в другой вкладке — показываем нынешнюю: скан пойдёт уже к ней.
@@ -599,6 +621,8 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
   const taken = stream.repository
   const ready = scan?.state === 'done' && scan.result !== null
   const placeholder = repositories ? t('repository.pathRoot', { root: repositories }) : t('repository.pathAbsolute')
+  // Пока сканируется макет, шаг «Репозиторий» иначе не пройти: сервер ответит 423.
+  const held = below || stream.design_scan?.state === 'running'
 
   return (
     <>
@@ -611,34 +635,17 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
       <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
       <section className="card panel" aria-label={t('repository.title')}>
         <form className="repo-scan" onSubmit={start}>
-          <div className="repo-paths">
-            {paths.map((field, n) => (
-              <div className="repo-path" key={field.key}>
-                <input className="text-field" value={field.path} readOnly={busy || sought} placeholder={placeholder}
-                       aria-label={paths.length > 1 ? t('repository.pathN', { n: n + 1 }) : t('repository.path')}
-                       onChange={e => {
-                         const value = e.target.value
-                         setPaths(current => current.map(f => f.key === field.key ? { ...f, path: value } : f))
-                       }} />
-                {paths.length > 1 && (
-                  <button type="button" className="btn-link repo-remove" disabled={busy || sought}
-                          aria-label={t('repository.removePath', { n: n + 1 })}
-                          onClick={() => setPaths(current => current.filter(f => f.key !== field.key))}>×</button>
-                )}
-              </div>
-            ))}
-            {paths.length < REPOSITORIES_MAX && (
-              <button type="button" className="btn-link repo-add" disabled={busy || sought}
-                      onClick={() => setPaths(current => [...current, pathField()])}>{t('repository.addPath')}</button>
-            )}
-          </div>
+          <FieldList fields={paths} onFields={setPaths} max={REPOSITORIES_MAX} locked={busy || sought}
+                     placeholder={placeholder} addLabel={t('repository.addPath')}
+                     label={n => paths.length > 1 ? t('repository.pathN', { n }) : t('repository.path')}
+                     removeLabel={n => t('repository.removePath', { n })} />
           <button type="submit" className="btn-secondary"
-                  disabled={busy || sought || below || stale || paths.some(f => f.path.trim() === '')}>
+                  disabled={busy || sought || below || stale || paths.some(f => f.value.trim() === '')}>
             {t('repository.scan')}
           </button>
         </form>
         {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
-        {stream.questions && !sought && <p className="fragment-note">{t('repository.rescanNote')}</p>}
+        {(stream.design || stream.questions) && !sought && <p className="fragment-note">{t('repository.rescanNote')}</p>}
         {sought && (
           <p className="muted">{t('repository.scanning', { round: Math.min(scan.rounds + 1, 3) })} {t('run.note')}</p>
         )}
@@ -651,13 +658,13 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
         {scan?.result && <RepositoryMapView scan={scan} />}
         {taken && <p className="fragment-note">{t(taken.by === 'scan' ? 'repository.taken' : 'repository.skipped')}</p>}
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
-        {below && <p className="fragment-note">{t('repository.belowRunning')}</p>}
+        {held && <p className="fragment-note">{t('repository.belowRunning')}</p>}
         <div className="stream-actions spread">
-          <button className="btn-secondary" disabled={busy || sought || below || stale} onClick={() => pass(null)}>
+          <button className="btn-secondary" disabled={busy || sought || held || stale} onClick={() => pass(null)}>
             {t('repository.skip')}
           </button>
           {ready && (
-            <button className="btn-primary large" disabled={busy || below || stale} onClick={() => pass(scan.run)}>
+            <button className="btn-primary large" disabled={busy || held || stale} onClick={() => pass(scan.run)}>
               {t('repository.approve')}
             </button>
           )}
@@ -670,10 +677,39 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 const FINDING_PILL = { verified: 'pill ready', inferred: 'pill open', unknown: 'pill' } as const
 const COVERAGE_PILL = { covered: 'pill ready', partial: 'pill open', not_investigated: 'pill blocked', not_applicable: 'pill' } as const
 
-/** Поле пути на шаге «Репозиторий»; key — чтобы React не путал поля, когда одно из них убирают. */
-interface PathField { key: number; path: string }
-let pathKeys = 0
-const pathField = (path = ''): PathField => ({ key: pathKeys++, path })
+/** Поле списка — путь к рабочей копии или ссылка на макет; key — чтобы React не путал поля, когда одно убирают. */
+interface ListField { key: number; value: string }
+let fieldKeys = 0
+const listField = (value = ''): ListField => ({ key: fieldKeys++, value })
+
+/** Поля списка: каждое можно поправить или убрать (пока их больше одного), добавить — пока их меньше max. */
+function FieldList({ fields, onFields, max, locked, placeholder, label, removeLabel, addLabel }: Readonly<{
+  fields: ListField[]; onFields: Dispatch<SetStateAction<ListField[]>>; max: number; locked: boolean
+  placeholder: string; label: (n: number) => string; removeLabel: (n: number) => string; addLabel: string
+}>) {
+  return (
+    <div className="repo-paths">
+      {fields.map((field, n) => (
+        <div className="repo-path" key={field.key}>
+          <input className="text-field" value={field.value} readOnly={locked} placeholder={placeholder}
+                 aria-label={label(n + 1)}
+                 onChange={e => {
+                   const value = e.target.value
+                   onFields(current => current.map(f => f.key === field.key ? { ...f, value } : f))
+                 }} />
+          {fields.length > 1 && (
+            <button type="button" className="btn-link repo-remove" disabled={locked} aria-label={removeLabel(n + 1)}
+                    onClick={() => onFields(current => current.filter(f => f.key !== field.key))}>×</button>
+          )}
+        </div>
+      ))}
+      {fields.length < max && (
+        <button type="button" className="btn-link repo-add" disabled={locked}
+                onClick={() => onFields(current => [...current, listField()])}>{addLabel}</button>
+      )}
+    </div>
+  )
+}
 
 /** Коммит коротко; нет коммитов — прочерк. */
 const shortSha = (sha: string) => sha.slice(0, 8) || '—'
@@ -796,6 +832,255 @@ function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
           <>
             <dt>{t('repository.conflicts')}</dt>
             <dd><ul className="repo-list">{result.documentation_conflicts.map(text => <li key={text}>{text}</li>)}</ul></dd>
+          </>
+        )}
+      </dl>
+    </>
+  )
+}
+
+/**
+ * Шаг «Дизайн» — необязательный, после «Репозитория». Совет снимает макет Figma по ссылкам — страницы
+ * со структурой и картинками фреймов, с одной версии файла, — участники и судья исследуют снимок и
+ * описывают, какой интерфейс и какое поведение предусмотрены. Человек утверждает описание или
+ * пропускает шаг — и совет сразу ищет вопросы; описание идёт во все следующие шаги.
+ */
+function DesignStep({ council, structure, stream, group, figma, onChange, approve, onApproved }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; group: Group; figma: boolean
+  onChange: (council: Council) => void; approve: ReturnType<typeof useAction>; onApproved: () => void
+}>) {
+  const { t } = useTranslation()
+  const scan = stream.design_scan
+  const [links, setLinks] = useState(() => scan?.links.length ? scan.links.map(listField) : [listField()])
+  const retry = useAction(onChange)
+  const busy = approve.busy || retry.busy
+  const sought = scan?.state === 'running'
+  const stale = structureIsStale(council)
+  // Пока ИИ работает ниже по цепочке, шаг не поменять: сервер ответит 423.
+  const below = [stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
+    .some(run => run?.state === 'running')
+  const idea = stream.idea
+  if (!idea) return null
+  const at = { run: structure.run, revision: structure.revision }
+
+  const start = (event: FormEvent) => {
+    event.preventDefault()
+    void retry.go(async () => {
+      try {
+        return await startOrFollow(() => api.scanDesign(council.id, at, group.id, links.map(f => f.value), idea.text),
+                                   council, c => streamOf(c, group.id)?.design_scan)
+      } catch (e) {
+        // Идею поменяли в другой вкладке — показываем нынешнюю: скан пойдёт уже к ней.
+        if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+        throw e
+      }
+    })
+  }
+  const pass = (scanRun: string | null) => void approve.go(async () => {
+    try {
+      return await api.approveDesign(council.id, at, group.id, scanRun, idea.text)
+    } catch (e) {
+      // Группы уже другие или скан уже другой (другая вкладка) — показываем нынешнее.
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  }, onApproved)
+  const taken = stream.design
+  const ready = scan?.state === 'done' && scan.result !== null
+  const round = Math.min((scan?.rounds ?? 0) + 1, 3)
+
+  return (
+    <>
+      <section className="card panel" aria-labelledby="step-title">
+        <p className="next-caps">{t(sought ? 'design.capsAi' : 'design.caps')}</p>
+        <h2 id="step-title" className="panel-title large">{t('design.title')}</h2>
+        <p className="panel-hint">{t('design.hint')}</p>
+        <p className="fragment-note">{t('design.trust')}</p>
+      </section>
+      <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
+      <section className="card panel" aria-label={t('design.title')}>
+        {!figma && <p className="fragment-note">{t('design.noToken')}</p>}
+        <form className="repo-scan" onSubmit={start}>
+          <FieldList fields={links} onFields={setLinks} max={LINKS_MAX} locked={busy || sought}
+                     placeholder={t('design.linkPlaceholder')} addLabel={t('design.addLink')}
+                     label={n => links.length > 1 ? t('design.linkN', { n }) : t('design.link')}
+                     removeLabel={n => t('design.removeLink', { n })} />
+          <button type="submit" className="btn-secondary"
+                  disabled={!figma || busy || sought || below || stale || links.some(f => f.value.trim() === '')}>
+            {t('design.scan')}
+          </button>
+        </form>
+        <p className="fragment-note">{t('design.linksNote')}</p>
+        {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
+        {stream.questions && !sought && <p className="fragment-note">{t('design.rescanNote')}</p>}
+        {sought && (
+          <p className="muted">{scan.source ? t('design.scanning', { round }) : t('design.fetching')} {t('run.note')}</p>
+        )}
+        {scan?.state === 'failed' && (
+          <>
+            <p className="error-text" role="alert">{scan.error}</p>
+            <p className="fragment-note">{t('design.failedNote')}</p>
+          </>
+        )}
+        {scan?.result && <DesignMapView scan={scan} />}
+        {taken && <p className="fragment-note">{t(taken.by === 'scan' ? 'design.taken' : 'design.skipped')}</p>}
+        {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
+        {below && <p className="fragment-note">{t('design.belowRunning')}</p>}
+        <div className="stream-actions spread">
+          <button className="btn-secondary" disabled={busy || sought || below || stale} onClick={() => pass(null)}>
+            {t('design.skip')}
+          </button>
+          {ready && (
+            <button className="btn-primary large" disabled={busy || below || stale} onClick={() => pass(scan.run)}>
+              {t('design.approve')}
+            </button>
+          )}
+        </div>
+      </section>
+    </>
+  )
+}
+
+/** Узел макета, как его видит человек: имя и номер. */
+const nodeLabel = (node: DesignNode) => [node.name, node.node_id || node.page_id].filter(Boolean).join(' · ')
+
+/** Описание макета: какой файл, находки, экраны, сценарии, покрытие, неизвестное и противоречия. */
+function DesignMapView({ scan }: Readonly<{ scan: DesignScan }>) {
+  const { t } = useTranslation()
+  const result = scan.result
+  if (!result) return null
+  const source = scan.source
+  return (
+    <>
+      {source && (
+        <p className="repo-summary">
+          {t('design.source', { name: source.name, version: source.version, pages: source.pages, images: source.images })}
+        </p>
+      )}
+      {source && source.requested.length > 0 && (
+        <p className="repo-summary">{t('design.requested', { nodes: source.requested.map(nodeLabel).join(', ') })}</p>
+      )}
+      <p className="repo-summary">{t('design.rounds', { rounds: scan.rounds })}</p>
+      {scan.state === 'done' && scan.complete && <p className="check ok">{t('design.complete')}</p>}
+      {scan.state === 'done' && !scan.complete && (
+        <div className="check problem">
+          <p>{t('design.incomplete')}</p>
+          <ul>{scan.follow_up.map(item => (
+            <li key={item.objective}>
+              {item.targets.length > 0 ? `${item.objective} — ${item.targets.map(nodeLabel).join(', ')}` : item.objective}
+            </li>
+          ))}</ul>
+        </div>
+      )}
+      {result.findings.length === 0 && <p className="muted">{t('design.empty')}</p>}
+      <dl className="outcome-rows">
+        {result.findings.length > 0 && (
+          <>
+            <dt>{t('design.findings')}</dt>
+            <dd>
+              <ul className="repo-list">{result.findings.map(finding => (
+                <li key={finding.id} className="repo-finding">
+                  <span className="repo-finding-head">
+                    <span className="fragment-id">{finding.id}</span>
+                    <span className={FINDING_PILL[finding.status]}>{t(`repository.status.${finding.status}`)}</span>
+                    <span className="repo-statement">{finding.statement}</span>
+                  </span>
+                  {finding.evidence.length > 0 && (
+                    <span className="repo-evidence">{finding.evidence.map(nodeLabel).join('; ')}</span>
+                  )}
+                  {finding.relevance && <span className="option-note">{finding.relevance}</span>}
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+        {result.screens.length > 0 && (
+          <>
+            <dt>{t('design.screens')}</dt>
+            <dd>
+              <ul className="repo-list">{result.screens.map(screen => (
+                <li key={`${screen.name}:${screen.node_id}`} className="repo-finding">
+                  <span className="repo-finding-head">
+                    <strong>{screen.name}</strong>
+                    {screen.node_id && <span className="repo-evidence">{screen.node_id}</span>}
+                  </span>
+                  {screen.purpose && <span>{screen.purpose}</span>}
+                  {screen.data.length > 0 && (
+                    <span className="option-note">{t('design.data', { items: screen.data.join(', ') })}</span>
+                  )}
+                  {screen.actions.length > 0 && (
+                    <ul className="repo-steps">{screen.actions.map(action => (
+                      <li key={action.action}>
+                        <span className={FINDING_PILL[action.status]}>{t(`repository.status.${action.status}`)}</span>{' '}
+                        {t('design.action', { action: action.action, result: action.result ?? t('design.noResult') })}
+                      </li>
+                    ))}</ul>
+                  )}
+                  {screen.states.length > 0 && (
+                    <span className="option-note">
+                      {t('design.states', { items: screen.states.map(state => state.name).join(', ') })}
+                    </span>
+                  )}
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+        {result.flows.length > 0 && (
+          <>
+            <dt>{t('design.flows')}</dt>
+            <dd>
+              <ul className="repo-list">{result.flows.map(flow => (
+                <li key={flow.name}>
+                  <span className="repo-finding-head">
+                    <strong>{flow.name}</strong>
+                    <span className={FINDING_PILL[flow.status]}>{t(`repository.status.${flow.status}`)}</span>
+                  </span>
+                  <ol className="repo-steps">{flow.steps.map(step => (
+                    <li key={step.description}>
+                      {step.description}{step.finding_ids.length > 0 && ` (${step.finding_ids.join(', ')})`}
+                    </li>
+                  ))}</ol>
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+        {result.coverage.length > 0 && (
+          <>
+            <dt>{t('design.coverage')}</dt>
+            <dd>
+              <ul className="repo-list">{result.coverage.map(area => (
+                <li key={area.area} className="repo-finding-head">
+                  <span>{area.area}</span>
+                  <span className={COVERAGE_PILL[area.status]}>{t(`repository.coverage.${area.status}`)}</span>
+                  {area.reason && <span className="option-note">{area.reason}</span>}
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+        {result.unknowns.length > 0 && (
+          <>
+            <dt>{t('design.unknowns')}</dt>
+            <dd>
+              <ul className="repo-list">{result.unknowns.map(unknown => (
+                <li key={unknown.question} className="repo-finding">
+                  <span>{unknown.reason ? `${unknown.question} — ${unknown.reason}` : unknown.question}</span>
+                  {unknown.investigate.length > 0 && (
+                    <span className="option-note">
+                      {t('repository.investigate', { targets: unknown.investigate.map(nodeLabel).join(', ') })}
+                    </span>
+                  )}
+                </li>
+              ))}</ul>
+            </dd>
+          </>
+        )}
+        {result.design_conflicts.length > 0 && (
+          <>
+            <dt>{t('design.conflicts')}</dt>
+            <dd><ul className="repo-list">{result.design_conflicts.map(text => <li key={text}>{text}</li>)}</ul></dd>
           </>
         )}
       </dl>
