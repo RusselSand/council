@@ -36,6 +36,10 @@ GIVEN = {
                           "constraints_and_risks", "repository"},
     "outcome_judge": {"idea", "questions_and_proposals", "accepted_adrs", "constraints_and_risks",
                       "outcome_candidates", "repository"},
+    "issue_discovery": {"idea", "outcomes", "accepted_adrs", "constraints_and_risks",
+                        "repository_context"},
+    "issue_judge": {"idea", "outcomes", "accepted_adrs", "constraints_and_risks",
+                    "repository_context", "issue_candidates"},
 }
 
 

@@ -1,7 +1,7 @@
 import {
-  councilPath, outcomeReady, seeking, structureIsStale,
-  type Council, type DecisionAnalysis, type IdeaDiscovery, type OutcomeDiscovery, type ProposalDiscovery,
-  type QuestionDiscovery, type RepositoryScan, type Slicing, type Stream, type Structure,
+  councilPath, issueReady, seeking, structureIsStale,
+  type Council, type DecisionAnalysis, type IdeaDiscovery, type IssueDiscovery, type OutcomeDiscovery,
+  type ProposalDiscovery, type QuestionDiscovery, type RepositoryScan, type Slicing, type Stream, type Structure,
 } from './api'
 import type { Stage } from './pages/CouncilPage'
 
@@ -13,7 +13,7 @@ import type { Stage } from './pages/CouncilPage'
 export type Light = 'running' | 'done' | 'yours' | 'failed' | 'idle'
 
 /** Шаги цепочки потока. Работает пока первый — группа и её идея. */
-export const CHAIN = ['group', 'repository', 'questions', 'options', 'decisions', 'outcomes'] as const
+export const CHAIN = ['group', 'repository', 'questions', 'options', 'decisions', 'outcomes', 'issues'] as const
 export type ChainStep = (typeof CHAIN)[number]
 
 /** Что важнее показать, если состояний несколько: сначала то, что требует человека. */
@@ -22,7 +22,7 @@ export const strongest = (lights: Light[]): Light => ORDER.find(light => lights.
 
 /** Ход модели: идёт — зелёный, упал — красный. Готов или не было — решает этап. */
 type Run = Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery | ProposalDiscovery
-  | DecisionAnalysis | OutcomeDiscovery
+  | DecisionAnalysis | OutcomeDiscovery | IssueDiscovery
 
 const ofRun = (run: Run | null): Light | null => {
   if (run?.state === 'running') return 'running'
@@ -33,22 +33,24 @@ const ofRun = (run: Run | null): Light | null => {
 /**
  * Где поток: пока нет идеи — на группе, пока не пройден (сканом или пропуском) шаг «Репозиторий» —
  * на нём, пока не отобраны вопросы — на вопросах, пока не выбраны варианты — на вариантах, пока не
- * зафиксированы решения — на решениях, дальше — итоги.
+ * зафиксированы решения — на решениях, пока итоги не утверждены — на итогах, дальше — задачи.
  */
 export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.idea) return 'group'
   if (!stream.repository) return 'repository'
   if (!stream.scope) return 'questions'
   if (!stream.choices) return 'options'
-  return stream.decisions ? 'outcomes' : 'decisions'
+  if (!stream.decisions) return 'decisions'
+  return stream.issues ? 'issues' : 'outcomes'
 }
 
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
- * Утверждённая идея проходит шаг, и прежний поиск идеи, даже упавший, уже не важен. Итоги —
- * последний шаг: собраны, все готовы и вобрали все решения — зелёные; какой-то держит открытый
- * вопрос или пробел, или принятое решение не вошло ни в один — ход за вами, как и если итоги ещё
- * не собирали или не собралось ни одного: решений не хватает даже на ожидаемое поведение.
+ * Утверждённая идея проходит шаг, и прежний поиск идеи, даже упавший, уже не важен. Итоги
+ * проходит их утверждение: до него ход за вами. Задачи — последний шаг: нарезаны, ни одну не
+ * держит пробел или открытый вопрос, пробелов нет, каждый итог вошёл в задачу и каждое решение —
+ * в итог, а у каждого итога есть критерии готовности — зелёные; иначе ход за вами, как и если не
+ * нарезалось ни одной.
  */
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
@@ -56,11 +58,16 @@ export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'questions' && stream.repository) return stream.scope ? 'done' : ofRun(stream.questions) ?? 'yours'
   if (step === 'options' && stream.scope) return stream.choices ? 'done' : ofRun(stream.proposals) ?? 'yours'
   if (step === 'decisions' && stream.choices) return stream.decisions ? 'done' : ofRun(stream.analysis) ?? 'yours'
-  if (step === 'outcomes' && stream.decisions) {
-    const outcomes = stream.outcomes
-    const ready = outcomes !== null && outcomes.outcomes.length > 0 && outcomes.outcomes.every(outcomeReady)
-      && outcomes.uncovered_adr_ids.length === 0
-    return ofRun(outcomes) ?? (ready ? 'done' : 'yours')
+  if (step === 'outcomes' && stream.decisions) return stream.issues ? 'done' : ofRun(stream.outcomes) ?? 'yours'
+  if (step === 'issues' && stream.issues) {
+    const issues = stream.issues
+    // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла.
+    const lost = stream.outcomes?.uncovered_adr_ids.length ?? 0
+    // Итог без критериев готовности: задачи по нему не проверить.
+    const vague = stream.outcomes?.outcomes.some(outcome => outcome.acceptance_criteria.length === 0) ?? false
+    const ready = issues.issues.length > 0 && issues.issues.every(issueReady) && issues.gaps.length === 0
+      && issues.uncovered_outcome_ids.length === 0 && lost === 0 && !vague
+    return ofRun(issues) ?? (ready ? 'done' : 'yours')
   }
   return 'idle'
 }
@@ -107,7 +114,7 @@ export interface Attention {
   light: 'yours' | 'failed'
   what: 'slicingFailed' | 'slicesDone' | 'groupingFailed' | 'groupsStale' | 'groupsReady'
     | 'ideaFailed' | 'ideaWaits' | 'repositoryFailed' | 'repositoryWait' | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
-    | 'decisionsFailed' | 'decisionsWait' | 'outcomesFailed' | 'outcomesWait'
+    | 'decisionsFailed' | 'decisionsWait' | 'outcomesFailed' | 'outcomesWait' | 'issuesFailed' | 'issuesWait'
   /** Буква потока — у того, что про поток. */
   group?: string
   to: string

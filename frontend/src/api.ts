@@ -7,7 +7,7 @@ export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'stru
   | 'idea_discovery' | 'idea_judge' | 'repository_discovery' | 'repository_judge'
   | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
-  | 'outcome_discovery' | 'outcome_judge'
+  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -187,12 +187,35 @@ export interface OutcomeDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; decisions: string[]; steps: Step[]
   outcomes: Outcome[]; uncovered_adr_ids: string[]; error: string | null
 }
+/** Пробел нарезки (G1, G2…): без его решения часть работы не начать — материал для нового вопроса. */
+export interface IssueGap { id: string; question: string; reason: string; outcome_ids: string[] }
+/**
+ * Задача для coding agent (I1, I2…) — законченная часть утверждённых итогов: кому и зачем
+ * (user_story), где менять и что там сейчас, что именно сделать (scope). depends_on — задачи,
+ * результат которых ей нужен; blocked_by — пробелы (G-n) и открытые вопросы, без решения
+ * которых её не сделать; acceptance_criteria — когда готовы её итоги (из итогов, не от модели).
+ */
+export interface Issue {
+  id: string; title: string; user_story: string; main_entry_points: string[]; current_state: string
+  scope: string[]; outcome_ids: string[]; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
+  depends_on: string[]; blocked_by: string[]; acceptance_criteria: string[]
+}
+/**
+ * Нарезка утверждённых итогов (outcomes — каких) на задачи. code — читали ли модели код (без
+ * скана — нет), commit_sha и dirty — какой; uncovered_outcome_ids — итоги, не вошедшие ни в одну задачу.
+ */
+export interface IssueDiscovery {
+  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; code: boolean; commit_sha: string
+  dirty: boolean; steps: Step[]; issues: Issue[]; gaps: IssueGap[]; uncovered_outcome_ids: string[]
+  error: string | null
+}
 /**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
  * тексте; scan — необязательный скан репозитория под идею, repository — как прошли этот шаг
  * (карта идёт во все следующие); questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
  * proposals — поиск вариантов к ним; choices — выбор по каждому; analysis — его проверка;
- * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них.
+ * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них;
+ * issues — нарезка утверждённых итогов на задачи.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
@@ -200,7 +223,7 @@ export interface Stream {
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
-  outcomes: OutcomeDiscovery | null
+  outcomes: OutcomeDiscovery | null; issues: IssueDiscovery | null
 }
 
 /** Правка с экрана: меняются только присланные поля. */
@@ -323,6 +346,15 @@ export const api = {
   /** Собрать итоги заново: после сбоя или без подключения к моделям. */
   seekOutcomes: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes/discovery`, { method: 'POST' }),
+  /** Утвердить итоги — те, что на экране (outcomesRun), — и совет нарежет их на задачи. */
+  approveOutcomes: (id: string, at: GroupsVersion, group: string, outcomesRun: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, outcomes_run: outcomesRun }),
+    }),
+  /** Нарезать заново: после сбоя или без подключения к моделям при утверждении. */
+  seekIssues: (id: string, group: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/issues/discovery`, { method: 'POST' }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/idea`, {
@@ -379,7 +411,7 @@ export const groupsConfirmed = (council: Council): boolean =>
 
 /** Ходы потока: поиск идеи, скан репозитория, поиск вопросов, вариантов, проверка выбора и сборка итогов. */
 export const searchesOf = (stream: Stream) =>
-  [stream.discovery, stream.scan, stream.questions, stream.proposals, stream.analysis, stream.outcomes]
+  [stream.discovery, stream.scan, stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
 
 /** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
 export const seeking = (council: Council): boolean =>
@@ -388,6 +420,9 @@ export const seeking = (council: Council): boolean =>
 /** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел, и есть чем проверить, что он готов. */
 export const outcomeReady = (outcome: Outcome): boolean =>
   outcome.blocked_by.length === 0 && outcome.gaps.length === 0 && outcome.acceptance_criteria.length > 0
+
+/** Задачу можно брать в работу: её не держит ни пробел, ни открытый вопрос. */
+export const issueReady = (issue: Issue): boolean => issue.blocked_by.length === 0
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type {
+  Issue, IssueDiscovery,
   Council, DecisionAnalysis, IdeaDiscovery, Outcome, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
   RepositoryScan, Slicing, Stream, Structure,
 } from './api'
@@ -31,15 +32,22 @@ const result = (more: Partial<Outcome> = {}): Outcome => ({
   acceptance_criteria: ['Видно сразу.'], blocked_by: [], gaps: [], ...more })
 const assembled = (state: OutcomeDiscovery['state'], outcomes: Outcome[] = []): OutcomeDiscovery =>
   ({ state, run: 'o1', decisions: [], steps: [], outcomes, uncovered_adr_ids: [], error: null })
+const task = (more: Partial<Issue> = {}): Issue => ({
+  id: 'I1', title: 'Задача', user_story: 'As a member, I want it.', main_entry_points: [], current_state: '',
+  scope: ['Сделать.'], outcome_ids: ['O1'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: [],
+  blocked_by: [], acceptance_criteria: [], ...more })
+const cut = (state: IssueDiscovery['state'], issues: Issue[] = []): IssueDiscovery =>
+  ({ state, run: 'i1', outcomes: 'o1', code: false, commit_sha: '', dirty: false, steps: [], issues, gaps: [],
+     uncovered_outcome_ids: [], error: null })
 /**
  * Поток: approved — идея утверждена; questions — поиск вопросов; chosen — вопросы отобраны;
  * proposals — поиск вариантов; picked — выбор по ним утверждён; analysis — его проверка;
- * decided — решения зафиксированы; outcomes — итоги из них.
+ * decided — решения зафиксированы; outcomes — итоги из них; issues — их нарезка на задачи.
  */
 const stream = (discovery: IdeaDiscovery | null, approved = false, questions: QuestionDiscovery | null = null,
                 chosen = false, proposals: ProposalDiscovery | null = null, picked = false,
                 analysis: DecisionAnalysis | null = null, decided = false,
-                outcomes: OutcomeDiscovery | null = null): Stream => ({
+                outcomes: OutcomeDiscovery | null = null, issues: IssueDiscovery | null = null): Stream => ({
   group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions,
   // Утверждённая идея — шаг «Репозиторий» пропущен: его проверяет свой тест.
   scan: null, repository: approved ? { by: 'skipped', scan_run: '' } : null,
@@ -47,7 +55,7 @@ const stream = (discovery: IdeaDiscovery | null, approved = false, questions: Qu
     : null,
   proposals, choices: picked ? [{ question_id: 'Q1', proposal: null }] : null,
   analysis, decisions: decided ? [{ question_id: 'Q1', proposal: null, rationale: null, rationale_by: null }] : null,
-  outcomes,
+  outcomes, issues,
 })
 const at = (council: Partial<Council>): Council => ({ ...BASE, ...council })
 
@@ -81,7 +89,7 @@ describe('светофор', () => {
     expect(streamLight(stream(search('done')))).toBe('yours')
     const picked = stream(search('done'), true, asked('done'), true, offered('done'), true)
     expect(streamLight(picked)).toBe('yours')
-    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'yours', 'idle'])
+    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'yours', 'idle', 'idle'])
   })
 
   it('своя идея после упавшего поиска: поток прошёл шаг, ошибки больше нет', () => {
@@ -153,30 +161,49 @@ describe('светофор', () => {
     expect(attention(council(on(checked('done')))).map(a => a.what)).toEqual(['decisionsWait'])
   })
 
-  it('итоги: собирает ИИ, сборка упала; все готовы — поток готов, держит вопрос или пробел — ход за вами', () => {
-    const on = (outcomes: OutcomeDiscovery | null) =>
-      stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true, outcomes)
-    const blocked = on(assembled('done', [result(), result({ id: 'O2', blocked_by: ['Q1'] })]))
-    const gaps = on(assembled('done', [result({ gaps: [{ question: 'Где отчёт?', reason: '' }] })]))
+  it('итоги: собирает ИИ, сборка упала; собраны — ход за вами, пока их не утвердили', () => {
+    const on = (outcomes: OutcomeDiscovery | null, issues: IssueDiscovery | null = null) =>
+      stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true, outcomes, issues)
     const ready = on(assembled('done', [result()]))
-    expect([on(assembled('running')), on(assembled('failed')), ready, blocked, gaps, on(null)].map(streamLight))
-      .toEqual(['running', 'failed', 'done', 'yours', 'yours', 'yours'])
-    expect(CHAIN.map(step => chainLight(ready, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'done'])
+    const blocked = on(assembled('done', [result({ blocked_by: ['Q1'] })]))
+    expect([on(assembled('running')), on(assembled('failed')), ready, blocked, on(null)].map(streamLight))
+      .toEqual(['running', 'failed', 'yours', 'yours', 'yours'])
+    expect(currentStep(ready)).toBe('outcomes')
     const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
-    expect(attention(council(blocked))).toEqual([
+    expect(attention(council(ready))).toEqual([
       { light: 'yours', what: 'outcomesWait', group: 'A', to: '/councils/c1/streams/A' }])
     expect(attention(council(on(assembled('failed')))).map(a => a.what)).toEqual(['outcomesFailed'])
+    // Утверждены — шаг пройден, и с блокировками тоже: дальше задачи.
+    const approved = on(assembled('done', [result({ blocked_by: ['Q1'] })]), cut('running'))
+    expect(currentStep(approved)).toBe('issues')
+    expect(CHAIN.map(step => chainLight(approved, step)))
+      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'running'])
+  })
+
+  it('задачи: нарезает ИИ, нарезка упала; все готовы и каждый итог в задаче — поток готов', () => {
+    const on = (issues: IssueDiscovery) =>
+      stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
+             assembled('done', [result()]), issues)
+    const ready = on(cut('done', [task()]))
+    const blocked = on(cut('done', [task(), task({ id: 'I2', blocked_by: ['G1'] })]))
+    const gaps = on({ ...cut('done', [task()]), gaps: [{ id: 'G1', question: 'Где отчёт?', reason: '', outcome_ids: [] }] })
+    const lost = on({ ...cut('done', [task()]), uncovered_outcome_ids: ['O2'] })
+    const none = on(cut('done'))
+    expect([on(cut('running')), on(cut('failed')), ready, blocked, gaps, lost, none].map(streamLight))
+      .toEqual(['running', 'failed', 'done', 'yours', 'yours', 'yours', 'yours'])
+    expect(CHAIN.map(step => chainLight(ready, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done'])
+    const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
+    expect(attention(council(blocked)).map(a => a.what)).toEqual(['issuesWait'])
+    expect(attention(council(on(cut('failed')))).map(a => a.what)).toEqual(['issuesFailed'])
     expect(attention(council(ready))).toEqual([])
-    // Ни одного итога — решений не хватает даже на ожидаемое поведение: менять их — ход за вами.
-    const empty = on(assembled('done'))
-    expect([streamLight(empty), chainLight(empty, 'outcomes')]).toEqual(['yours', 'yours'])
-    expect(attention(council(empty)).map(a => a.what)).toEqual(['outcomesWait'])
-    // Без критериев готовности итог не проверить — он не готов.
-    expect(streamLight(on(assembled('done', [result({ acceptance_criteria: [] })])))).toBe('yours')
-    // Принятое решение не вошло ни в один итог — спецификация его потеряла.
-    const lost = on({ ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] })
-    expect(streamLight(lost)).toBe('yours')
-    expect(attention(council(lost)).map(a => a.what)).toEqual(['outcomesWait'])
+    // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла — не зелёный.
+    const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
+                            { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))
+    expect(streamLight(unplaced)).toBe('yours')
+    // Итог без критериев готовности: задачу по нему не проверить — тоже не зелёный.
+    const vague = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
+                         assembled('done', [result({ acceptance_criteria: [] })]), cut('done', [task()]))
+    expect(streamLight(vague)).toBe('yours')
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {
