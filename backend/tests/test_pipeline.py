@@ -426,6 +426,13 @@ def test_a_council_of_one_has_its_idea_checked_by_the_judge():
                      participants=("sol",), judge="sol")
     assert (result.proposal.idea, result.proposal.decided_by) == (FIND + " в треде", "judge")
     assert {s.name.value: s.state for s in result.steps}["idea_judge"] == "done"
+    # Двое ответили, но идею предложил один — другой её не видит: это не согласие.
+    lone, _ = seek({("idea_discovery", "sol"): ideas((FIND, ["F2", "F3"])),
+                    ("idea_discovery", "fable"): {"number": 0, "options": [],
+                                                  "reason": "фрагменты о разном"},
+                    ("idea_judge", "fable"): {"status": "ok", "idea": FIND,
+                                              "evidence": ["F2", "F3"], "reason": "держится"}})
+    assert {s.name.value: s.state for s in lone.steps}["idea_judge"] == "done"
     # Идеи участник не нашёл — проверять нечего: судья не нужен.
     empty, _ = seek({("idea_discovery", "sol"): {"number": 0, "options": [],
                                                  "reason": "фрагменты о разном"}},

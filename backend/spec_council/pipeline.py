@@ -737,8 +737,9 @@ class IdeaRun(CouncilRun[IdeaDiscovery]):
                                 lambda data: idea_options(data, known))
         options = merged(answers)
         found = [as_option(option) for option in options]
-        # Идеи не нашли — проверять нечего; одна — судья нужен, если её предложил один ответ.
-        if not options or (len(options) == 1 and len(answers) > 1):
+        # Идеи не нашли — проверять нечего; одна — судья нужен, если её предложил один ответ
+        # (другой участник мог ответить, что идеи не видит, — это не согласие).
+        if not options or (len(options) == 1 and len(options[0].models) > 1):
             self._skip(StepName.idea_judge)
             if not options:
                 proposal = IdeaProposal(idea=None, reason=declined(answers), decided_by="agreed")
