@@ -1,110 +1,117 @@
-Ты выполняешь только структурирование уже готовых смысловых фрагментов.
+You only structure semantic fragments that are already prepared.
 
-Тебе дан набор фрагментов с неизменяемыми ID, текстом и типом:
+You are given a set of fragments with immutable IDs, text and type:
 `idea`, `question`, `proposal`, `constraint`, `risk`.
 
-Твоя задача — определить, какие фрагменты относятся к одной общей задумке,
-и сгруппировать их.
+Your task is to determine which fragments belong to one common initiative,
+and to group them.
 
-На этом этапе нельзя добавлять новые идеи, вопросы, предложения,
-ограничения или риски.
+At this stage, never add new ideas, questions, proposals,
+constraints or risks.
 
-## Что такое группа
+## What a group is
 
-Группа — набор фрагментов, которые относятся к одной общей задумке:
-одному желаемому изменению, результату или самостоятельному направлению работы.
+A group is a set of fragments that belong to one common initiative:
+one desired change, result or independent line of work.
 
-Группа должна быть достаточно самостоятельной, чтобы дальше для неё отдельно:
-- уточнять идею;
-- искать недостающие вопросы;
-- рассматривать предложения;
-- принимать решения;
-- формировать outcomes.
+A group must be self-contained enough that later, separately for this group, it is possible to:
+- refine the idea;
+- look for missing questions;
+- consider proposals;
+- make decisions;
+- form outcomes.
 
-Один исходный текст может содержать одну группу или несколько.
+One source text may contain one group or several.
 
-## Как определять группы
+## How to find the groups
 
-Сначала найди явно сформулированные `idea`.
+First find the explicitly stated `idea` fragments.
 
-Фрагменты, которые являются вопросами, предложениями, ограничениями или рисками,
-привязывай к той идее, к которой они относятся по смыслу.
+Attach fragments that are questions, proposals, constraints or risks
+to the idea they belong to by meaning.
 
-Если явной `idea` нет, но несколько фрагментов явно относятся к одной
-незаписанной задумке, они всё равно могут образовать группу.
+If there is no explicit `idea`, but several fragments clearly belong to one
+unwritten initiative, they can still form a group.
 
-Не формулируй отсутствующую идею самостоятельно.
-Только отметь, что у группы нет явного `idea`.
-Её восстановление выполняется на следующем этапе.
+Do not formulate the missing idea yourself.
+Only mark that the group has no explicit `idea`.
+It is restored at the next stage.
 
-## Когда разделять группы
+## When to split groups
 
-Создавай разные группы, если фрагменты относятся к самостоятельным задумкам,
-которые можно дальше уточнять и реализовывать независимо.
+Create different groups if the fragments belong to independent initiatives
+that can later be refined and implemented independently.
 
-Не разделяй группу только потому, что внутри неё есть:
-- несколько вопросов;
-- несколько альтернативных proposals;
-- разные технические аспекты одной задумки;
-- несколько risks или constraints.
+Do not split a group just because it contains:
+- several questions;
+- several alternative proposals;
+- different technical aspects of one initiative;
+- several risks or constraints.
 
-Конкурирующие предложения по одному вопросу относятся к одной группе.
+Competing proposals for one question belong to one group.
 
-## Общие фрагменты
+## Shared fragments
 
-Один constraint или risk может относиться к нескольким группам.
+One constraint or risk may belong to several groups.
 
-В таком случае не создавай новый фрагмент и не копируй его как новый источник.
-Укажи один и тот же ID в каждой соответствующей группе и отметь связь как `shared`.
+In that case, do not create a new fragment and do not copy it as a new source.
+Put the same ID into each relevant group and mark the link as `shared`.
 
-`idea`, `question` и `proposal` по умолчанию должны принадлежать одной группе.
-Если считаешь, что такой фрагмент действительно относится к нескольким группам,
-явно объясни почему.
+By default, an `idea`, `question` or `proposal` must belong to one group.
+If you believe such a fragment really belongs to several groups,
+explain why explicitly.
 
-## Связи между группами
+## Relations between groups
 
-Если группы не независимы, укажи связь.
+If the groups are not independent, state the relation.
 
-Используй только:
+Use only:
 
-- `independent` — группы можно рассматривать независимо;
-- `depends_on` — одна задумка требует результата другой;
-- `related` — задумки связаны, но зависимости между ними из текста не следует.
+- `independent` — the groups can be considered independently;
+- `depends_on` — one initiative needs the result of the other;
+- `related` — the initiatives are related, but no dependency between them follows from the text.
 
-Не придумывай зависимость только потому, что группы технически похожи
-или могут использовать одну инфраструктуру.
+Do not invent a dependency just because the groups are technically similar
+or may use the same infrastructure.
 
-## Правила
+## Rules
 
-1. Не изменяй текст, ID или типы фрагментов.
-2. Не добавляй новые смысловые фрагменты.
-3. Не формулируй отсутствующие идеи.
-4. Не добавляй вопросы или решения.
-5. Каждый фрагмент должен оказаться хотя бы в одной группе.
-6. Не создавай группы ради более мелкой структуры.
-7. Не объединяй самостоятельные задумки только потому, что они находятся
-   в одном исходном тексте.
-8. Основывай структуру только на смысле данных фрагментов.
+1. Do not change the text, IDs or types of the fragments.
+2. Do not add new semantic fragments.
+3. Do not formulate missing ideas.
+4. Do not add questions or decisions.
+5. Every fragment must end up in at least one group.
+6. Do not create groups for the sake of a finer structure.
+7. Do not merge independent initiatives just because they are
+   in one source text.
+8. Base the structure only on the meaning of the given fragments.
 
-## Неоднозначность
+## Ambiguity
 
-Структура может иметь несколько существенно различных разумных вариантов.
+The structure may have several substantially different reasonable options.
 
-Определи, сколько таких вариантов ты действительно видишь.
+Determine how many such options you actually see.
 
-Один вариант — нормальный и ожидаемый результат.
-Не создавай альтернативы ради разнообразия.
+One option is a normal and expected result.
+Do not create alternatives for the sake of variety.
 
-Несколько вариантов нужны только тогда, когда существует реальная
-неоднозначность в том:
-- являются ли две части одной задумкой или разными;
-- к какой группе относится фрагмент;
-- является ли фрагмент общим;
-- существует ли связь между группами.
+Several options are needed only when there is real
+ambiguity about:
+- whether two parts are one initiative or different ones;
+- which group a fragment belongs to;
+- whether a fragment is shared;
+- whether there is a relation between groups.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "number": 1,
@@ -113,7 +120,7 @@
       "groups": [
         {
           "id": "A",
-          "title": "Краткое нейтральное название группы",
+          "title": "Short neutral group name",
           "idea_fragment_ids": [1],
           "fragment_ids": [1, 2, 3, 4],
           "missing_idea": false,
@@ -121,7 +128,7 @@
         },
         {
           "id": "B",
-          "title": "Другая группа",
+          "title": "Another group",
           "idea_fragment_ids": [],
           "fragment_ids": [5, 6],
           "missing_idea": true,
@@ -133,7 +140,7 @@
           "from": "B",
           "to": "A",
           "type": "depends_on",
-          "reason": "Краткое основание из исходных фрагментов."
+          "reason": "A brief basis in the source fragments."
         }
       ],
       "reason": null
@@ -141,12 +148,12 @@
   ]
 }
 
-`title` — только краткая метка для навигации.
-Она не является новой идеей или новым требованием.
+`title` is only a short label for navigation.
+It is not a new idea or a new requirement.
 
-Если вариантов несколько, `reason` кратко объясняет существенное различие
-между структурами.
+If there are several options, `reason` briefly explains the substantial difference
+between the structures.
 
-## Фрагменты
+## Fragments
 
 {{fragments}}

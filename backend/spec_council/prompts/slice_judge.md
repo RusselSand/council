@@ -1,106 +1,113 @@
-Ты выбираешь итоговую нарезку исходного текста на смысловые фрагменты.
+You choose the final slicing of the source text into semantic fragments.
 
-Тебе даны:
-- исходный текст;
-- несколько вариантов нарезки, независимо предложенных другими моделями.
+You are given:
+- the source text;
+- several slicing options proposed independently by other models.
 
-Твоя задача — сравнить варианты по смыслу исходного текста и вернуть одну
-наиболее обоснованную итоговую нарезку.
+Your task is to compare the options by the meaning of the source text and return the one
+best-justified final slicing.
 
-## Что такое смысловой фрагмент
+## What a semantic fragment is
 
-Смысловой фрагмент — минимальный непрерывный отрывок исходного текста,
-который выражает одну законченную мысль автора в контексте обсуждаемой задачи.
+A semantic fragment is a minimal continuous passage of the source text
+that expresses one complete thought of the author in the context of the task under discussion.
 
-Фрагмент должен сохранять смысловые связи, явно выраженные автором.
-Если одна часть текста уточняет, ограничивает, объясняет, обосновывает
-или задаёт условие другой части той же мысли, не отделяй её только потому,
-что внутри можно выделить несколько отдельных утверждений.
+A fragment must keep the semantic links that the author expressed explicitly.
+If one part of the text refines, limits, explains, justifies
+or sets a condition for another part of the same thought, do not separate it just because
+several separate statements can be singled out inside it.
 
-При этом перечисление нескольких самостоятельных решений, требований,
-проблем или идей может содержать несколько смысловых фрагментов, даже если
-они находятся в одном предложении.
+At the same time, a list of several independent decisions, requirements,
+problems or ideas may contain several semantic fragments, even if
+they are in one sentence.
 
-Граница между фрагментами нужна там, где автор заканчивает одну мысль
-и переходит к другой самостоятельной мысли.
+A boundary between fragments is needed where the author finishes one thought
+and moves on to another independent thought.
 
-Не стремись сделать фрагменты как можно меньше.
-Цель — выделить минимальные законченные мысли автора, а не минимальные
-логические утверждения.
+Do not try to make fragments as small as possible.
+The goal is to single out the author's minimal complete thoughts, not minimal
+logical statements.
 
-## Как сравнивать варианты
+## How to compare the options
 
-Рассматривай каждую различающуюся границу отдельно.
+Consider each differing boundary separately.
 
-Для каждой спорной границы спроси:
+For each disputed boundary, ask:
 
-1. Выражают ли части по обе стороны две самостоятельные законченные мысли?
+1. Do the parts on both sides express two independent complete thoughts?
 
-2. Или одна часть уточняет, ограничивает, объясняет, обосновывает,
-   конкретизирует или задаёт условие другой?
+2. Or does one part refine, limit, explain, justify,
+   make specific or set a condition for the other?
 
-3. Сохраняется ли явно выраженная автором смысловая связь после разделения?
+3. Is the semantic link that the author expressed explicitly kept after the split?
 
-4. Не объединяет ли отсутствие границы несколько самостоятельных решений,
-   требований, проблем или идей в один фрагмент?
+4. Does the absence of a boundary merge several independent decisions,
+   requirements, problems or ideas into one fragment?
 
-Выбирай границу только тогда, когда она лучше соответствует определению
-смыслового фрагмента.
+Choose a boundary only when it better matches the definition
+of a semantic fragment.
 
-Не предпочитай более мелкую или более крупную нарезку саму по себе.
+Do not prefer a finer or a coarser slicing for its own sake.
 
-## Независимая оценка
+## Independent assessment
 
-Количество моделей, предложивших вариант, не является доказательством его
-правильности.
+The number of models that proposed an option is not evidence that it is
+correct.
 
-Не используй голосование большинством.
+Do not use majority voting.
 
-Оценивай каждую границу непосредственно по исходному тексту и правилам выше.
+Assess each boundary directly against the source text and the rules above.
 
-Объяснения, приложенные к вариантам, являются аргументами кандидатов,
-а не фактами. Проверяй их самостоятельно по исходному тексту.
+The explanations attached to the options are the candidates' arguments,
+not facts. Check them yourself against the source text.
 
-## Итоговая нарезка
+## Final slicing
 
-Ты не обязан выбирать один вариант целиком.
+You do not have to choose one option as a whole.
 
-Если разные варианты лучше определили разные границы, собери итоговую
-нарезку из наиболее обоснованных границ.
+If different options got different boundaries right, assemble the final
+slicing from the best-justified boundaries.
 
-При этом нельзя создавать границу, которой нет ни в одном из предложенных
-вариантов.
+However, never create a boundary that is not in any of the proposed
+options.
 
-Если все предложенные варианты содержат очевидную ошибку, не исправляй её
-молча. Верни статус `no_valid_option` и кратко укажи проблему.
+If all proposed options contain an obvious error, do not fix it
+silently. Return the status `no_valid_option` and briefly state the problem.
 
-## Ограничения
+## Restrictions
 
-1. Сохраняй исходный текст дословно.
-   Не перефразируй, не исправляй, не нормализуй и не дополняй его.
+1. Keep the source text verbatim.
+   Do not paraphrase, correct, normalize or add to it.
 
-2. Не добавляй утверждений или связей, которых нет в исходном тексте.
+2. Do not add statements or links that are not in the source text.
 
-3. Не теряй содержательный текст.
+3. Do not lose meaningful text.
 
-4. Сохраняй исходный порядок.
+4. Keep the original order.
 
-5. Каждый фрагмент должен быть непрерывным отрывком исходного текста.
+5. Each fragment must be a continuous passage of the source text.
 
-6. Фрагменты не должны перекрываться.
+6. Fragments must not overlap.
 
-7. Не оценивай правильность, важность или качество тезисов.
+7. Do not assess the correctness, importance or quality of the statements.
 
-8. Не проектируй решение и не делай выводов из текста.
+8. Do not design a solution and do not draw conclusions from the text.
 
-9. Не пытайся достигнуть компромисса между вариантами.
-   Нужна наиболее обоснованная нарезка, а не средняя между предложенными.
+9. Do not try to reach a compromise between the options.
+   You need the best-justified slicing, not an average of the proposed ones.
 
-## Формат ответа
+## Language
 
-Верни только JSON.
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
 
-Если удалось выбрать итоговую нарезку:
+## Response format
+
+Return only JSON.
+
+If you managed to choose the final slicing:
 
 {
   "status": "ok",
@@ -110,44 +117,44 @@
   ],
   "decisions": [
     {
-      "boundary": "<короткая цитата слева> | <короткая цитата справа>",
+      "boundary": "<short quote on the left> | <short quote on the right>",
       "decision": "split",
       "reason": "..."
     }
   ]
 }
 
-В `decisions` включай только границы, по которым предложенные варианты
-существенно расходились. Очевидные совпадающие границы не перечисляй.
+In `decisions`, include only the boundaries on which the proposed options
+substantially diverged. Do not list obvious matching boundaries.
 
-`reason` должен кратко объяснять решение через смысловую структуру исходного
-текста, а не через количество голосов.
+`reason` must briefly explain the decision through the semantic structure of the source
+text, not through the number of votes.
 
-Если ни один итог нельзя получить из предложенных вариантов без очевидной
-ошибки:
+If no result can be obtained from the proposed options without an obvious
+error:
 
 {
   "status": "no_valid_option",
   "problem": "..."
 }
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check:
 
-- итог состоит только из дословных непрерывных частей исходного текста;
-- порядок сохранён;
-- содержательный текст не потерян;
-- фрагменты не перекрываются;
-- каждая выбранная граница отделяет самостоятельные законченные мысли;
-- отсутствие границы сохраняет явно связанные части одной мысли;
-- решение не основано на голосовании моделей;
-- ты не добавил новую границу, которой не было среди кандидатов.
+- the result consists only of verbatim continuous parts of the source text;
+- the order is kept;
+- no meaningful text is lost;
+- fragments do not overlap;
+- each chosen boundary separates independent complete thoughts;
+- where there is no boundary, explicitly linked parts of one thought stay together;
+- the decision is not based on model voting;
+- you have not added a new boundary that was not among the candidates.
 
-## Исходный текст
+## Source text
 
 {{input}}
 
-## Варианты нарезки
+## Slicing options
 
 {{options}}

@@ -1,153 +1,163 @@
-Ты формируешь OUTCOMES для одной утверждённой IDEA.
+You form OUTCOMES for one approved IDEA.
 
-Тебе даны:
-- утверждённая IDEA;
-- OPEN QUESTIONS и связанные с ними PROPOSALS;
-- принятые ADR с решениями и rationale;
-- CONSTRAINTS и RISKS группы.
+You are given:
+- the approved IDEA;
+- OPEN QUESTIONS and the PROPOSALS linked to them;
+- accepted ADRs with decisions and rationale;
+- the group's CONSTRAINTS and RISKS.
 
-## Что такое OUTCOME
+## What an OUTCOME is
 
-OUTCOME — конкретное, наблюдаемое состояние системы после реализации
-принятых решений.
+An OUTCOME is a concrete, observable state of the system after the accepted
+decisions are implemented.
 
-OUTCOME описывает, что система должна делать, позволять, предотвращать
-или гарантировать.
+An OUTCOME describes what the system must do, allow, prevent
+or guarantee.
 
-Он должен быть достаточно конкретным, чтобы служить непосредственным
-входом в процесс Spec-Driven Development.
+It must be concrete enough to serve as a direct
+input to the Spec-Driven Development process.
 
-OUTCOME может объединять несколько связанных поведений.
-Он не обязан быть атомарным.
+An OUTCOME may combine several related behaviors.
+It does not have to be atomic.
 
-Разделяй OUTCOMES, когда их части разумно специфицировать, реализовать
-или проверить независимо.
+Split OUTCOMES when their parts can reasonably be specified, implemented
+or verified independently.
 
-Цель — не одно предложение на OUTCOME, а одна связная единица
-системного поведения.
+The goal is not one sentence per OUTCOME, but one coherent unit
+of system behavior.
 
-## Источники
+Write it in plain, concrete words: `title` is a short name of the state,
+`behavior` is what the system does in that state.
 
-IDEA определяет желаемое улучшение.
+## Sources
 
-Принятые ADR определяют решения и основания для них.
+The IDEA defines the desired improvement.
 
-CONSTRAINTS определяют ограничения, которые необходимо соблюдать.
+Accepted ADRs define the decisions and the reasons for them.
 
-RISKS учитываются в той мере, в какой принятые решения определяют
-способ их обработки.
+CONSTRAINTS define the limits that must be respected.
 
-Не считай PROPOSAL принятым решением, если пользователь явно
-не утвердил его.
+RISKS are taken into account to the extent that the accepted decisions define
+how they are handled.
 
-Не считай рекомендацию ИИ или существующую реализацию принятым решением.
+Do not treat a PROPOSAL as an accepted decision unless the user has explicitly
+approved it.
 
-## Формирование OUTCOMES
+Do not treat an AI recommendation or the existing implementation as an accepted decision.
 
-1. Определи, какое конкретное поведение системы следует из IDEA
-   и принятых ADR.
+## Forming OUTCOMES
 
-2. Сгруппируй связанные решения в законченные изменения системы.
+1. Determine what concrete system behavior follows from the IDEA
+   and the accepted ADRs.
 
-3. Раздели изменения, которые можно независимо специфицировать,
-   реализовать или проверить.
+2. Group related decisions into complete changes of the system.
 
-4. Для каждого OUTCOME опиши:
-   - что должно измениться в системе;
-   - какие принятые решения определяют это изменение;
-   - какие ограничения необходимо соблюдать;
-   - по каким наблюдаемым условиям можно проверить результат.
+3. Separate changes that can be independently specified,
+   implemented or verified.
 
-5. Проверь, не зависит ли OUTCOME от открытых вопросов.
+4. For each OUTCOME, describe:
+   - what must change in the system;
+   - which accepted decisions determine this change;
+   - which constraints must be respected;
+   - by which observable conditions the result can be verified.
 
-## Границы самостоятельности
+5. Check whether the OUTCOME depends on open questions.
 
-Не разделяй OUTCOME только потому, что реализация затрагивает:
-- несколько классов;
-- несколько сервисов;
-- несколько API;
-- несколько таблиц;
-- несколько технических слоёв.
+## Boundaries of independence
 
-Не объединяй разные OUTCOMES только потому, что они:
-- относятся к одной IDEA;
-- используют общие данные;
-- зависят от общей инфраструктуры.
+Do not split an OUTCOME only because the implementation touches:
+- several classes;
+- several services;
+- several APIs;
+- several tables;
+- several technical layers.
 
-Граница определяется самостоятельностью системного поведения,
-а не предполагаемой структурой кода.
+Do not merge different OUTCOMES only because they:
+- belong to the same IDEA;
+- use shared data;
+- depend on shared infrastructure.
 
-## Незакрытые вопросы
+The boundary is defined by the independence of system behavior,
+not by the expected structure of the code.
 
-Если OUTCOME зависит от OPEN QUESTION без принятого ADR,
-пометь его как blocked.
+## Unresolved questions
 
-Укажи ID вопросов, без которых невозможно окончательно определить
-поведение OUTCOME.
+If an OUTCOME depends on an OPEN QUESTION without an accepted ADR,
+mark it as blocked.
 
-Не подставляй вместо отсутствующего решения:
-- рекомендацию ИИ;
-- непринятый PROPOSAL;
-- наиболее распространённый технический подход;
-- собственное предположение.
+List the IDs of the questions without which the behavior of the OUTCOME
+cannot be finally determined.
 
-Можно сформулировать известную часть OUTCOME, но нельзя заполнять
-неизвестные части выдуманными решениями.
+Do not put in place of a missing decision:
+- an AI recommendation;
+- an unaccepted PROPOSAL;
+- the most common technical approach;
+- your own assumption.
 
-Если IDEA или принятые ADR не позволяют определить даже ожидаемое
-поведение, не создавай фиктивный OUTCOME.
+You may formulate the known part of an OUTCOME, but never fill
+the unknown parts with invented decisions.
+
+If the IDEA or the accepted ADRs do not allow you to determine even the expected
+behavior, do not create a fictitious OUTCOME.
 
 ## Acceptance criteria
 
-Для каждого OUTCOME сформулируй наблюдаемые условия выполнения.
+For each OUTCOME, formulate observable conditions of fulfillment.
 
-Критерии должны проверять результат, а не предписывать
-последовательность реализации.
+The criteria must verify the result, not prescribe
+the sequence of implementation.
 
-Не добавляй:
-- новые числовые пороги;
-- сроки;
-- SLA;
-- новые функциональные требования;
-- архитектурные решения;
-- дополнительные сценарии,
+Do not add:
+- new numeric thresholds;
+- deadlines;
+- SLAs;
+- new functional requirements;
+- architectural decisions;
+- additional scenarios,
 
-если они не следуют из IDEA или принятых ADR.
+unless they follow from the IDEA or the accepted ADRs.
 
-Если необходимый критерий невозможно определить без нового решения,
-укажи соответствующий OPEN QUESTION или обнаруженный gap.
+If a necessary criterion cannot be determined without a new decision,
+name the corresponding OPEN QUESTION or the gap you found.
 
-## Запрет на новые решения
+## No new decisions
 
-Ты не принимаешь продуктовых или архитектурных решений.
+You do not make product or architectural decisions.
 
-Не придумывай:
-- API и их маршруты;
-- структуры хранения;
-- алгоритмы;
-- компоненты;
-- технические ограничения;
-- дополнительные возможности.
+Do not invent:
+- APIs and their routes;
+- storage structures;
+- algorithms;
+- components;
+- technical constraints;
+- additional capabilities.
 
-Исключение: техническая деталь уже явно зафиксирована принятым ADR.
+Exception: the technical detail is already explicitly fixed by an accepted ADR.
 
-Если для OUTCOME требуется новое решение, зафиксируй gap,
-а не включай предположение в спецификацию.
+If an OUTCOME requires a new decision, record a gap
+instead of putting an assumption into the specification.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "outcomes": [
     {
-      "title": "Поиск по базе знаний",
-      "behavior": "Пользователь может находить статьи базы знаний через выбранный механизм поиска.",
+      "title": "Knowledge base search",
+      "behavior": "The user can find knowledge base articles through the chosen search mechanism.",
       "adr_ids": ["ADR-2", "ADR-3"],
       "constraint_ids": ["F4"],
       "risk_ids": [],
       "acceptance_criteria": [
-        "Поисковый запрос возвращает соответствующие статьи базы знаний."
+        "A search query returns the matching knowledge base articles."
       ],
       "blocked_by": ["Q2", "Q3"],
       "gaps": []
@@ -155,29 +165,29 @@ RISKS учитываются в той мере, в какой принятые 
   ]
 }
 
-Если обнаружена новая неопределённость, которой ещё нет
-среди OPEN QUESTIONS, укажи её в `gaps`:
+If you find a new uncertainty that is not yet
+among the OPEN QUESTIONS, put it into `gaps`:
 
 {
-  "question": "Что необходимо определить?",
-  "reason": "Почему без этого нельзя завершить OUTCOME."
+  "question": "What needs to be determined?",
+  "reason": "Why the OUTCOME cannot be completed without it."
 }
 
-Не создавай новые OPEN QUESTIONS самостоятельно.
-`gaps` — только материал для возврата к Question Discovery.
+Do not create new OPEN QUESTIONS on your own.
+`gaps` are only material for returning to Question Discovery.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check that:
 
-- каждый OUTCOME описывает наблюдаемое поведение;
-- границы OUTCOMES определены независимостью реализации и проверки;
-- каждый значимый элемент поведения обоснован IDEA или ADR;
-- непринятые PROPOSALS не использованы как решения;
-- новые продуктовые и архитектурные решения не появились;
-- acceptance criteria не содержат придуманных требований;
-- открытые вопросы явно указаны;
-- OUTCOME не объявлен готовым, если необходимое решение отсутствует.
+- every OUTCOME describes observable behavior;
+- the OUTCOME boundaries are defined by the independence of implementation and verification;
+- every significant element of behavior is grounded in the IDEA or an ADR;
+- unaccepted PROPOSALS are not used as decisions;
+- no new product or architectural decisions have appeared;
+- acceptance criteria contain no invented requirements;
+- open questions are listed explicitly;
+- no OUTCOME is declared ready if a necessary decision is missing.
 
 ## IDEA
 
@@ -197,28 +207,31 @@ RISKS учитываются в той мере, в какой принятые 
 
 ## REPOSITORY CONTEXT
 
-Карта существующей реализации, проверенная на шаге Repository Discovery: как система устроена
-сейчас. `verified` — подтверждено кодом, `inferred` — вывод из наблюдений, `unknown` — установить
-не удалось. Используй её как факты о текущем состоянии системы. Существующая реализация — не
-принятое решение и не требование: не превращай её в ADR и не выбирай вариант только потому, что
-так уже сделано.
+A map of the existing implementation, checked at the Repository Discovery step: how the system is
+built now. `verified` — confirmed by the code, `inferred` — a conclusion from observations,
+`unknown` — could not be established. Use it as facts about the current state of the system. The
+existing implementation is not an accepted decision and not a requirement: do not turn it into an
+ADR and do not choose an option only because it is already done that way.
 
-`complete: false` и `remaining_follow_up` — исследование не закончено: эти места не установлены,
-не считай их решёнными. `repositories` — с каких рабочих копий снята карта (бэкенд и фронтенд
-бывают в разных репозиториях): у нескольких пути файлов в карте начинаются с `folder` своей
-копии. `uncommitted_changes` — карта этой копии снята с рабочей копии с правками, а не с коммита;
-`files_outside_checkout` и `not_in_snapshot` — чего в снимке не было и модели не видели.
+`complete: false` and `remaining_follow_up` — the investigation is not finished: these places are
+not established, do not treat them as resolved. `repositories` — which working copies the map was
+taken from (the backend and the frontend are sometimes in different repositories): when there are
+several, file paths in the map start with the `folder` of their copy. `uncommitted_changes` — the
+map of this copy was taken from a working copy with edits, not from a commit;
+`files_outside_checkout` and `not_in_snapshot` — what was not in the snapshot and the models did
+not see.
 
 {{repository}}
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}

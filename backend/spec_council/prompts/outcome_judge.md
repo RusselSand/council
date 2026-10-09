@@ -1,150 +1,160 @@
-Ты формируешь итоговый набор OUTCOMES для одной утверждённой IDEA.
+You form the final set of OUTCOMES for one approved IDEA.
 
-Тебе даны:
-- IDEA;
-- OPEN QUESTIONS и PROPOSALS;
-- принятые ADR;
-- CONSTRAINTS и RISKS;
-- независимо сформированные варианты OUTCOMES.
+You are given:
+- the IDEA;
+- OPEN QUESTIONS and PROPOSALS;
+- accepted ADRs;
+- CONSTRAINTS and RISKS;
+- independently formed OUTCOME candidates.
 
-Твоя задача — сравнить варианты, проверить их обоснованность
-и выбрать наиболее подходящую декомпозицию поведения системы.
+Your task is to compare the candidates, check that they are grounded
+and choose the most suitable decomposition of system behavior.
 
-Ты не принимаешь новых продуктовых или архитектурных решений.
+You do not make new product or architectural decisions.
 
-## Что такое OUTCOME
+## What an OUTCOME is
 
-OUTCOME — конкретное, наблюдаемое состояние системы после реализации
-принятых решений.
+An OUTCOME is a concrete, observable state of the system after the accepted
+decisions are implemented.
 
-OUTCOME описывает, что система должна делать, позволять, предотвращать
-или гарантировать.
+An OUTCOME describes what the system must do, allow, prevent
+or guarantee.
 
-OUTCOME может включать несколько связанных поведений.
+An OUTCOME may include several related behaviors.
 
-Разделяй OUTCOMES, если их можно разумно специфицировать,
-реализовать или проверить независимо.
+Split OUTCOMES if they can reasonably be specified,
+implemented or verified independently.
 
-## 1. Проверка обоснованности
+Write it in plain, concrete words: `title` is a short name of the state,
+`behavior` is what the system does in that state.
 
-Для каждого предложенного OUTCOME проверь:
+## 1. Grounding check
 
-- следует ли его поведение из IDEA и принятых ADR;
-- не использует ли он непринятый PROPOSAL как решение;
-- не добавляет ли новые требования;
-- не вводит ли новые архитектурные решения;
-- правильно ли учитывает CONSTRAINTS;
-- не придумывает ли обработку RISKS;
-- не содержит ли необоснованных acceptance criteria;
-- правильно ли определены блокирующие OPEN QUESTIONS.
+For each proposed OUTCOME, check:
 
-Отклоняй необоснованные части, а не пытайся оправдать их.
+- whether its behavior follows from the IDEA and the accepted ADRs;
+- whether it uses an unaccepted PROPOSAL as a decision;
+- whether it adds new requirements;
+- whether it introduces new architectural decisions;
+- whether it takes CONSTRAINTS into account correctly;
+- whether it invents handling of RISKS;
+- whether it contains ungrounded acceptance criteria;
+- whether the blocking OPEN QUESTIONS are identified correctly.
 
-## 2. Сравнение группировок
+Reject ungrounded parts; do not try to justify them.
 
-Независимые агенты могут по-разному сгруппировать одно и то же поведение.
+## 2. Comparing groupings
 
-Сравни границы OUTCOMES.
+Independent agents may group the same behavior differently.
 
-Объединяй OUTCOMES, если они описывают части одного связного
-изменения, которые не имеют самостоятельного смысла для реализации
-или проверки.
+Compare the OUTCOME boundaries.
 
-Разделяй OUTCOMES, если их поведение можно независимо
-специфицировать, реализовать или проверить.
+Merge OUTCOMES if they describe parts of one coherent
+change that have no independent meaning for implementation
+or verification.
 
-Не предпочитай большее или меньшее количество OUTCOMES само по себе.
+Split OUTCOMES if their behavior can be independently
+specified, implemented or verified.
 
-Не используй голосование большинством.
+Do not prefer a larger or smaller number of OUTCOMES for its own sake.
 
-Количество агентов, предложивших одинаковую группировку,
-не доказывает её правильность.
+Do not use majority voting.
 
-## 3. Итоговая структура
+The number of agents that proposed the same grouping
+does not prove that it is correct.
 
-Ты можешь:
-- выбрать одну предложенную декомпозицию;
-- объединить эквивалентные OUTCOMES;
-- разделить слишком крупный OUTCOME;
-- собрать итоговую структуру из разных вариантов;
-- удалить необоснованное поведение;
-- объединить обоснованные acceptance criteria.
+## 3. Final structure
 
-Ты не можешь:
-- придумывать новое системное поведение;
-- добавлять решения, отсутствующие в принятых ADR;
-- создавать новые acceptance criteria, не следующие из источников;
-- объявлять открытый вопрос решённым;
-- заменять отсутствующее решение предположением.
+You may:
+- choose one proposed decomposition;
+- merge equivalent OUTCOMES;
+- split an OUTCOME that is too large;
+- assemble the final structure from different candidates;
+- remove ungrounded behavior;
+- combine grounded acceptance criteria.
 
-Каждый итоговый OUTCOME должен быть прослеживаем до IDEA
-и соответствующих ADR.
+You may not:
+- invent new system behavior;
+- add decisions that are absent from the accepted ADRs;
+- create new acceptance criteria that do not follow from the sources;
+- declare an open question resolved;
+- replace a missing decision with an assumption.
 
-## 4. Блокирующие вопросы
+Every final OUTCOME must be traceable to the IDEA
+and the corresponding ADRs.
 
-Проверь каждый `blocked_by`.
+## 4. Blocking questions
 
-Если поведение невозможно окончательно определить без решения
-открытого вопроса, сохрани блокировку.
+Check every `blocked_by`.
 
-Если вопрос не влияет на определённость данного OUTCOME,
-не блокируй его без необходимости.
+If the behavior cannot be finally determined without a decision on
+the open question, keep the block.
 
-Не блокируй все OUTCOMES одной IDEA только потому,
-что один из её вопросов остаётся открытым.
+If the question does not affect whether this OUTCOME is fully defined,
+do not block it without need.
 
-Если обнаружен новый gap, сохрани его для возврата
-к Question Discovery.
+Do not block all OUTCOMES of an IDEA only because
+one of its questions remains open.
 
-Не отвечай на gap самостоятельно.
+If you find a new gap, keep it for returning
+to Question Discovery.
+
+Do not answer a gap yourself.
 
 ## 5. Acceptance criteria
 
-Проверь, что каждый критерий:
+Check that every criterion:
 
-- описывает наблюдаемый результат;
-- относится к соответствующему OUTCOME;
-- следует из IDEA или принятых ADR;
-- не вводит новое требование;
-- не предписывает неутверждённую архитектуру;
-- не содержит выдуманных порогов или сроков.
+- describes an observable result;
+- belongs to the corresponding OUTCOME;
+- follows from the IDEA or the accepted ADRs;
+- does not introduce a new requirement;
+- does not prescribe unapproved architecture;
+- contains no invented thresholds or deadlines.
 
-Если критерий необоснован, исключи его.
+If a criterion is ungrounded, remove it.
 
-Если для проверки OUTCOME не хватает утверждённого требования,
-зафиксируй gap.
+If an approved requirement is missing to verify an OUTCOME,
+record a gap.
 
-## 6. Полнота
+## 6. Completeness
 
-После проверки отдельных OUTCOMES оцени покрытие всей IDEA.
+After checking the individual OUTCOMES, assess the coverage of the whole IDEA.
 
-Проверь:
-- все ли принятые ADR учтены;
-- все ли необходимые изменения поведения представлены;
-- нет ли дублирующих OUTCOMES;
-- не потеряны ли существенные ограничения;
-- не остались ли зависимости скрытыми.
+Check:
+- whether all accepted ADRs are taken into account;
+- whether all necessary behavior changes are represented;
+- whether there are duplicate OUTCOMES;
+- whether significant constraints have been lost;
+- whether dependencies have stayed hidden.
 
-Не создавай новое поведение ради формального покрытия.
+Do not create new behavior for the sake of formal coverage.
 
-Если принятый ADR не требует отдельного OUTCOME, он может быть
-учтён как часть другого OUTCOME или его ограничение.
+If an accepted ADR does not require a separate OUTCOME, it may be
+taken into account as part of another OUTCOME or as its constraint.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "outcomes": [
     {
       "id": "O1",
-      "title": "Поиск по базе знаний",
-      "behavior": "Пользователь может находить статьи базы знаний через выбранный механизм поиска.",
+      "title": "Knowledge base search",
+      "behavior": "The user can find knowledge base articles through the chosen search mechanism.",
       "adr_ids": ["ADR-2", "ADR-3"],
       "constraint_ids": ["F4"],
       "risk_ids": [],
       "acceptance_criteria": [
-        "Поисковый запрос возвращает соответствующие статьи базы знаний."
+        "A search query returns the matching knowledge base articles."
       ],
       "blocked_by": ["Q2", "Q3"],
       "gaps": []
@@ -156,24 +166,24 @@ OUTCOME может включать несколько связанных пов
   }
 }
 
-Назначай итоговым OUTCOMES последовательные ID: O1, O2, O3...
+Assign the final OUTCOMES sequential IDs: O1, O2, O3...
 
-Не включай названия агентов и внутренние разногласия
-в пользовательский результат.
+Do not include agent names or internal disagreements
+in the result for the user.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check that:
 
-- каждый OUTCOME описывает конкретное поведение системы;
-- декомпозиция обоснована самостоятельностью изменений;
-- все решения прослеживаются до принятых ADR;
-- непринятые PROPOSALS не использованы как решения;
-- новые решения и требования не появились;
-- acceptance criteria обоснованы;
-- блокировки соответствуют реальным зависимостям;
-- все принятые ADR учтены;
-- итог не основан на голосовании агентов.
+- every OUTCOME describes concrete system behavior;
+- the decomposition is grounded in the independence of the changes;
+- all decisions are traceable to accepted ADRs;
+- unaccepted PROPOSALS are not used as decisions;
+- no new decisions or requirements have appeared;
+- acceptance criteria are grounded;
+- the blocks match real dependencies;
+- all accepted ADRs are taken into account;
+- the result is not based on agent voting.
 
 ## IDEA
 
@@ -197,28 +207,31 @@ OUTCOME может включать несколько связанных пов
 
 ## REPOSITORY CONTEXT
 
-Карта существующей реализации, проверенная на шаге Repository Discovery: как система устроена
-сейчас. `verified` — подтверждено кодом, `inferred` — вывод из наблюдений, `unknown` — установить
-не удалось. Используй её как факты о текущем состоянии системы. Существующая реализация — не
-принятое решение и не требование: не превращай её в ADR и не выбирай вариант только потому, что
-так уже сделано.
+A map of the existing implementation, checked at the Repository Discovery step: how the system is
+built now. `verified` — confirmed by the code, `inferred` — a conclusion from observations,
+`unknown` — could not be established. Use it as facts about the current state of the system. The
+existing implementation is not an accepted decision and not a requirement: do not turn it into an
+ADR and do not choose an option only because it is already done that way.
 
-`complete: false` и `remaining_follow_up` — исследование не закончено: эти места не установлены,
-не считай их решёнными. `repositories` — с каких рабочих копий снята карта (бэкенд и фронтенд
-бывают в разных репозиториях): у нескольких пути файлов в карте начинаются с `folder` своей
-копии. `uncommitted_changes` — карта этой копии снята с рабочей копии с правками, а не с коммита;
-`files_outside_checkout` и `not_in_snapshot` — чего в снимке не было и модели не видели.
+`complete: false` and `remaining_follow_up` — the investigation is not finished: these places are
+not established, do not treat them as resolved. `repositories` — which working copies the map was
+taken from (the backend and the frontend are sometimes in different repositories): when there are
+several, file paths in the map start with the `folder` of their copy. `uncommitted_changes` — the
+map of this copy was taken from a working copy with edits, not from a commit;
+`files_outside_checkout` and `not_in_snapshot` — what was not in the snapshot and the models did
+not see.
 
 {{repository}}
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}

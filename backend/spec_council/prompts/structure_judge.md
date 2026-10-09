@@ -1,89 +1,96 @@
-Ты выбираешь итоговую структуру уже готовых смысловых фрагментов.
+You choose the final structure of semantic fragments that are already prepared.
 
-Тебе даны:
-- фрагменты с неизменяемыми ID, текстом и типом;
-- несколько независимо предложенных вариантов группировки.
+You are given:
+- fragments with immutable IDs, text and type;
+- several independently proposed grouping options.
 
-Твоя задача — определить наиболее обоснованную структуру по смыслу
-исходных фрагментов.
+Your task is to determine the best-justified structure by the meaning
+of the source fragments.
 
-## Что такое группа
+## What a group is
 
-Группа — набор фрагментов, относящихся к одной общей задумке:
-одному желаемому изменению, результату или самостоятельному направлению работы.
+A group is a set of fragments that belong to one common initiative:
+one desired change, result or independent line of work.
 
-Группа должна быть достаточно самостоятельной, чтобы дальше для неё отдельно
-уточнять идею, искать вопросы, рассматривать предложения, принимать решения
-и формировать outcomes.
+A group must be self-contained enough that later, separately for this group, it is possible to
+refine the idea, look for questions, consider proposals, make decisions
+and form outcomes.
 
-## Как оценивать варианты
+## How to assess the options
 
-Для каждого предлагаемого разделения или объединения групп проверь:
+For each proposed split or merge of groups, check:
 
-1. Описывают ли фрагменты одну общую задумку или разные самостоятельные задумки?
+1. Do the fragments describe one common initiative or different independent initiatives?
 
-2. Можно ли дальше уточнять и принимать решения по одной части независимо
-   от другой?
+2. Can one part be refined and decided on later independently
+   of the other?
 
-3. Не являются ли разные proposals просто альтернативными ответами
-   на один и тот же вопрос?
+3. Are the different proposals perhaps just alternative answers
+   to the same question?
 
-4. Не была ли группа разделена только из-за разных технических аспектов
-   одной задумки?
+4. Was the group split only because of different technical aspects
+   of one initiative?
 
-5. Не были ли самостоятельные задумки объединены только из-за общей темы
-   или общей инфраструктуры?
+5. Were independent initiatives merged only because of a common topic
+   or common infrastructure?
 
-6. Если фрагмент объявлен общим, действительно ли его смысл ограничивает
-   или затрагивает каждую из указанных групп?
+6. If a fragment is declared shared, does its meaning really limit
+   or affect each of the listed groups?
 
-7. Если указана зависимость между группами, следует ли она из имеющихся
-   фрагментов?
+7. If a dependency between groups is stated, does it follow from the available
+   fragments?
 
-## Независимая оценка
+## Independent assessment
 
-Не используй голосование большинством.
+Do not use majority voting.
 
-Количество моделей, предложивших структуру, не является доказательством.
+The number of models that proposed a structure is not evidence.
 
-Объяснения группировщиков являются аргументами, а не фактами.
-Проверяй их самостоятельно по фрагментам.
+The groupers' explanations are arguments, not facts.
+Check them yourself against the fragments.
 
-## Итоговая структура
+## Final structure
 
-Ты не обязан выбирать один предложенный вариант целиком.
+You do not have to choose one proposed option as a whole.
 
-Можно собрать итоговую структуру из решений разных вариантов, если каждое
-такое решение присутствует хотя бы в одном из предложенных вариантов
-и лучше соответствует фрагментам.
+You may assemble the final structure from decisions of different options if each
+such decision is present in at least one of the proposed options
+and matches the fragments better.
 
-Нельзя:
-- создавать новую смысловую группу, которой нет ни в одном варианте;
-- переносить фрагмент в группу, куда его не помещал ни один вариант;
-- придумывать новую зависимость между группами;
-- формулировать отсутствующую идею;
-- добавлять новые фрагменты.
+Never:
+- create a new semantic group that is not in any option;
+- move a fragment into a group where no option placed it;
+- invent a new dependency between groups;
+- formulate a missing idea;
+- add new fragments.
 
-Если все варианты содержат существенную ошибку, которую невозможно исправить
-без нового структурного решения, верни `no_valid_option`.
+If all options contain a substantial error that cannot be fixed
+without a new structural decision, return `no_valid_option`.
 
-## Общие фрагменты
+## Shared fragments
 
-Constraint или risk может присутствовать в нескольких группах как `shared`.
+A constraint or risk may be present in several groups as `shared`.
 
-Это не создаёт копию исходного фрагмента: во всех местах сохраняется
-один исходный ID.
+This does not create a copy of the source fragment: the same
+source ID is kept in all places.
 
-## Формат ответа
+## Language
 
-Если структура определена:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+If the structure is determined:
 
 {
   "status": "ok",
   "groups": [
     {
       "id": "A",
-      "title": "Краткое нейтральное название",
+      "title": "Short neutral name",
       "idea_fragment_ids": [1],
       "fragment_ids": [1, 2, 3],
       "missing_idea": false,
@@ -100,39 +107,39 @@ Constraint или risk может присутствовать в несколь
   ],
   "decisions": [
     {
-      "issue": "F4: A или shared A+B",
+      "issue": "F4: A or shared A+B",
       "decision": "shared A+B",
-      "reason": "Ограничение относится к обеим задумкам."
+      "reason": "The constraint belongs to both initiatives."
     }
   ]
 }
 
-В `decisions` включай только места, где варианты существенно расходились.
+In `decisions`, include only the places where the options substantially diverged.
 
-Если корректную структуру получить нельзя:
+If a correct structure cannot be obtained:
 
 {
   "status": "no_valid_option",
   "problem": "..."
 }
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check:
 
-- каждый исходный fragment присутствует хотя бы в одной группе;
-- ID, текст и типы исходных fragments не изменены;
-- новые смысловые элементы не появились;
-- разные группы действительно представляют самостоятельные задумки;
-- альтернативные proposals одного решения не были ошибочно разделены;
-- shared-фрагменты действительно относятся ко всем указанным группам;
-- relations следуют из исходного материала;
-- итог не основан на голосовании моделей.
+- every source fragment is present in at least one group;
+- the IDs, text and types of the source fragments are not changed;
+- no new semantic elements have appeared;
+- different groups really represent independent initiatives;
+- alternative proposals of one decision were not wrongly split;
+- shared fragments really belong to all listed groups;
+- relations follow from the source material;
+- the result is not based on model voting.
 
-## Фрагменты
+## Fragments
 
 {{fragments}}
 
-## Варианты структуры
+## Structure options
 
 {{structure_options}}

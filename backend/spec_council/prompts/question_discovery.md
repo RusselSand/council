@@ -1,190 +1,238 @@
-Ты ищешь OPEN QUESTIONS, которые необходимо решить для уже утверждённой IDEA.
+You look for the OPEN QUESTIONS that must be resolved for an already approved IDEA.
 
-Тебе даны:
-- утверждённая IDEA;
-- исходные фрагменты одной группы с ID и типами:
+You are given:
+- the approved IDEA;
+- the source fragments of one group with IDs and types:
   `idea`, `question`, `proposal`, `constraint`, `risk`.
 
-Не изменяй существующие фрагменты.
+Do not change the existing fragments.
 
-## Что такое OPEN QUESTION
+## What an OPEN QUESTION is
 
-OPEN QUESTION — одна неопределённость или одно решение, которое необходимо
-разрешить, чтобы IDEA могла двигаться дальше.
+An OPEN QUESTION is one uncertainty or one decision that must be
+resolved so that the IDEA can move forward.
 
-OPEN QUESTION описывает, ЧТО пока неизвестно.
+An OPEN QUESTION describes WHAT is not yet known.
 
-Он не должен содержать:
-- возможные ответы;
-- существующие PROPOSALS;
-- перечисление альтернатив;
-- предположение о том, какое решение будет принято.
+It must not contain:
+- possible answers;
+- existing PROPOSALS;
+- a list of alternatives;
+- an assumption about which decision will be made.
 
-OPEN QUESTION должен оставаться корректным, даже если позже появятся новые
-PROPOSALS, которых сейчас нет.
+An OPEN QUESTION must stay valid even if new PROPOSALS that do not exist now
+appear later.
 
-Пример:
+Example:
 
-Плохо:
-«Запускать deployment вручную или автоматически после merge?»
+Bad:
+"Run deployment manually or automatically after merge?"
 
-Хорошо:
-«Что должно запускать deployment?»
+Good:
+"What should trigger deployment?"
 
-Плохо:
-«Какой поиск использовать: полнотекстовый или векторный?»
+Bad:
+"Which search to use: full-text or vector?"
 
-Хорошо:
-«Как должен выполняться поиск?»
+Good:
+"How should search be performed?"
 
-PROPOSALS связываются с вопросом через `proposal_ids`, а не перечисляются
-в тексте вопроса.
+PROPOSALS are linked to a question through `proposal_ids`, not listed
+in the question text.
 
-## Цель
+## Goal
 
-Сформировать вопросы трёх видов.
+Form questions of three kinds.
 
 ### user
 
-Вопрос уже явно присутствует среди исходных фрагментов типа `question`.
+The question is already explicitly present among the source fragments of type `question`.
 
-Сохрани его текст и ID без изменений.
+Keep its text and ID unchanged.
 
-Если исходный вопрос пользователя сам содержит варианты ответа,
-не переписывай его: исходный текст пользователя имеет приоритет.
+If the user's source question itself contains answer options,
+do not rewrite it: the user's source text takes priority.
 
 ### inferred
 
-Вопрос явно не сформулирован, но один или несколько существующих `proposal`
-являются ответами на одну и ту же неопределённость.
+The question is not explicitly stated, but one or more existing `proposal` fragments
+are answers to the same uncertainty.
 
-Восстанови OPEN QUESTION, на который эти proposals отвечают.
+Reconstruct the OPEN QUESTION that these proposals answer.
 
-Формулируй неизвестное, а не выбор между имеющимися proposals.
+Formulate the unknown, not a choice between the existing proposals.
 
-Пример:
+Example:
 
-F1 proposal: «полнотекстовый поиск»
-F2 proposal: «или сразу векторный»
+F1 proposal: "full-text search"
+F2 proposal: "or vector right away"
 
 →
 
 OPEN QUESTION:
-«Как должен выполняться поиск?»
+"How should search be performed?"
 
 proposal_ids: ["F1", "F2"]
 
 ### discovered
 
-Вопроса и готового ответа в исходных фрагментах нет, но неопределённость
-необходимо разрешить, чтобы IDEA была достаточно определена для реализации.
+Neither the question nor a ready answer is in the source fragments, but the uncertainty
+must be resolved for the IDEA to be defined well enough for implementation.
 
-Добавляй только вопросы, ответ на которые может существенно изменить:
-- ожидаемое поведение;
-- границы capability;
-- пользовательский сценарий;
-- существенное устройство решения;
-- выполнение существующего constraint;
-- обработку существующего risk.
+Add only questions whose answer may substantially change:
+- the expected behavior;
+- the boundaries of the capability;
+- the user scenario;
+- the essential design of the solution;
+- meeting an existing constraint;
+- handling an existing risk.
 
-Не добавляй вопросы только потому, что они могут пригодиться при технической
-реализации.
+Do not add questions only because they may be useful during technical
+implementation.
 
-Не спрашивай преждевременно о framework, структуре классов, logging,
-deployment tooling и других деталях, которые можно решить локально
-при реализации без изменения IDEA.
+Do not ask prematurely about the framework, class structure, logging,
+deployment tooling and other details that can be decided locally
+during implementation without changing the IDEA.
 
-## Порядок работы
+## Procedure
 
-1. Перенеси существующие `question`.
-2. Найди существующие proposals, которые являются ответами на незаписанные
-   вопросы.
-3. Определи общую неопределённость, которую разрешает каждый такой набор
-   proposals.
-4. Сформулируй для неё нейтральный OPEN QUESTION без вариантов ответа.
-5. Только после этого найди действительно отсутствующие OPEN QUESTIONS.
+1. Carry over the existing `question` fragments.
+2. Find the existing proposals that are answers to unrecorded
+   questions.
+3. Determine the common uncertainty that each such set of
+   proposals resolves.
+4. Formulate a neutral OPEN QUESTION for it, without answer options.
+5. Only after that, find the OPEN QUESTIONS that are really missing.
 
-## Правила
+## Rules
 
-- Не предлагай ответы.
-- Не создавай новые proposals.
-- Не выбирай между существующими proposals.
-- Не перечисляй proposals или альтернативы в тексте OPEN QUESTION.
-- Не формулируй вопрос так, чтобы один из существующих proposals выглядел
-  предпочтительным.
-- Один OPEN QUESTION должен описывать одну неопределённость.
-- Не превращай constraint или risk в вопрос, если по нему не требуется
-  отдельного решения.
-- Не задавай вопрос, если ответ уже однозначно следует из утверждённого
-  материала.
-- Не создавай несколько формулировок одной неопределённости ради разнообразия.
+- Do not propose answers.
+- Do not create new proposals.
+- Do not choose between existing proposals.
+- Do not list proposals or alternatives in the text of an OPEN QUESTION.
+- Do not word a question so that one of the existing proposals looks
+  preferable.
+- One OPEN QUESTION must describe one uncertainty.
+- Do not turn a constraint or a risk into a question unless it requires
+  a separate decision.
+- Do not ask a question if the answer already follows unambiguously from the approved
+  material.
+- Do not create several wordings of one uncertainty for the sake of variety.
 
-## Формат
+## Accepted project decisions
 
-Верни только JSON:
+ACCEPTED PROJECT DECISIONS are ADRs from previous councils of the project that the user
+selected as relevant to this IDEA. Each has `relevance` (`applicable`,
+`potential_conflict` or `uncertain`) and `reason`.
+
+- Do not ask an OPEN QUESTION that an `applicable` decision already answers for this IDEA.
+- If the IDEA may require revisiting a decision (`potential_conflict`, or `uncertain` with a
+  concrete reason), ask that OPEN QUESTION explicitly and put the decision ID into
+  `revisits`.
+- Do not treat these decisions as answers to questions they do not answer.
+- An empty list means there are no such decisions.
+
+## Wording
+
+IDEA, OPEN QUESTION, PROPOSAL and ADR are atomic notes: one thought, normally one sentence.
+Do not embed answers, alternatives, decisions or outcomes inside a note — they are separate
+notes.
+
+Write simply and directly: clear, short, with one obvious meaning, in words a developer
+understands at a glance. Prefer concrete wording to abstract; avoid unnecessary jargon and
+bureaucratic phrasing.
+
+Discussion and rationale may be long; the text of a note may not.
+
+## Language
+
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Format
+
+Return only JSON:
 
 {
   "questions": [
     {
-      "text": "Как должен выполняться поиск?",
+      "text": "How should search be performed?",
       "source": "inferred",
       "source_question_id": null,
       "proposal_ids": ["F1", "F2"],
-      "reason": "F1 и F2 являются ответами на одну незаписанную неопределённость."
+      "reason": "F1 and F2 are answers to one unrecorded uncertainty.",
+      "revisits": null
     },
     {
-      "text": "Как будет определяться успешность изменения?",
+      "text": "How will the success of the change be determined?",
       "source": "discovered",
       "source_question_id": null,
       "proposal_ids": [],
-      "reason": "Без этого нельзя определить, достигнута ли IDEA."
+      "reason": "Without this, it is impossible to tell whether the IDEA has been achieved.",
+      "revisits": null
     }
   ]
 }
 
-Для `user`:
-- `text` дословно совпадает с исходным вопросом;
-- `source_question_id` содержит его ID;
-- `reason` может быть null.
+For `user`:
+- `text` matches the source question verbatim;
+- `note` is the same question as an atomic note: one sentence, without answer options or
+  decisions. If the source question already is one, repeat it; if it lists options, leave
+  them out — the options are separate PROPOSALS;
+- `source_question_id` contains its ID;
+- `reason` may be null.
 
-Для `inferred`:
-- `proposal_ids` содержит proposals, которые отвечают на вопрос.
+For `inferred`:
+- `proposal_ids` contains the proposals that answer the question.
 
-Для `discovered`:
-- `proposal_ids` обычно пуст.
+For `discovered`:
+- `proposal_ids` is usually empty.
+
+For every question:
+- `revisits` is the ID of an accepted project decision this question revisits (see
+  "Accepted project decisions"), otherwise null.
 
 ## IDEA
 
 {{idea}}
 
-## Фрагменты группы
+## Group fragments
 
 {{fragments}}
 
 ## REPOSITORY CONTEXT
 
-Карта существующей реализации, проверенная на шаге Repository Discovery: как система устроена
-сейчас. `verified` — подтверждено кодом, `inferred` — вывод из наблюдений, `unknown` — установить
-не удалось. Используй её как факты о текущем состоянии системы. Существующая реализация — не
-принятое решение и не требование: не превращай её в ADR и не выбирай вариант только потому, что
-так уже сделано.
+A map of the existing implementation, checked at the Repository Discovery step: how the system is
+built now. `verified` — confirmed by the code, `inferred` — a conclusion from observations,
+`unknown` — could not be established. Use it as facts about the current state of the system. The
+existing implementation is not an accepted decision and not a requirement: do not turn it into an
+ADR and do not choose an option only because it is already done that way.
 
-`complete: false` и `remaining_follow_up` — исследование не закончено: эти места не установлены,
-не считай их решёнными. `repositories` — с каких рабочих копий снята карта (бэкенд и фронтенд
-бывают в разных репозиториях): у нескольких пути файлов в карте начинаются с `folder` своей
-копии. `uncommitted_changes` — карта этой копии снята с рабочей копии с правками, а не с коммита;
-`files_outside_checkout` и `not_in_snapshot` — чего в снимке не было и модели не видели.
+`complete: false` and `remaining_follow_up` — the investigation is not finished: these places are
+not established, do not treat them as resolved. `repositories` — which working copies the map was
+taken from (the backend and the frontend are sometimes in different repositories): when there are
+several, file paths in the map start with the `folder` of their copy. `uncommitted_changes` — the
+map of this copy was taken from a working copy with edits, not from a commit;
+`files_outside_checkout` and `not_in_snapshot` — what was not in the snapshot and the models did
+not see.
 
 {{repository}}
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}
+
+## ACCEPTED PROJECT DECISIONS
+
+{{accepted_decisions}}

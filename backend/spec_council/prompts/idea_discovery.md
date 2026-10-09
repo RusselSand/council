@@ -1,113 +1,132 @@
-Ты восстанавливаешь IDEA для уже сформированной группы фрагментов.
+You reconstruct the IDEA for an already formed group of fragments.
 
-В группе нет явно сформулированной IDEA, но остальные фрагменты относятся
-к одной общей задумке.
+The group has no explicitly stated IDEA, but the other fragments belong
+to one common intention.
 
-Твоя задача — сформулировать IDEA, которая лучше всего объясняет,
-зачем эти фрагменты находятся в одной группе.
+Your task is to formulate the IDEA that best explains
+why these fragments are in one group.
 
-## Что такое IDEA
+## What an IDEA is
 
-IDEA — это предполагаемое улучшение, новая возможность или изменение,
-которое пользователь хочет исследовать.
+An IDEA is an intended improvement, a new capability or a change
+that the user wants to explore.
 
-IDEA описывает, ЧТО должно улучшиться или стать возможным,
-не выбирая, КАК именно этого добиться.
+An IDEA describes WHAT should improve or become possible,
+without choosing HOW exactly to achieve it.
 
-Проблема, наблюдение, constraint или risk могут объяснять необходимость IDEA,
-но не должны становиться самой IDEA.
+A problem, an observation, a constraint or a risk may explain why the IDEA is needed,
+but must not become the IDEA itself.
 
-Proposal описывает возможный способ реализации IDEA.
-Не поднимай детали proposal на уровень IDEA, если они не являются
-самостоятельной частью желаемого результата.
+A proposal describes a possible way to implement the IDEA.
+Do not raise the details of a proposal to the level of the IDEA unless they are
+a standalone part of the desired result.
 
-## Как восстанавливать IDEA
+## How to reconstruct the IDEA
 
-Рассматривай все фрагменты группы вместе.
+Consider all group fragments together.
 
-Ищи общий результат, который объясняет, зачем пользователю нужны содержащиеся
-в группе вопросы и proposals.
+Look for the common result that explains why the user needs the questions
+and proposals contained in the group.
 
-Если несколько proposals являются альтернативами, IDEA должна описывать
-общую цель, которой служат все эти альтернативы, а не один из вариантов.
+If several proposals are alternatives, the IDEA must describe
+the common goal that all these alternatives serve, not one of the options.
 
-Например:
+For example:
 
 Proposals:
-- полнотекстовый поиск по базе знаний;
-- векторный поиск;
-- бот в Slack, который отвечает ссылкой на статью.
+- full-text search over the knowledge base;
+- vector search;
+- a Slack bot that replies with a link to an article.
 
-Хорошая IDEA:
-«Команда может самостоятельно находить ответы в базе знаний, не обращаясь
-за ними в #help.»
+Good IDEA:
+"The team can find answers in the knowledge base on its own, without asking
+for them in #help."
 
-Плохая IDEA:
-«Сделать векторный поиск по базе знаний.»
+Bad IDEA:
+"Build vector search over the knowledge base."
 
-Она выбирает один из proposals.
+It chooses one of the proposals.
 
-Плохая IDEA:
-«Уменьшить количество вопросов в #help с помощью векторного поиска.»
+Bad IDEA:
+"Reduce the number of questions in #help with vector search."
 
-Она одновременно добавляет цель, которой может не быть во фрагментах,
-и выбирает способ реализации.
+It both adds a goal that may not be in the fragments
+and chooses a way to implement it.
 
 ## Grounding
 
-IDEA должна быть полностью обоснована фрагментами группы.
+The IDEA must be fully grounded in the group fragments.
 
-Можно обобщать смысл нескольких фрагментов, но нельзя:
-- добавлять новую цель;
-- придумывать новую capability;
-- добавлять требования, которых нет во фрагментах;
-- выбирать между competing proposals;
-- превращать constraint или risk в цель;
-- предполагать мотивацию пользователя, которой нет в группе.
+You may generalize the meaning of several fragments, but do not:
+- add a new goal;
+- invent a new capability;
+- add requirements that are not in the fragments;
+- choose between competing proposals;
+- turn a constraint or a risk into a goal;
+- assume a user motivation that is not in the group.
 
-Если фрагментов недостаточно, чтобы уверенно восстановить одну IDEA,
-это должно быть отражено в результате.
+If the fragments are not enough to reconstruct one IDEA with confidence,
+the result must reflect this.
 
-## Варианты
+## Options
 
-Определи, сколько существенно различных разумных формулировок IDEA
-поддерживает группа.
+Determine how many substantially different reasonable wordings of the IDEA
+the group supports.
 
-Один вариант — нормальный и ожидаемый результат.
+One option is a normal and expected result.
 
-Не создавай варианты из-за стилистических различий.
-Несколько вариантов нужны только тогда, когда фрагменты допускают
-разное понимание самой цели группы.
+Do not create options because of stylistic differences.
+Several options are needed only when the fragments allow
+different understandings of the group's goal itself.
 
-## Формат ответа
+## Wording
 
-Верни только JSON:
+IDEA, OPEN QUESTION, PROPOSAL and ADR are atomic notes: one thought, normally one sentence.
+Do not embed answers, alternatives, decisions or outcomes inside a note — they are separate
+notes.
+
+Write simply and directly: clear, short, with one obvious meaning, in words a developer
+understands at a glance. Prefer concrete wording to abstract; avoid unnecessary jargon and
+bureaucratic phrasing.
+
+Discussion and rationale may be long; the text of a note may not.
+
+## Language
+
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "number": 1,
   "options": [
     {
-      "idea": "Команда может самостоятельно находить ответы в базе знаний, не обращаясь за ними в #help.",
+      "idea": "The team can find answers in the knowledge base on its own, without asking for them in #help.",
       "evidence": ["F1", "F2", "F3"],
-      "reason": "Все три proposal являются разными способами решить одну задачу поиска ответа."
+      "reason": "All three proposals are different ways to solve the same problem of finding an answer."
     }
   ]
 }
 
-Если IDEA нельзя надёжно восстановить:
+If the IDEA cannot be reliably reconstructed:
 
 {
   "number": 0,
   "options": [],
-  "reason": "Недостаточно информации, чтобы определить желаемое изменение без добавления нового смысла."
+  "reason": "Not enough information to determine the desired change without adding new meaning."
 }
 
-`idea` должна быть короткой и описывать только желаемый результат.
+`idea` is one sentence in plain words: only the desired result, without the way to achieve it.
 
-`evidence` содержит ID фрагментов, непосредственно поддерживающих эту IDEA.
+`evidence` contains the IDs of the fragments that directly support this IDEA.
 
-`reason` кратко объясняет, почему именно эта цель объединяет группу.
+`reason` briefly explains why exactly this goal unites the group.
 
-## Группа
+## Group
 
 {{group}}

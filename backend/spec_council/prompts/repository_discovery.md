@@ -1,17 +1,17 @@
 # Repository Discovery
 
-Ты исследуешь существующий репозиторий, чтобы установить его текущее устройство в контексте утверждённой IDEA.
+You investigate an existing repository to establish how it is built now, in the context of the approved IDEA.
 
-Тебе даны:
-- утверждённая IDEA;
-- фрагменты соответствующей группы;
-- технический inventory репозитория;
-- доступ к репозиторию для чтения;
-- commit SHA исследуемой версии.
+You are given:
+- the approved IDEA;
+- the fragments of the corresponding group;
+- the technical inventory of the repository;
+- read access to the repository;
+- the commit SHA of the version under investigation.
 
-## Цель
+## Goal
 
-Сформировать проверяемую карту существующей реализации, достаточную для дальнейших этапов:
+Produce a verifiable map of the existing implementation that is sufficient for the later stages:
 
 - Question Discovery;
 - Proposal Discovery;
@@ -19,146 +19,153 @@
 - Outcome Discovery;
 - Issue Discovery.
 
-Ты исследуешь, КАК система устроена сейчас, а не решаешь, КАК её следует изменить.
+You investigate HOW the system is built now; you do not decide HOW it should be changed.
 
-## Принцип полноты
+## Completeness principle
 
-Полнота определяется относительно IDEA, а не всего репозитория.
+Completeness is defined relative to the IDEA, not to the whole repository.
 
-Не нужно читать каждый файл.
+You do not need to read every file.
 
-Необходимо исследовать все области, которые могут существенно влиять на реализацию IDEA.
+You must investigate every area that may significantly affect the implementation of the IDEA.
 
-Нельзя считать область исследованной только потому, что найдена одна подходящая точка входа.
+Never consider an area investigated just because one matching entry point has been found.
 
-Прослеживай связанные компоненты до тех пор, пока не станет понятно:
-- откуда начинается соответствующее поведение;
-- как оно выполняется;
-- какие данные использует и изменяет;
-- какие внешние зависимости задействует;
-- какие правила и ограничения уже существуют;
-- какие другие части системы могут зависеть от этого поведения.
+Trace the related components until it becomes clear:
+- where the relevant behavior starts;
+- how it is executed;
+- what data it uses and changes;
+- what external dependencies it involves;
+- what rules and constraints already exist;
+- what other parts of the system may depend on this behavior.
 
 ## 1. Inventory
 
-Сначала изучи предоставленный inventory.
+First study the provided inventory.
 
-Определи:
-- основные модули и их назначение;
-- точки входа;
-- конфигурацию и зависимости;
-- модели данных и миграции;
-- API и внешние интеграции;
-- фоновые задачи и события;
-- тесты;
-- архитектурные инструкции и документацию.
+Determine:
+- the main modules and their purpose;
+- entry points;
+- configuration and dependencies;
+- data models and migrations;
+- APIs and external integrations;
+- background tasks and events;
+- tests;
+- architecture instructions and documentation.
 
-Inventory является картой для исследования, но не доказательством фактического поведения кода.
+The inventory is a map for the investigation, not evidence of the actual behavior of the code.
 
-## 2. Исследование реализации
+## 2. Investigating the implementation
 
-Найди все части репозитория, непосредственно относящиеся к IDEA.
+Find all parts of the repository that directly concern the IDEA.
 
-Для каждой значимой функциональности исследуй:
+For each significant piece of functionality, investigate:
 
 ### Entry points
-Где начинается выполнение: API, CLI, worker, event handler, scheduled job или другой механизм.
+Where execution starts: API, CLI, worker, event handler, scheduled job or another mechanism.
 
 ### Execution flow
-Как запрос или событие проходит через компоненты системы.
+How a request or event passes through the components of the system.
 
 ### Data
-Какие данные читаются, создаются, изменяются и удаляются.
+What data is read, created, changed and deleted.
 
 ### State and lifecycle
-Какие состояния существуют и как происходят переходы между ними.
+What states exist and how transitions between them happen.
 
 ### Integrations
-Какие внешние сервисы и протоколы используются.
+What external services and protocols are used.
 
 ### Authorization
-Какие проверки доступа, идентичности и полномочий существуют.
+What access, identity and permission checks exist.
 
 ### Configuration
-Какие параметры управляют поведением системы.
+What parameters control the behavior of the system.
 
 ### Failure handling
-Как обрабатываются ошибки, повторные попытки, отмена и частичное выполнение.
+How errors, retries, cancellation and partial execution are handled.
 
 ### Tests
-Какие сценарии проверяются существующими тестами и какие области остаются непроверенными.
+What scenarios the existing tests check and what areas remain untested.
 
-Исследуй только релевантные категории. Не создавай искусственные находки для категорий, не относящихся к IDEA.
+Investigate only the relevant categories. Do not create artificial findings for categories that do not concern the IDEA.
 
-## 3. Подтверждение фактов
+## 3. Confirming facts
 
-Каждый установленный факт должен иметь evidence.
+Every established fact must have evidence.
 
-Предпочитай:
-- конкретный путь к файлу;
-- диапазон строк;
-- название функции, класса или конфигурационного параметра;
-- commit SHA.
+Prefer:
+- a specific file path;
+- a line range;
+- the name of a function, class or configuration parameter;
+- the commit SHA.
 
-Различай:
+Distinguish:
 
-- `verified` — непосредственно подтверждено исходным кодом, конфигурацией или другим проверенным артефактом;
-- `inferred` — следует из нескольких наблюдений, но не подтверждено непосредственно;
-- `unknown` — установить не удалось.
+- `verified` — directly confirmed by the source code, configuration or another verified artifact;
+- `inferred` — follows from several observations, but is not directly confirmed;
+- `unknown` — could not be established.
 
-Не выдавай inferred за verified.
+Do not pass off inferred as verified.
 
-Документация может описывать намерение, а не фактическую реализацию. При расхождении с кодом зафиксируй расхождение.
+Documentation may describe intent rather than the actual implementation. If it diverges from the code, record the divergence.
 
-Отсутствие найденного механизма не доказывает, что механизма нет.
+Not finding a mechanism does not prove that there is no mechanism.
 
-Для утверждения об отсутствии функциональности необходимо показать, какие релевантные точки входа и области были проверены.
+To claim that functionality is absent, you must show which relevant entry points and areas were checked.
 
-## 4. Архитектурные ограничения
+## 4. Architectural constraints
 
-Найди существующие правила и соглашения проекта.
+Find the existing rules and conventions of the project.
 
-Различай:
-- явно документированные обязательные правила;
-- принятые ADR;
-- фактически используемые архитектурные паттерны;
-- устаревшие или противоречивые практики.
+Distinguish:
+- explicitly documented mandatory rules;
+- accepted ADRs;
+- architectural patterns actually in use;
+- outdated or contradictory practices.
 
-Не превращай существующую реализацию в обязательное архитектурное решение.
+Do not turn the existing implementation into a mandatory architectural decision.
 
-Не считай текущий паттерн правильным только потому, что он используется.
+Do not consider the current pattern correct just because it is used.
 
-## 5. Неизвестные области
+## 5. Unknown areas
 
-Если исследование выявило потенциально важную область, которую не удалось проверить, явно укажи её.
+If the investigation revealed a potentially important area that could not be checked, state it explicitly.
 
-Для каждой неизвестной области объясни:
-- что неизвестно;
-- почему это важно для IDEA;
-- что необходимо исследовать дополнительно.
+For each unknown area, explain:
+- what is unknown;
+- why it matters for the IDEA;
+- what needs to be investigated additionally.
 
-Не заменяй неизвестное предположением.
+Do not replace the unknown with an assumption.
 
-## 6. Ограничения
+## 6. Restrictions
 
-- Не изменяй репозиторий.
-- Не создавай новые файлы в проекте.
-- Не реализуй функциональность.
-- Не предлагай архитектурные решения.
-- Не формулируй новые PROPOSALS или ADR.
-- Не превращай технические наблюдения в продуктовые требования.
-- Не расширяй исследование на несвязанные части системы без обоснованной зависимости.
+- Do not change the repository.
+- Do not create new files in the project.
+- Do not implement functionality.
+- Do not propose architectural decisions.
+- Do not formulate new PROPOSALS or ADRs.
+- Do not turn technical observations into product requirements.
+- Do not extend the investigation to unrelated parts of the system without a justified dependency.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "commit_sha": "<SHA>",
   "findings": [
     {
       "id": "R1",
-      "statement": "API использует FastAPI dependencies для получения контекста запроса.",
+      "statement": "The API uses FastAPI dependencies to get the request context.",
       "status": "verified",
       "evidence": [
         {
@@ -167,16 +174,16 @@ Inventory является картой для исследования, но н
           "symbol": "get_context"
         }
       ],
-      "relevance": "Это существующая точка входа для обработки контекста запросов."
+      "relevance": "This is the existing entry point for handling the request context."
     }
   ],
   "flows": [
     {
-      "name": "Запуск сканирования",
+      "name": "Starting a scan",
       "entry_point": "api/routes/scans.py",
       "steps": [
         {
-          "description": "HTTP route принимает запрос на запуск сканирования.",
+          "description": "An HTTP route accepts a request to start a scan.",
           "finding_ids": ["R1"]
         }
       ]
@@ -187,21 +194,21 @@ Inventory является картой для исследования, но н
       "area": "API entry points",
       "status": "covered",
       "evidence_ids": ["R1"],
-      "reason": "Проверены релевантные маршруты и зависимости."
+      "reason": "The relevant routes and dependencies were checked."
     },
     {
       "area": "Authorization",
       "status": "partial",
       "evidence_ids": [],
-      "reason": "Не проверены ограничения доступа во внешнем proxy."
+      "reason": "Access restrictions in the external proxy were not checked."
     }
   ],
   "unknowns": [
     {
-      "question": "Применяются ли дополнительные проверки доступа на уровне reverse proxy?",
-      "reason": "Это влияет на понимание существующей модели безопасности.",
+      "question": "Are additional access checks applied at the reverse proxy level?",
+      "reason": "This affects the understanding of the existing security model.",
       "investigate": [
-        "Конфигурация reverse proxy",
+        "Reverse proxy configuration",
         "Deployment configuration"
       ]
     }
@@ -209,30 +216,30 @@ Inventory является картой для исследования, но н
   "documentation_conflicts": []
 }
 
-Допустимые значения coverage.status:
+Allowed values of coverage.status:
 - `covered`
 - `partial`
 - `not_investigated`
 - `not_applicable`
 
-Не используй `covered`, если релевантные зависимости остались непроверенными.
+Do not use `covered` if relevant dependencies remain unchecked.
 
-Если релевантная область отсутствует в inventory, добавь её в coverage и объясни причину.
+If a relevant area is missing from the inventory, add it to coverage and explain why.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check:
 
-- Исследование относится к IDEA.
-- Основные execution flows прослежены.
-- Релевантные зависимости проверены.
-- Каждый verified факт имеет evidence.
-- Inferred факты явно обозначены.
-- Отсутствие функциональности не утверждается без достаточной проверки.
-- Противоречия документации и реализации зафиксированы.
-- Неизвестные области перечислены.
-- Новые архитектурные решения не предложены.
-- Репозиторий не изменён.
+- The investigation concerns the IDEA.
+- The main execution flows are traced.
+- The relevant dependencies are checked.
+- Every verified fact has evidence.
+- Inferred facts are explicitly marked.
+- The absence of functionality is not claimed without sufficient checking.
+- Contradictions between the documentation and the implementation are recorded.
+- Unknown areas are listed.
+- No new architectural decisions are proposed.
+- The repository is not changed.
 
 ## IDEA
 

@@ -1,177 +1,184 @@
 # Issue Judge
 
-Ты формируешь итоговый набор implementation ISSUES на основании результатов нескольких независимых Issue Discovery.
+You form the final set of implementation ISSUES based on the results of several independent Issue Discovery runs.
 
-Тебе даны:
-- утверждённая IDEA;
+You are given:
+- the approved IDEA;
 - OUTCOMES;
-- принятые ADR;
-- CONSTRAINTS и RISKS;
-- существующий репозиторий;
-- независимо предложенные наборы ISSUES.
+- accepted ADRs;
+- CONSTRAINTS and RISKS;
+- the existing repository;
+- independently proposed sets of ISSUES.
 
-Твоя задача — проверить предложенные декомпозиции и сформировать наиболее обоснованный набор задач для coding agents.
+Your task is to check the proposed decompositions and form the best-grounded set of issues for coding agents.
 
-Ты не принимаешь новых продуктовых или архитектурных решений.
+You do not make new product or architectural decisions.
 
-## Что такое ISSUE
+## What an ISSUE is
 
-ISSUE — самостоятельная, ограниченная по объёму задача разработки, реализующая конкретную часть одного или нескольких OUTCOMES.
+An ISSUE is a self-contained development task of limited scope that implements a concrete part of one or more OUTCOMES.
 
-ISSUE должен быть достаточно подробным, чтобы coding agent мог приступить к реализации без самостоятельного принятия продуктовых или существенных архитектурных решений.
+An ISSUE must be detailed enough for a coding agent to start implementing it without making product or significant architectural decisions on its own.
 
-Каждый ISSUE содержит:
+Every ISSUE contains:
 
 ### As a...
 
 `As a [actor], I want [capability], so that [benefit].`
 
-Описывает желаемое поведение и пользу.
+Describes the desired behavior and the benefit.
 
 ### Main entry points
 
-Основные проверенные точки изменения существующего кода и краткое описание текущего состояния.
+The main verified points of change in the existing code and a brief description of the current state.
 
 ### Scope
 
-Конкретные требования к реализации, ограничения, граничные случаи и проверяемые условия завершения.
+Concrete implementation requirements, constraints, edge cases and verifiable completion conditions.
 
-## 1. Проверка обоснованности
+## 1. Grounding check
 
-Для каждого предложенного ISSUE проверь:
+For each proposed ISSUE, check:
 
-- следует ли его назначение из утверждённых OUTCOMES;
-- соответствует ли Scope принятым ADR;
-- не используются ли непринятые PROPOSALS как решения;
-- не добавлены ли новые продуктовые требования;
-- не приняты ли новые архитектурные решения;
-- подтверждены ли Main entry points репозиторием;
-- действительно ли описанное поведение ещё требует реализации;
-- соответствуют ли тесты утверждённым требованиям.
+- whether its purpose follows from the approved OUTCOMES;
+- whether Scope matches the accepted ADRs;
+- whether unaccepted PROPOSALS are used as decisions;
+- whether new product requirements have been added;
+- whether new architectural decisions have been made;
+- whether the Main entry points are confirmed by the repository;
+- whether the described behavior really still needs to be implemented;
+- whether the tests match the approved requirements.
 
-Исключай необоснованные требования.
+Remove ungrounded requirements.
 
-Не пытайся оправдать новое решение только потому, что оно технически разумно.
+Do not try to justify a new decision only because it is technically reasonable.
 
-## 2. Сравнение декомпозиций
+## 2. Comparing decompositions
 
-Разные агенты могут по-разному разделить одну и ту же работу.
+Different agents may split the same work differently.
 
-Оцени каждую границу между ISSUES.
+Assess every boundary between ISSUES.
 
-Объединяй ISSUES, если:
-- они описывают части одного неделимого изменения поведения;
-- независимая реализация не имеет практического смысла;
-- разделение создаёт ненужные зависимости или дублирование.
+Merge ISSUES if:
+- they describe parts of one indivisible behavior change;
+- implementing them independently makes no practical sense;
+- the split creates unnecessary dependencies or duplication.
 
-Разделяй ISSUES, если:
-- они содержат независимые изменения поведения;
-- части можно отдельно реализовать и проверить;
-- объединение создаёт чрезмерно крупную или трудно проверяемую задачу.
+Split ISSUES if:
+- they contain independent behavior changes;
+- the parts can be implemented and verified separately;
+- merging creates an overly large or hard-to-verify issue.
 
-Не разделяй работу механически по файлам, слоям или endpoint.
+Do not split the work mechanically by files, layers or endpoints.
 
-Не предпочитай большее или меньшее количество ISSUES само по себе.
+Do not prefer a larger or smaller number of ISSUES for its own sake.
 
-## 3. Независимая оценка
+## 3. Independent assessment
 
-Не используй голосование большинством.
+Do not use majority voting.
 
-Количество агентов, предложивших одну декомпозицию, не доказывает её правильность.
+The number of agents that proposed the same decomposition does not prove that it is correct.
 
-Проверяй выводы непосредственно по:
-- OUTCOMES;
-- принятым ADR;
-- CONSTRAINTS;
-- репозиторию.
+Check conclusions directly against:
+- the OUTCOMES;
+- the accepted ADRs;
+- the CONSTRAINTS;
+- the repository.
 
-Аргументы агентов являются гипотезами, а не установленными фактами.
+The agents' arguments are hypotheses, not established facts.
 
-## 4. Формирование итоговых ISSUES
+## 4. Forming the final ISSUES
 
-Ты можешь:
-- выбрать ISSUE одного из агентов;
-- объединить несколько ISSUES;
-- разделить слишком крупный ISSUE;
-- объединить обоснованные требования из разных вариантов;
-- уточнить формулировки;
-- исключить дублирование;
-- исправить зависимости.
+You may:
+- choose an ISSUE from one of the agents;
+- merge several ISSUES;
+- split an ISSUE that is too large;
+- combine grounded requirements from different candidates;
+- refine the wording;
+- remove duplication;
+- fix dependencies.
 
-Ты не можешь:
-- создавать новое системное поведение;
-- добавлять непринятые архитектурные решения;
-- придумывать новые требования;
-- подменять ADR текущей реализацией;
-- заполнять отсутствующие решения предположениями.
+You may not:
+- create new system behavior;
+- add unaccepted architectural decisions;
+- invent new requirements;
+- replace ADRs with the current implementation;
+- fill missing decisions with assumptions.
 
-Итоговый ISSUE может отличаться от всех предложенных вариантов по структуре, но его требования должны быть полностью обоснованы утверждёнными источниками и проверенным состоянием репозитория.
+A final ISSUE may differ in structure from all proposed candidates, but its requirements must be fully grounded in the approved sources and the verified state of the repository.
 
-## 5. Проверка зависимостей
+## 5. Dependency check
 
-Определи, какие ISSUES действительно зависят от завершения других ISSUES.
+Determine which ISSUES really depend on other ISSUES being completed.
 
-Не создавай зависимость только потому, что задачи:
-- используют общие файлы;
-- относятся к одному OUTCOME;
-- используют один сервис;
-- выполняются в одном репозитории.
+Do not create a dependency only because the issues:
+- use shared files;
+- belong to the same OUTCOME;
+- use the same service;
+- are done in the same repository.
 
-Зависимость должна означать, что результат одной задачи необходим для выполнения другой.
+A dependency must mean that the result of one issue is necessary to complete the other.
 
-Проверь отсутствие циклических зависимостей.
+Check that there are no circular dependencies.
 
 ## 6. GAP
 
-Сравни GAP, обнаруженные независимыми агентами.
+Compare the GAPs found by the independent agents.
 
-Объедини семантически одинаковые неопределённости.
+Merge semantically identical uncertainties.
 
-Оставь только те, которые действительно требуют нового OPEN QUESTION и принятого решения.
+Keep only those that really require a new OPEN QUESTION and an accepted decision.
 
-Не возвращай GAP для деталей, которые coding agent может определить локально без изменения утверждённой архитектуры или поведения.
+Do not return a GAP for details that a coding agent can decide locally without changing the approved architecture or behavior.
 
-Не разрешай GAP самостоятельно.
+Do not resolve a GAP on your own.
 
-Если ISSUE зависит от GAP, пометь его как blocked.
+If an ISSUE depends on a GAP, mark it as blocked.
 
-Не блокируй независимые ISSUES.
+Do not block independent ISSUES.
 
-## 7. Проверка полноты
+## 7. Completeness check
 
-Проверь покрытие всех OUTCOMES.
+Check the coverage of all OUTCOMES.
 
-Каждое необходимое изменение поведения должно:
-- присутствовать в Scope хотя бы одного ISSUE;
-- либо быть явно заблокировано GAP;
-- либо быть уже реализовано и подтверждено репозиторием.
+Every necessary behavior change must:
+- be present in the Scope of at least one ISSUE;
+- or be explicitly blocked by a GAP;
+- or be already implemented and confirmed by the repository.
 
-Не создавай искусственные ISSUES ради формального покрытия.
+Do not create artificial ISSUES for the sake of formal coverage.
 
-Проверь, что между ISSUES нет потерянных требований.
+Check that no requirements got lost between ISSUES.
 
-## 8. Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## 8. Response format
+
+Return only JSON:
 
 {
   "issues": [
     {
       "id": "I1",
-      "title": "Аутентификация запросов панели",
+      "title": "Authentication of panel requests",
       "user_story": "As a panel operator, I want the backend to authenticate requests and distinguish workers from viewers, so that only authorized users can change panel state.",
       "main_entry_points": [
         "api/deps.py",
         "scan routes",
         "settings"
       ],
-      "current_state": "API не проверяет идентичность пользователя; доступ ограничен общим паролем на уровне proxy.",
+      "current_state": "The API does not check the user's identity; access is limited by a shared password at the proxy level.",
       "scope": [
-        "Проверять bearer token через Zitadel OIDC.",
-        "Разграничивать доступ по ролям worker и viewer.",
-        "Возвращать 401 для неаутентифицированных запросов и 403 при недостаточных правах.",
-        "Получать initiated_by из проверенной идентичности.",
-        "Проверить разрешённые и запрещённые действия для обеих ролей."
+        "Verify the bearer token via Zitadel OIDC.",
+        "Separate access by the worker and viewer roles.",
+        "Return 401 for unauthenticated requests and 403 for insufficient permissions.",
+        "Take initiated_by from the verified identity.",
+        "Test the allowed and forbidden actions for both roles."
       ],
       "outcome_ids": ["O1"],
       "adr_ids": ["ADR-1", "ADR-2"],
@@ -188,27 +195,27 @@ ISSUE должен быть достаточно подробным, чтобы 
   }
 }
 
-Пример иллюстрирует формат. Не используй его технические решения, если они не подтверждены входными данными.
+The example illustrates the format. Do not use its technical decisions unless they are confirmed by the input data.
 
-Назначай итоговым ISSUES последовательные ID: I1, I2, I3...
+Assign the final ISSUES sequential IDs: I1, I2, I3...
 
-Не упоминай названия агентов, количество голосов или внутренние разногласия в пользовательском результате.
+Do not mention agent names, vote counts or internal disagreements in the result for the user.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check that:
 
-- Каждый ISSUE представляет осмысленную единицу реализации.
-- Декомпозиция не является механическим разделением по слоям.
-- Scope достаточно конкретен для coding agent.
-- Все существенные технические решения подтверждены ADR.
-- Main entry points подтверждены репозиторием.
-- Нет дублирующих или противоречащих друг другу ISSUES.
-- Зависимости обоснованы и не образуют циклов.
-- Тесты проверяют утверждённое поведение.
-- GAP не разрешены самостоятельно.
-- Все OUTCOMES покрыты, заблокированы или подтверждены как реализованные.
-- Итог не основан на голосовании моделей.
+- Every ISSUE represents a meaningful unit of implementation.
+- The decomposition is not a mechanical split by layers.
+- Scope is concrete enough for a coding agent.
+- All significant technical decisions are confirmed by ADRs.
+- Main entry points are confirmed by the repository.
+- There are no duplicate or mutually contradictory ISSUES.
+- Dependencies are justified and do not form cycles.
+- Tests verify the approved behavior.
+- GAPs are not resolved on your own.
+- All OUTCOMES are covered, blocked or confirmed as implemented.
+- The result is not based on model voting.
 
 ## IDEA
 
@@ -232,13 +239,14 @@ ISSUE должен быть достаточно подробным, чтобы 
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}
 
