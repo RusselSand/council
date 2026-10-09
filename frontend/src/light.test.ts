@@ -225,6 +225,11 @@ describe('светофор', () => {
     expect(attention(council(on(cut('failed')))).map(a => a.what)).toEqual(['issuesFailed'])
     expect(attention(council(ready)).map(a => a.what)).toEqual(['notesWait'])
     expect(attention(council(written))).toEqual([])
+    // Поверх выгрузки собрали новый черновик: его ход важнее прежней выгрузки.
+    const redrafted = (state: 'running' | 'failed') => ({ ...written, notes_draft: { state, run: 'n2', issues: 'i1',
+      language: 'English', steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
+    expect(chainLight(redrafted('running'), 'notes')).toBe('running')
+    expect(attention(council(redrafted('failed'))).map(a => a.what)).toEqual(['notesFailed'])
     // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла — не зелёный.
     const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                             { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))

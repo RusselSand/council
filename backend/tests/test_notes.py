@@ -54,10 +54,16 @@ def test_links_written_by_hand_in_flow_style_are_read_too():
     ("---\ntype: idea\n---\nтекст", "нет id"),
     ("---\nid: X-1\ntype: issue\n---\nтекст", "неизвестный type"),
     ("---\nid: X-1\ntype: idea\nlinks: ADR-1\n---\n", "не список"),
+    ("---\nid: ADR-current\ntype: adr\n---\nтекст", "ADR-current: номер не по формату ADR-"),
+    ("---\nid: OQ-0001\ntype: adr\n---\nтекст", "OQ-0001: номер не по формату ADR-"),
 ])
 def test_a_broken_note_is_told(text, problem):
     with pytest.raises(NotesError, match=problem):
         parsed(text)
+
+
+def test_a_number_without_leading_zeros_is_still_a_number():
+    assert parsed("---\nid: ADR-7\ntype: adr\nlinks: [PRO-1]\n---\nТекст").id == "ADR-7"
 
 
 def test_the_catalog_reads_the_type_folders_and_follows_links(tmp_path):

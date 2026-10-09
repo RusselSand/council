@@ -38,6 +38,8 @@ UPSTREAM = {"idea": frozenset(), "open_question": frozenset({"idea", "proposal",
             "proposal": frozenset({"open_question"}), "adr": frozenset({"proposal"}),
             "outcome": frozenset({"adr"})}
 ISSUE_ID = re.compile(r"\bISS-\d+\b")
+# Строка задачи в теле итога: «- ISS-0012: название». Номер в другом месте — упоминание.
+ISSUE_LINE = re.compile(r"^- (ISS-\d+):", re.MULTILINE)
 FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
 
 
@@ -101,6 +103,11 @@ def parsed(text: str, path: Path | None = None) -> Note:
         raise NotesError(f"В заметке{where} нет id")
     if kind not in TYPES:
         raise NotesError(f"У заметки {note_id} неизвестный type: {kind!r}")
+    # Номер — префикс типа и число (ADR-7 и ADR-0007): по нему отбор решений узнаёт номер, а
+    # next_id — следующий.
+    if re.fullmatch(rf"{PREFIXES[str(kind)]}-\d+", note_id) is None:
+        raise NotesError(f"Заметка{where} {note_id}: номер не по формату "
+                         f"{PREFIXES[str(kind)]}-0001 для type {kind}")
     links = meta.get("links", [])
     return Note(note_id, str(kind), found.group(2).strip(), tuple(links), path)
 
@@ -249,6 +256,11 @@ def link_problems(note: Note, notes: Mapping[str, Note]) -> list[str]:
 def issues_in(text: str) -> list[str]:
     """Номера задач (ISS-…) в тексте — в заметке итога или сообщении коммита."""
     return list(dict.fromkeys(ISSUE_ID.findall(text)))
+
+
+def declared_issues(text: str) -> list[str]:
+    """Задачи итога — только его строки задач, а не каждое упоминание номера в тексте."""
+    return list(dict.fromkeys(ISSUE_LINE.findall(text)))
 
 
 # --- команда для агентов

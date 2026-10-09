@@ -378,3 +378,8 @@ def test_a_translation_keeps_exactly_the_numbers_of_the_source():
                                             "- ISS-9999: Extra"}, good["notes"][1]]}
     with pytest.raises(BadAnswer, match="лишние номера ISS-9999"):
         translations(added, sources)
+    # Номер на месте, но строка задачи — уже не строка задачи: итог её бы потерял.
+    reworded = {"notes": [{"key": "o", "text": "Outcome\n\nIssues: ISS-0001 (Button)"},
+                          good["notes"][1]]}
+    with pytest.raises(BadAnswer, match="строки задач"):
+        translations(reworded, sources)

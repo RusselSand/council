@@ -14,6 +14,8 @@ already approved their meaning: your job is the language only.
   ISS-0001), file paths, code identifiers, URLs, product and technology names.
 - Keep the structure of a note: line breaks, blank lines, list items ("- "); translate labels
   such as "Acceptance criteria:" and "Issues:".
+- Keep every issue line in the form "- ISS-0001: <title>": the same ID, then a colon, then the
+  translated title.
 - An ADR reads "<decision>, because <rationale>": keep that form in {{language}}.
 - Write simply and directly: clear, short, with one obvious meaning, in words a developer
   understands at a glance.

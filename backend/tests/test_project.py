@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from spec_council.api import streams
 from spec_council.app import app
 from spec_council.deps import get_agents, get_launcher, get_notes_root, get_repositories
 from spec_council.models import (
@@ -107,6 +108,32 @@ def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path)
     assert (trail.issue, trail.outcome, trail.file) == ("ISS-0003", "OUT-0001", "app.py")
     assert records(catalog, trails)[0].found_in_code == [trail]
     assert trails_of([(tmp_path / "нет", "app.py", "app.py")], issue_outcomes(catalog)) == {}
+
+
+def test_only_the_issue_lines_of_an_outcome_declare_its_issues(tmp_path):
+    body = "Поиск, без регресса ISS-0042\n\nЗадачи:\n- ISS-0010: Поправить регресс из ISS-0042"
+    outcome = Note("OUT-0001", "outcome", body, ("ADR-0001",))
+    catalog = Catalog.load(put(tmp_path / "notes", [*PAST[:4], outcome]))
+    assert issue_outcomes(catalog) == {"ISS-0010": [("OUT-0001", ("ADR-0001",))]}
+
+
+def test_a_catalog_changed_while_the_models_are_probed_still_sends_the_selection_back(
+        agents, tmp_path, monkeypatch):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    probe = streams.offline
+
+    def edited_meanwhile(*args, **kwargs):
+        # Пока проверяли подключение моделей, другой поток переписал ADR-0001.
+        adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+        path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+        return probe(*args, **kwargs)
+
+    monkeypatch.setattr(streams, "offline", edited_meanwhile)
+    res = picks(council_id, ["ADR-0001"])
+    assert res.status_code == 409 and "ADR-0001" in res.json()["detail"]
+    assert streams_of(council_id)["C"].questions is None
 
 
 def test_the_trail_follows_a_file_through_its_renames(tmp_path):

@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from .models import CodeTrail, ProjectDecision, RepositoryScan
-from .notes import Catalog, issues_in
+from .notes import Catalog, declared_issues, issues_in
 from .repository import RepositoryError, git_bytes
 from .repository import text_of as reason_text
 from .slicing import BadAnswer
@@ -58,7 +58,7 @@ def issue_outcomes(catalog: Catalog) -> dict[str, list[tuple[str, tuple[str, ...
     found: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
     for note in sorted(catalog.notes.values(), key=lambda note: note.id):
         if note.type == "outcome":
-            for issue in issues_in(note.body):
+            for issue in declared_issues(note.body):
                 found.setdefault(issue, []).append((note.id, note.links))
     return found
 

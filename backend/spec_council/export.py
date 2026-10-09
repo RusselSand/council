@@ -34,7 +34,7 @@ from .models import (
     Stream,
     VanishedNote,
 )
-from .notes import Catalog, Note, NotesError, issues_in, path_of, rendered
+from .notes import Catalog, Note, NotesError, declared_issues, issues_in, path_of, rendered
 from .questions import same_question
 from .slicing import BadAnswer
 
@@ -250,6 +250,8 @@ def numbered_issues(stream: Stream, catalog: Catalog,
     следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого
     тогда в каталог не легло (итог не выгружался), мог занять другой поток — тогда новый."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
+    # Занятым считается и номер, который лишь упомянут: новая задача под ним сделала бы
+    # упоминание ссылкой на себя.
     ours = {note.id for note in previous.notes} if previous else set()
     foreign = {issue for note in catalog.notes.values() if note.id not in ours
                for issue in issues_in(note.body)}
@@ -462,6 +464,9 @@ def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
         if translated - source:
             raise BadAnswer(f"в переводе {key} лишние номера "
                             f"{', '.join(sorted(translated - source))}")
+        if declared_issues(sources[key]) != declared_issues(text):
+            raise BadAnswer(f"в переводе {key} строки задач не те: каждая — «- ISS-…: название», "
+                            "как в исходном тексте")
     return found
 
 

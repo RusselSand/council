@@ -564,12 +564,14 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
     удался) — вопросы без них. Отметить заново иначе — вопросы и всё ниже заново. Отмеченное
     решение в каталоге с тех пор поменяли, заменили или убрали — 409, и отбор записан упавшим:
     его запускают заново, и модели увидят решения, какие они сейчас."""
-    loaded = catalog_at(notes)
-    with council_lock:
+    def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         seen_idea(stream, edit)
-        stale = changed_in(loaded, stream, selection_for(stream, edit))
+        chosen = selection_for(stream, edit)
+        # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
+        # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
+        stale = changed_in(catalog_at(notes), stream, chosen)
         if stale:
             message = (f"Решения проекта в каталоге заметок поменялись, пока смотрели отбор "
                        f"({', '.join(stale)}): отберите их заново")
@@ -578,12 +580,6 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
             store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"decisions_search": failed}))})
             raise HTTPException(409, message)
-
-    def plan() -> tuple[Council, bool]:
-        council = current(council_id, store, edit)
-        stream = stream_in(council, group)
-        seen_idea(stream, edit)
-        chosen = selection_for(stream, edit)
         anew = asks_anew(stream, stream.repository, stream.design, chosen)
         if anew and below_running(stream, "questions"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")

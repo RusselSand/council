@@ -90,7 +90,12 @@ export const chainLight = (stream: Stream, step: ChainStep): Light => {
       && issues.uncovered_outcome_ids.length === 0 && lost === 0 && !vague
     return ofRun(issues) ?? (ready ? 'done' : 'yours')
   }
-  if (step === 'notes' && stream.issues?.state === 'done') return exported(stream) ? 'done' : ofRun(stream.notes_draft) ?? 'yours'
+  if (step === 'notes' && stream.issues?.state === 'done') {
+    // Черновик новее выгрузки — его ход важнее прежней выгрузки: переводится, упал или ждёт записи.
+    const draft = stream.notes_draft
+    if (draft && draft.run !== stream.notes?.run) return ofRun(draft) ?? 'yours'
+    return exported(stream) ? 'done' : ofRun(draft) ?? 'yours'
+  }
   return 'idle'
 }
 
