@@ -832,6 +832,8 @@ class NotesExport(BaseModel):
     run: str
     issues: str
     language: str
+    # Каталог, куда записали: номера выгрузки заняты только в нём.
+    root: str = ""
     notes: list[ExportedNote] = []
     numbers: list[IssueNumber] = []
 

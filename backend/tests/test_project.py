@@ -11,6 +11,7 @@ from spec_council.models import (
     Evidence,
     ProjectDecision,
     RepositoryFinding,
+    RepositoryFlow,
     RepositoryMap,
     RepositoryScan,
     ScannedRepository,
@@ -168,6 +169,16 @@ def test_several_repositories_split_the_map_paths_by_folder(tmp_path):
                      (tmp_path / "f", "src/App.tsx", "front/src/App.tsx")]
 
 
+def test_a_file_named_only_as_a_flow_entry_point_is_traced_too(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "routes x.py").write_text("…", encoding="utf-8")
+    scan = scan_of(("", tmp_path))
+    scan.result.flows = [RepositoryFlow(name="Поиск", entry_point="api/routes x.py:find"),
+                         RepositoryFlow(name="Без точки входа")]
+    assert evidence_files(scan) == [(tmp_path, "app.py", "app.py"),
+                                    (tmp_path, "api/routes x.py", "api/routes x.py")]
+
+
 CATALOG = [ProjectDecision(adr_id="ADR-0007", decision="Платежи через Stripe."),
            ProjectDecision(adr_id="ADR-0012", decision="Чеки в S3.")]
 
@@ -187,6 +198,17 @@ def test_the_selection_keeps_catalog_decisions_with_a_known_relevance():
         selected({}, CATALOG)
     assert same_selection([found, list(found)])
     assert not same_selection([found, []])
+
+
+def test_a_replaced_decision_is_never_selected_and_one_under_review_is_not_applicable():
+    catalog = [ProjectDecision(adr_id="ADR-0001", decision="Старое.", status="superseded",
+                               superseded_by="ADR-0003"),
+               ProjectDecision(adr_id="ADR-0002", decision="Спорное.", status="under_review"),
+               ProjectDecision(adr_id="ADR-0003", decision="Новое.")]
+    found = selected({"decisions": [{"adr_id": adr_id, "relevance": "applicable"}
+                                    for adr_id in ("ADR-0001", "ADR-0002", "ADR-0003")]}, catalog)
+    assert [(d.adr_id, d.relevance) for d in found] == [("ADR-0002", "uncertain"),
+                                                        ("ADR-0003", "applicable")]
 
 
 # --- в потоке
@@ -226,7 +248,8 @@ def test_past_decisions_are_selected_before_the_questions(agents):
     assert stream.questions is None                     # сначала — решения проекта
     search = stream.decisions_search
     assert (search.state, search.catalog, search.traced) == ("done", 2, 0)
-    assert [(d.adr_id, d.relevance) for d in search.decisions] == [("ADR-0001", "applicable")]
+    # ADR-0001 на пересмотре (его оспаривает OQ-0002): «применимо» модели — уже «неясно».
+    assert [(d.adr_id, d.relevance) for d in search.decisions] == [("ADR-0001", "uncertain")]
     catalog = section(agents.prompts["project_decisions_discovery"], "PROJECT ADR CATALOG")
     assert '"status": "under_review"' in catalog and "Счета шлёт бот." in catalog
     assert {s.name.value: s.state for s in search.steps}["project_decisions_judge"] == "skipped"
@@ -316,6 +339,48 @@ def test_a_selected_decision_rewritten_in_the_catalog_finds_the_questions_anew(a
                        ).status_code == 202
     assert picks(council_id, ["ADR-0001"]).status_code == 200        # то же решение, другой текст
     assert streams_of(council_id)["C"].questions.run != first
+
+
+def test_a_retry_of_the_questions_after_the_catalog_changed_goes_back_to_the_selection(
+        agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    agents.online = set()
+    assert picks(council_id, ["ADR-0001"]).status_code == 200         # вопросы — упали
+    agents.online = {"sol", "fable"}
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    retry = client.post(f"/api/councils/{council_id}/streams/C/questions/discovery")
+    assert retry.status_code == 409 and "ADR-0001" in retry.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.project_decisions, stream.questions) == (
+        "failed", None, None)                                        # отбирают заново
+    assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
+                       ).status_code == 202
+    assert picks(council_id, ["ADR-0001"]).status_code == 200
+    accepted = section(agents.prompts["question_discovery"], "ACCEPTED PROJECT DECISIONS")
+    assert "Ищем в чате" in accepted
+
+
+def test_a_retry_of_the_questions_offers_decisions_that_appeared_meanwhile(agents, tmp_path):
+    root = tmp_path / "later"
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    skip(council_id, "C")
+    agents.online = set()
+    passes(council_id, "C")                       # решений в каталоге нет — сразу вопросы, упали
+    agents.online = {"sol", "fable"}
+    assert streams_of(council_id)["C"].decisions_search is None
+    put(root)
+    retry = client.post(f"/api/councils/{council_id}/streams/C/questions/discovery")
+    assert retry.status_code == 409 and "появились" in retry.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.questions) == ("failed", None)
+    assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
+                       ).status_code == 202
 
 
 def test_without_models_the_selection_fails_and_the_questions_go_without_it(agents):

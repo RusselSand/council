@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, StoreDep
+from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, Store, StoreDep
 from ..export import (
     drafted,
     graph_problems,
@@ -86,22 +86,32 @@ def cut(stream: Stream) -> str:
     return stream.issues.run
 
 
-def drafted_for(council: Council, group: str, stream: Stream, root: Path,
-                catalog: Catalog) -> tuple[list[NotePlan], list[VanishedNote],
-                                           list[IssueNumber], list[str]]:
+def drafted_for(council: Council, group: str, stream: Stream, root: Path, catalog: Catalog,
+                store: Store) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber],
+                                       list[str]]:
     """Что выгрузил бы совет сейчас. Не выгрузить (пересматриваемое решение пропало из
     каталога) — 422 с причиной."""
     fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
     try:
         return drafted(stream, fragments, catalog, root, stream.notes, words_for(language()),
-                       notes_language())
+                       notes_language(), reserved_by_others(store, council.id, group, root))
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 
 
-def draft_of(council: Council, group: str, stream: Stream, root: Path,
-             catalog: Catalog) -> NotesDraft:
-    notes, vanished, numbers, skipped = drafted_for(council, group, stream, root, catalog)
+def reserved_by_others(store: Store, council_id: str, group: str, root: Path) -> set[str]:
+    """Номера заметок и задач из выгрузок других потоков — всех советов — в этот каталог:
+    заметку там могли удалить руками, но номер всё ещё того потока."""
+    return {item.id for council in store.list_councils() for stream in council.streams or []
+            if stream.notes is not None and stream.notes.root == str(root)
+            and (council.id, stream.group) != (council_id, group)
+            for item in (*stream.notes.notes, *stream.notes.numbers)}
+
+
+def draft_of(council: Council, group: str, stream: Stream, root: Path, catalog: Catalog,
+             store: Store) -> NotesDraft:
+    notes, vanished, numbers, skipped = drafted_for(council, group, stream, root, catalog,
+                                                    store)
     return NotesDraft(state="running", run=uuid4().hex[:8], issues=cut(stream),
                       language=notes_language(), steps=translating(council.judge), notes=notes,
                       vanished=vanished, numbers=numbers, skipped=skipped)
@@ -139,7 +149,7 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
         catalog = catalog_of(root)
-        draft = draft_of(council, group, stream, root, catalog)
+        draft = draft_of(council, group, stream, root, catalog, store)
         runs: list[CouncilRun] = []
         if not translate or not untranslated(draft.notes):
             draft = draft.model_copy(update={"state": "done", "steps": []})
@@ -172,10 +182,11 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         stream = stream_in(council, group)
         draft = checked_draft(stream, edit)
         catalog = catalog_of(root)
-        fresh, vanished, numbers, _ = drafted_for(council, group, stream, root, catalog)
+        fresh, vanished, numbers, _ = drafted_for(council, group, stream, root, catalog,
+                                                  store)
         if (shape(fresh) != shape(draft.notes)
                 or [(n.key, n.id) for n in numbers] != [(n.key, n.id) for n in draft.numbers]
-                or [v.id for v in vanished] != [v.id for v in draft.vanished]):
+                or vanished != draft.vanished):          # и текст: удаляют то, что видели
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         before = {note.key: note for note in stream.notes.notes} if stream.notes else {}
@@ -186,7 +197,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         def keep(exported: list[ExportedNote]) -> None:
             # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.
             record = NotesExport(run=draft.run, issues=draft.issues, language=draft.language,
-                                 notes=exported, numbers=draft.numbers)
+                                 root=str(root), notes=exported, numbers=draft.numbers)
             saved.append(store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"notes": record}))}))
 

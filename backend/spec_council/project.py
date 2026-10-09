@@ -76,18 +76,37 @@ def issue_outcomes(catalog: Catalog) -> dict[str, list[tuple[str, tuple[str, ...
 
 
 def evidence_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
-    """Файлы, на которые опирается карта: (корень рабочей копии, путь в ней, путь в карте).
-    У нескольких копий путь в карте начинается с её папки."""
+    """Файлы, на которые опирается карта: доводы находок и точки входа потоков — (корень
+    рабочей копии, путь в ней, путь в карте). У нескольких копий путь в карте начинается с её
+    папки."""
     roots = {source.name: Path(source.root) for source in scan.repositories if source.root}
-    paths = dict.fromkeys(evidence.path for finding in (scan.result.findings if scan.result
-                                                        else [])
-                          for evidence in finding.evidence)
-    files: list[tuple[Path, str, str]] = []
-    for shown in paths:
-        folder, _, rest = shown.partition("/") if len(roots) > 1 else ("", "", shown)
-        if folder in roots and rest and "\\" not in rest:
-            files.append((roots[folder], rest, shown))
+    result = scan.result
+    shown = [evidence.path for finding in (result.findings if result else [])
+             for evidence in finding.evidence]
+    shown += [path for flow in (result.flows if result else [])
+              if (path := entry_file(flow.entry_point, roots))]
+    files = [found for path in dict.fromkeys(shown) if (found := located(path, roots))]
     return files[:FILES_MAX]
+
+
+def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | None:
+    """Путь из карты в рабочей копии: (корень, путь в ней, путь в карте)."""
+    folder, _, rest = shown.partition("/") if len(roots) > 1 else ("", "", shown)
+    if folder in roots and rest and "\\" not in rest:
+        return roots[folder], rest, shown
+    return None
+
+
+def entry_file(entry: str, roots: Mapping[str, Path]) -> str:
+    """Файл точки входа потока («api/routes.py:handler» → «api/routes.py»): самое длинное
+    начало до «:», « » или «(», что есть файлом в рабочей копии, — в именах бывают и они."""
+    ends = [len(entry), *sorted({i for i, char in enumerate(entry) if char in ": ("},
+                                reverse=True)]
+    for end in ends:
+        found = located(entry[:end], roots)
+        if found is not None and (found[0] / found[1]).is_file():
+            return entry[:end]
+    return ""
 
 
 def trails_of(files: Sequence[tuple[Path, str, str]],
@@ -123,7 +142,8 @@ def decision_id(value: object, known: Mapping[tuple[str, int], str]) -> str | No
 def selected(data: dict, catalog: Sequence[ProjectDecision],
              allowed: set[str] | None = None) -> list[ProjectDecision]:
     """Отобранные решения из ответа: номер из каталога (у судьи — из предложенных участниками),
-    категория из трёх, причина. Чужой номер или категория — мимо; повтор — первый."""
+    категория из трёх, причина. Чужой номер или категория — мимо; повтор — первый. Заменённое
+    решение — мимо, как бы ни просил промпт; решение на пересмотре — не «применимо»."""
     items = data.get("decisions")
     if not isinstance(items, list):
         raise BadAnswer("нет списка decisions")
@@ -140,8 +160,12 @@ def selected(data: dict, catalog: Sequence[ProjectDecision],
         adr_id = decision_id(item.get("adr_id"), known)
         relevance = item.get("relevance")
         if (adr_id is None or adr_id in chosen or relevance not in RELEVANCE
-                or (allowed is not None and adr_id not in allowed)):
+                or (allowed is not None and adr_id not in allowed)
+                or by_id[adr_id].status == "superseded"):
             continue
+        # Решение на пересмотре — не «применимо»: его как раз оспаривают.
+        if by_id[adr_id].status == "under_review" and relevance == "applicable":
+            relevance = "uncertain"
         chosen[adr_id] = by_id[adr_id].model_copy(update={
             "relevance": relevance, "reason": reason_text(item.get("reason"))})
     return list(chosen.values())

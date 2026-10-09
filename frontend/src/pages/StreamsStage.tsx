@@ -1431,8 +1431,16 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, p
       setDraft('')
     }
   }
-  const seek = () => void retry.go(() => startOrFollow(
-    () => api.seekQuestions(council.id, group.id), council, c => streamOf(c, group.id)?.questions))
+  const seek = () => void retry.go(async () => {
+    try {
+      return await startOrFollow(
+        () => api.seekQuestions(council.id, group.id), council, c => streamOf(c, group.id)?.questions)
+    } catch (e) {
+      // Решения проекта в каталоге поменялись — сервер снял отбор и вопросы: показываем нынешнее.
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  })
   // Устаревшие группы заново не ищут: сервер откажет, пока их не разложат заново.
   const stale = structureIsStale(council)
   const submit = () => void approve.go(async () => {

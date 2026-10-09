@@ -1256,6 +1256,22 @@ describe('Поток: решения и итоги', () => {
       run: 'g1', revision: 0, search_run: 'ps2', keep: [], idea: TEXT_IDEA.text } }])
   })
 
+  it('повтор поиска вопросов, а решения в каталоге поменялись, — отбор снят, видна причина', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const message = 'Решения проекта в каталоге заметок поменялись после отбора (ADR-0001): отберите их заново'
+    let current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+      A: { decisions_search: SEARCH, project_decisions: [SEARCH.decisions[0]], questions: failed } })
+    openWith(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+        A: { decisions_search: { ...SEARCH, state: 'failed', run: 'ps2', error: message } } })
+      return json({ detail: message }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText(ru['questions.afterDecisions'])).toBeTruthy()
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: ru['project.skip'] })).toBeTruthy()
+  })
+
   it('отбор решений идёт — опрос его ждёт; готов — рекомендованные уже отмечены', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     try {
@@ -1302,7 +1318,7 @@ describe('Поток: решения и итоги', () => {
   it('документация: черновик заметок — правка текста, удаление исчезнувшего, запись', async () => {
     const replies = [deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT }),
                      deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT,
-                                notes: { run: 'n1', issues: 'i1', language: 'Russian', notes: [], numbers: DRAFT.numbers } })]
+                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } })]
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }),
              () => json(replies[streamCalls.length - 1]))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
@@ -1334,7 +1350,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
-    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', numbers: DRAFT.numbers, notes: [
+    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', numbers: DRAFT.numbers, notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
         links: [], digest: 'd1', kept: false },
       { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
@@ -1359,7 +1375,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', notes: [], numbers: DRAFT.numbers } }),
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
              () => json(atStart()))
     const issue = await card('Сохранять состояние в файлы')
     expect(within(issue).getByText('ISS-0012')).toBeTruthy()

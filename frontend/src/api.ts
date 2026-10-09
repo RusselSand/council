@@ -324,7 +324,7 @@ export interface ExportedNote {
   kept: boolean
 }
 /** Последняя выгрузка потока: из какого черновика и к каким задачам. */
-export interface NotesExport { run: string; issues: string; language: string; notes: ExportedNote[]; numbers: IssueNumber[] }
+export interface NotesExport { run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[] }
 
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {

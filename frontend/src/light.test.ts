@@ -215,7 +215,7 @@ describe('светофор', () => {
     expect([currentStep(ready), currentStep(blocked), reachable(blocked)]).toEqual(['notes', 'issues', 'notes'])
     expect(CHAIN.map(step => chainLight(ready, step)))
       .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'yours'])
-    const written = { ...ready, notes: { run: 'n1', issues: 'i1', language: 'Russian', notes: [], numbers: [] } }
+    const written = { ...ready, notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: [] } }
     expect(streamLight(written)).toBe('done')
     expect(streamLight({ ...written, notes: { ...written.notes, issues: 'i0' } })).toBe('yours')   // к прежним задачам
     expect(chainLight({ ...ready, notes_draft: { state: 'running', run: 'n2', issues: 'i1', language: 'English',

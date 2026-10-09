@@ -1,5 +1,6 @@
 """Шаг «Документация»: черновик выгрузки потока в заметки, запись, повтор и перевод."""
 
+import hashlib
 import json
 import re
 
@@ -8,7 +9,7 @@ import pytest
 from spec_council.api import documents
 from spec_council.app import app
 from spec_council.deps import get_agents, get_launcher, get_notes_root
-from spec_council.models import NotesDraft
+from spec_council.models import ExportedNote, NotesDraft
 from spec_council.notes import Catalog, Note, path_of, rendered
 from tests.test_streams import (
     TASK,
@@ -136,6 +137,44 @@ def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents,
     res = writes(council_id)
     assert res.status_code == 409 and "поменялся" in res.json()["detail"]
     assert not (notes_dir / "ideas").exists()
+
+
+def test_a_vanished_note_edited_after_the_draft_is_not_deleted(agents, notes_dir):
+    council_id = cut_c()
+    drafts(council_id)
+    assert writes(council_id).status_code == 200
+    # Прежняя выгрузка потока знала и вопрос, которого в потоке больше нет.
+    old = Note("OQ-0099", "open_question", "Старый вопрос?", ("IDEA-0001",))
+    path = path_of(notes_dir, old)
+    path.write_text(rendered(old), encoding="utf-8")
+    gone = ExportedNote(key="q:старый", id=old.id, type=old.type, generated=old.body,
+                        written=old.body, links=list(old.links),
+                        digest=hashlib.sha256(path.read_bytes()).hexdigest())
+    store = get_store()
+    streams = [s.model_copy(update={"notes": s.notes.model_copy(
+                   update={"notes": [*s.notes.notes, gone]})}) if s.group == "C" else s
+               for s in store.get_council(council_id).streams]
+    store.update_council(council_id, {"streams": streams})
+    drafts(council_id)
+    assert [v.id for v in streams_of(council_id)["C"].notes_draft.vanished] == ["OQ-0099"]
+    edited = Note(old.id, old.type, "Старый вопрос? Дописали после черновика.", old.links)
+    path.write_text(rendered(edited), encoding="utf-8")
+    res = writes(council_id, delete=["OQ-0099"])
+    assert res.status_code == 409 and "поменялся" in res.json()["detail"]
+    assert path.read_text(encoding="utf-8") == rendered(edited)       # не удалили не глядя
+
+
+def test_numbers_of_another_streams_export_are_not_given_again(agents, notes_dir):
+    first = cut_c()
+    drafts(first)
+    assert writes(first).status_code == 200
+    for path in list(notes_dir.rglob("*.md")):                       # заметки удалили руками
+        path.unlink()
+    second = cut_c()
+    drafts(second)
+    draft = streams_of(second)["C"].notes_draft
+    # Номера первой выгрузки всё ещё её: вторая берёт следующие.
+    assert (draft.notes[0].id, [n.id for n in draft.numbers]) == ("IDEA-0002", ["ISS-0002"])
 
 
 def test_a_failed_save_of_the_export_puts_the_notes_back(agents, notes_dir, monkeypatch):

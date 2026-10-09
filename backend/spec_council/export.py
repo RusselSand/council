@@ -17,7 +17,7 @@
 
 import hashlib
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,20 +256,22 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
 
 
 def numbered_issues(stream: Stream, catalog: Catalog, previous: NotesExport | None,
-                    exported: set[str] | None = None) -> list[IssueNumber]:
+                    exported: set[str] | None = None,
+                    reserved: Collection[str] = ()) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию) — прежний номер, новая —
     следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого в
     каталоге уже нет (строку задачи убрали руками), мог занять другой поток — тогда новый.
-    exported — итоги, что лягут в каталог: задача без них номера не получает."""
+    exported — итоги, что лягут в каталог: задача без них номера не получает. reserved —
+    номера из выгрузок других потоков: заняты, даже если строку задачи из каталога убрали."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
     # Занятым считается и номер, который лишь упомянут: новая задача под ним сделала бы
     # упоминание ссылкой на себя.
     ours = {note.id for note in previous.notes} if previous else set()
     foreign = {issue for note in catalog.notes.values() if note.id not in ours
-               for issue in issues_in(note.body)}
+               for issue in issues_in(note.body)} | set(reserved)
     used = [int(found.group(1)) for note in catalog.notes.values()
             for issue in issues_in(note.body) if (found := ISSUE.fullmatch(issue))]
-    used += [int(found.group(1)) for number in known.values()
+    used += [int(found.group(1)) for number in (*known.values(), *reserved)
              if (found := ISSUE.fullmatch(number))]
     top = max(used, default=0)
     numbers: list[IssueNumber] = []
@@ -302,14 +304,17 @@ def digest_of(path: Path) -> str:
 
 def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
             root: Path, previous: NotesExport | None, words: Mapping[str, str],
-            language: str) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber],
-                                    list[str]]:
+            language: str, reserved: Collection[str] = ()
+            ) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber], list[str]]:
     """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие;
     номера задач; что не выгружается. language — язык заметок: не тот, что у прошлой выгрузки, —
-    прежние тексты не берутся, их напишет перевод заново (файлы, правленные руками, — нет)."""
+    прежние тексты не берутся, их напишет перевод заново (файлы, правленные руками, — нет).
+    reserved — номера заметок и задач из выгрузок других потоков: их заметку могли удалить
+    руками, но номер всё ещё их — ни новой заметке, ни задаче его не дают, а прежний номер
+    потока, который записан и за другим, — уже не его."""
     parts, skipped, numbers = parts_of(
         stream, fragments, catalog, words,
-        lambda exported: numbered_issues(stream, catalog, previous, exported))
+        lambda exported: numbered_issues(stream, catalog, previous, exported, reserved))
     before = {note.key: note for note in previous.notes} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
@@ -318,11 +323,12 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
     for part in parts:
         old = olds.get(part.key)
         held = catalog.notes.get(old.id) if old else None
-        if old and old.type == part.type and (held is None or held.type == part.type):
+        if (old and old.type == part.type and (held is None or held.type == part.type)
+                and old.id not in reserved):
             ids[part.key] = old.id
     for part in parts:
         if part.key not in ids:
-            ids[part.key] = catalog.next_id(part.type, taken=ids.values())
+            ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), catalog, root, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
@@ -331,7 +337,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
                              linked_from=sorted(note.id for note in catalog.notes.values()
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
-                if key not in claimed and old.id in catalog.notes]
+                if key not in claimed and old.id in catalog.notes and old.id not in reserved]
     return notes, vanished, numbers, skipped
 
 

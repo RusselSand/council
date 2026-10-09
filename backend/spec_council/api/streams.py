@@ -543,6 +543,38 @@ def searched_another(catalog: Catalog | None, stream: Stream) -> bool:
     return fingerprint(records(catalog, {}, own) if catalog else []) != search.fingerprint
 
 
+def outdated_selection(catalog: Catalog | None, stream: Stream,
+                       chosen: list[ProjectDecision]) -> str | None:
+    """Почему отбор решений проекта устарел: отмеченные в каталоге уже не те, каталог не тот,
+    что видели модели, или отмечали к отбору, который с тех пор упал. Не устарел — None."""
+    search = stream.decisions_search
+    stale = changed_in(catalog, stream, chosen)
+    if not (stale or searched_another(catalog, stream)
+            or (chosen and (search is None or search.state != "done"))):
+        return None
+    what = f" ({', '.join(stale)})" if stale else ""
+    return f"Решения проекта в каталоге заметок поменялись после отбора{what}: отберите их заново"
+
+
+def stale_choice(notes: Path | None, stream: Stream) -> str | None:
+    """Почему отметка решений проекта не годится для поиска вопросов: отбор устарел — или
+    отбора не было, а решения в каталоге с тех пор появились. Годится — None."""
+    if stream.decisions_search is None:
+        return (None if project_catalog(notes, stream) is None else
+                "В каталоге заметок появились решения проекта: отберите их для потока")
+    return outdated_selection(catalog_at(notes), stream, stream.project_decisions or [])
+
+
+def failed_search(council: Council, stream: Stream, message: str) -> DecisionsSearch:
+    """Отбор, который устарел или которого не было, — упавший с причиной и под новым номером:
+    вкладка с прежним не пройдёт мимо отказа и «без решений»."""
+    search = stream.decisions_search or start_decisions(
+        council.participants, council.judge, stream.idea.text, step_key(stream.repository),
+        step_key(stream.design))
+    return search.model_copy(update={"state": "failed", "error": message,
+                                     "run": uuid4().hex[:8]})
+
+
 def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
     """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
     Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
@@ -583,15 +615,9 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
         chosen = selection_for(stream, edit)
         # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
         # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
-        catalog = catalog_at(notes)
-        stale = changed_in(catalog, stream, chosen)
-        if stale or searched_another(catalog, stream):
-            what = f" ({', '.join(stale)})" if stale else ""
-            message = (f"Решения проекта в каталоге заметок поменялись, пока смотрели "
-                       f"отбор{what}: отберите их заново")
-            # Новый номер отбора: вкладка с прежним не пройдёт мимо отказа и «без решений».
-            failed = stream.decisions_search.model_copy(update={
-                "state": "failed", "error": message, "run": uuid4().hex[:8]})
+        message = outdated_selection(catalog_at(notes), stream, chosen)
+        if message is not None:
+            failed = failed_search(council, stream, message)
             store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"decisions_search": failed}))})
             raise HTTPException(409, message)
@@ -746,10 +772,13 @@ def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:
 @router.post("/{council_id}/streams/{group}/questions/discovery", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_question_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                             agents: AgentsDep, launch: LauncherDep) -> Council:
+                             agents: AgentsDep, launch: LauncherDep,
+                             notes: NotesDep) -> Council:
     """Ищет вопросы к идее потока заново: после сбоя или если при утверждении идеи не было
-    подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали."""
-    def ready(council: Council) -> None:
+    подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали.
+    Решения проекта в каталоге с тех пор поменялись (или появились) — 409, и отбор записан
+    упавшим, а отметка снята: вопросы ищутся только к решениям, какие они сейчас."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.idea is None:
             raise HTTPException(409, NO_IDEA)
@@ -757,12 +786,20 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
             raise HTTPException(409, NO_REPOSITORY)
         if stream.design is None:
             raise HTTPException(409, "Сначала пройдите шаг «Дизайн»")
+        if running(stream.decisions_search):
+            raise HTTPException(409, "Совет ещё отбирает решения проекта — дождитесь его")
         if stream.decisions_search is not None and stream.project_decisions is None:
             raise HTTPException(409, "Сначала отметьте решения проекта")
         if stream.scope is not None:
             raise HTTPException(409, "Вопросы потока уже утверждены")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        message = stale_choice(notes, checked(council))
+        if message is not None:
+            raise HTTPException(409, message)
 
     def build(council: Council, report: Callable) -> QuestionRun:
         stream = stream_in(council, group)
@@ -774,6 +811,18 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                            design=step_key(stream.design), design_map=design_map(stream),
                            accepted=stream.project_decisions or ())
 
+    # Сверка с каталогом — под замком, как и запуск: устаревший отбор записан упавшим, отметка
+    # и всё ниже неё сняты — человек отбирает заново. Выгрузка другого потока ждёт этот замок.
+    with council_lock:
+        council = store.get_council(council_id)
+        if council is not None and not running(asking(group).get(council)):
+            stream = checked(council)
+            message = stale_choice(notes, stream)
+            if message is not None:
+                store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
+                    update={**BELOW_DECISIONS, "project_decisions": None,
+                            "decisions_search": failed_search(council, stream, message)}))})
+                raise HTTPException(409, message)
     return start_run(council_id, store, config, agents, launch, asking(group), ready, None,
                      build)
 
