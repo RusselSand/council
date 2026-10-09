@@ -236,6 +236,12 @@ describe('светофор', () => {
       language: 'English', steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
     expect(chainLight(redrafted('running'), 'notes', NOTES)).toBe('running')
     expect(attention(council(redrafted('failed')), NOTES).map(a => a.what)).toEqual(['notesFailed'])
+    // Задачи не все готовы, а документацию уже собирают: её ход виден, а не «задачи ждут».
+    const drafting = (state: 'running' | 'failed') => ({ ...blocked, notes_draft: { state, run: 'n1', issues: 'i1',
+      language: 'English', steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
+    expect([currentStep(drafting('running')), streamLight(drafting('running'), NOTES)]).toEqual(['notes', 'running'])
+    expect(attention(council(drafting('failed')), NOTES).map(a => a.what)).toEqual(['notesFailed'])
+    expect(chainLight(drafting('running'), 'issues', NOTES)).toBe('yours')       // задачи всё так же ждут вас
     // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла — не зелёный.
     const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                             { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))

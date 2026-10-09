@@ -188,6 +188,16 @@ def test_a_file_named_only_as_a_flow_entry_point_is_traced_too(tmp_path):
                                     (tmp_path, "api/routes x.py", "api/routes x.py")]
 
 
+def test_a_map_saved_before_entry_files_finds_them_in_the_working_copy(tmp_path):
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "routes x.py").write_text("…", encoding="utf-8")
+    scan = scan_of(("", tmp_path))
+    scan.result.flows = [RepositoryFlow(name="Поиск", entry_point="api/routes x.py:find"),
+                         RepositoryFlow(name="Пропал", entry_point="api/gone.py:run")]
+    assert evidence_files(scan) == [(tmp_path, "app.py", "app.py"),
+                                    (tmp_path, "api/routes x.py", "api/routes x.py")]
+
+
 CATALOG = [ProjectDecision(adr_id="ADR-0007", decision="Платежи через Stripe."),
            ProjectDecision(adr_id="ADR-0012", decision="Чеки в S3.")]
 

@@ -35,7 +35,8 @@ const ofRun = (run: Run | null): Light | null => {
  * Где поток: пока нет идеи — на группе, пока не пройден (сканом или пропуском) шаг «Репозиторий» —
  * на нём, потом так же шаг «Дизайн», пока не отобраны вопросы — на вопросах, пока не выбраны
  * варианты — на вариантах, пока не зафиксированы решения — на решениях, пока итоги не утверждены —
- * на итогах, пока задачи не нарезаны и не готовы — на задачах, дальше — документация.
+ * на итогах, пока задачи не нарезаны и не готовы — на задачах, дальше — документация. Выгрузить
+ * можно и не все готовые задачи: черновик документации уже переводится или упал — поток на ней.
  */
 export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.idea) return 'group'
@@ -45,7 +46,8 @@ export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.choices) return 'options'
   if (!stream.decisions) return 'decisions'
   if (!stream.issues) return 'outcomes'
-  return stream.issues.state === 'done' && issuesLight(stream.issues, stream) === 'done' ? 'notes' : 'issues'
+  if (stream.issues.state !== 'done') return 'issues'
+  return issuesLight(stream.issues, stream) === 'done' || ofRun(stream.notes_draft) ? 'notes' : 'issues'
 }
 
 /**

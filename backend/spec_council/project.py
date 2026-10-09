@@ -83,9 +83,23 @@ def evidence_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
     result = scan.result
     shown = [evidence.path for finding in (result.findings if result else [])
              for evidence in finding.evidence]
-    shown += [flow.entry_file for flow in (result.flows if result else []) if flow.entry_file]
+    shown += [path for flow in (result.flows if result else [])
+              if (path := flow.entry_file or entry_on_disk(flow.entry_point, roots))]
     files = [found for path in dict.fromkeys(shown) if (found := located(path, roots))]
     return files[:FILES_MAX]
+
+
+def entry_on_disk(entry: str, roots: Mapping[str, Path]) -> str:
+    """Файл точки входа из карты, сохранённой до entry_file: самое длинное начало до «:», « »
+    или «(», что есть файлом в рабочей копии сейчас (в именах бывают и они). Нет — следа по ней
+    нет, как и у карт без точек входа."""
+    ends = [len(entry), *sorted({i for i, char in enumerate(entry) if char in ": ("},
+                                reverse=True)]
+    for end in ends:
+        found = located(entry[:end], roots)
+        if found is not None and (found[0] / found[1]).is_file():
+            return entry[:end]
+    return ""
 
 
 def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | None:
