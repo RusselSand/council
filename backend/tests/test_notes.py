@@ -8,6 +8,7 @@ from spec_council.notes import (
     Catalog,
     Note,
     NotesError,
+    declared_issues,
     issues_in,
     main,
     parsed,
@@ -60,6 +61,29 @@ def test_links_written_by_hand_in_flow_style_are_read_too():
 def test_a_broken_note_is_told(text, problem):
     with pytest.raises(NotesError, match=problem):
         parsed(text)
+
+
+def test_one_number_written_two_ways_is_one_note_twice(tmp_path):
+    put(tmp_path, Note("ADR-7", "adr", "Одно.", ("PRO-0001",)),
+        Note("ADR-0007", "adr", "Другое.", ("PRO-0001",)))
+    with pytest.raises(NotesError, match="ADR-0007.*ADR-7|ADR-7.*ADR-0007"):
+        Catalog.load(tmp_path)
+
+
+def test_the_next_number_skips_a_file_name_already_taken(tmp_path):
+    # ADR-0001 лежит в файле ADR-0002.md: новый ADR-0002 его бы затёр.
+    (tmp_path / "adrs").mkdir()
+    (tmp_path / "adrs" / "ADR-0002.md").write_text(rendered(ADR), encoding="utf-8")
+    assert Catalog.load(tmp_path).next_id("adr") == "ADR-0003"
+
+
+def test_issues_of_an_outcome_are_the_lines_of_its_issue_list():
+    body = ("Поиск\n\nКритерии готовности:\n- ISS-0042: регресс не вернулся\n\n"
+            "Задачи:\n- ISS-0010: Поправить поиск\n- ISS-0011: Тесты поиска")
+    assert declared_issues(body) == ["ISS-0010", "ISS-0011"]
+    assert declared_issues("Поиск\n\nКритерии готовности:\n- Ищется за секунду") == []
+    # Задач у итога нет, а критерии — сплошь строки с номерами: это всё равно критерии.
+    assert declared_issues("Поиск\n\nAcceptance criteria:\n- ISS-0042: regression stays") == []
 
 
 def test_a_number_without_leading_zeros_is_still_a_number():

@@ -160,11 +160,13 @@ def outcome_text(title: str, behavior: str, criteria: Sequence[str],
     return "\n".join(lines)
 
 
-def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
-             numbers: Sequence[IssueNumber], catalog: Catalog,
-             words: Mapping[str, str]) -> tuple[list[Part], list[str]]:
+def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
+             words: Mapping[str, str],
+             number: Callable[[set[str]], list[IssueNumber]]
+             ) -> tuple[list[Part], list[str], list[IssueNumber]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
-    выгружается — с причиной."""
+    выгружается — с причиной, и номера задач: number раздаёт их задачам тех итогов, что лягут в
+    каталог."""
     found = {options.question_id: options.proposals
              for options in (stream.proposals.options if stream.proposals else [])}
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
@@ -184,9 +186,18 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
             adr_of[f"ADR-{n}"] = adr.key
             if asked.links != ("idea",):
                 external.add(adr.key)
+    exported = {outcome.id for outcome in (stream.outcomes.outcomes if stream.outcomes else [])
+                if any(adr_of[name] not in external for name in outcome.adr_ids
+                       if name in adr_of)}
+    numbers = number(exported)
     outcomes, skipped = outcome_parts(stream, numbers, adr_of, external, words, taken)
+    numbered = {n.issue_id for n in numbers}
+    skipped += [f"{issue.id} «{issue.title}» без номера: её итоги не выгружаются, и номеру "
+                "негде закрепиться в каталоге"
+                for issue in (stream.issues.issues if stream.issues else [])
+                if issue.id not in numbered]
     return [Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-            *outcomes], skipped
+            *outcomes], skipped, numbers
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -244,11 +255,12 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
     return parts, skipped
 
 
-def numbered_issues(stream: Stream, catalog: Catalog,
-                    previous: NotesExport | None) -> list[IssueNumber]:
+def numbered_issues(stream: Stream, catalog: Catalog, previous: NotesExport | None,
+                    exported: set[str] | None = None) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию) — прежний номер, новая —
-    следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого
-    тогда в каталог не легло (итог не выгружался), мог занять другой поток — тогда новый."""
+    следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого в
+    каталоге уже нет (строку задачи убрали руками), мог занять другой поток — тогда новый.
+    exported — итоги, что лягут в каталог: задача без них номера не получает."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
     # Занятым считается и номер, который лишь упомянут: новая задача под ним сделала бы
     # упоминание ссылкой на себя.
@@ -266,6 +278,10 @@ def numbered_issues(stream: Stream, catalog: Catalog,
                  [same_question(issue.user_story) for issue in issues], set())
     alias = matched(keys, known)
     for issue, key in zip(issues, keys, strict=True):
+        # Номер закрепляет строка задачи в заметке итога: итоги не выгружаются — не раздаём,
+        # иначе другой поток выдал бы тот же номер.
+        if exported is not None and not set(issue.outcome_ids) & exported:
+            continue
         was = alias.get(key)
         if was is not None and known[was] not in foreign:
             identifier = known[was]
@@ -291,8 +307,9 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
     """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие;
     номера задач; что не выгружается. language — язык заметок: не тот, что у прошлой выгрузки, —
     прежние тексты не берутся, их напишет перевод заново (файлы, правленные руками, — нет)."""
-    numbers = numbered_issues(stream, catalog, previous)
-    parts, skipped = parts_of(stream, fragments, numbers, catalog, words)
+    parts, skipped, numbers = parts_of(
+        stream, fragments, catalog, words,
+        lambda exported: numbered_issues(stream, catalog, previous, exported))
     before = {note.key: note for note in previous.notes} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
@@ -386,8 +403,9 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
         exported: list[ExportedNote] = []
         for plan in notes:
             if plan.action == "edited":
-                exported.append(before[plan.was or plan.key].model_copy(
-                    update={"key": plan.key, "generated": plan.generated}))
+                # Файл не тронут — и база та же, из которой его выгрузили: откатят правку —
+                # новый текст совета предложится снова.
+                exported.append(before[plan.was or plan.key].model_copy(update={"key": plan.key}))
                 continue
             exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
                                          generated=plan.generated, written=texts[plan.key],

@@ -105,7 +105,7 @@ const FOUND: IdeaDiscovery = {
 /** Идея группы A — из текста: F1. */
 const TEXT_IDEA: StreamIdea = { text: 'Хочу воркер.', by: 'text', evidence: [1] }
 const QUESTIONS_SEEKING: QuestionDiscovery = {
-  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', decisions: [], questions: [], error: null,
+  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', questions: [], error: null,
   steps: [
     { name: 'question_discovery', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'question_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
@@ -1212,7 +1212,7 @@ describe('Поток: решения и итоги', () => {
     renderAt('/councils/demo-1/streams/A')
   }
   const SEARCH: DecisionsSearch = {
-    state: 'done', run: 'ps1', idea: TEXT_IDEA.text, repository: 'skipped', design: 'skipped', catalog: 5, traced: 1,
+    state: 'done', run: 'ps1', idea: TEXT_IDEA.text, repository: 'skipped', design: 'skipped', catalog: 5, traced: 1, fingerprint: 'f1',
     error: null, steps: [{ name: 'project_decisions_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
                          { name: 'project_decisions_judge', state: 'skipped', runs: [] }],
     decisions: [
@@ -1242,6 +1242,18 @@ describe('Поток: решения и итоги', () => {
     expect(await screen.findByText('Учитываются: ADR-0001')).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'project-decisions', body: {
       run: 'g1', revision: 0, search_run: 'ps1', keep: ['ADR-0001'], idea: TEXT_IDEA.text } }])
+  })
+
+  it('отбор упал — «без прошлых решений» уходит с его номером: другой вкладке его не отменить', async () => {
+    const failed: DecisionsSearch = { ...SEARCH, state: 'failed', run: 'ps2', decisions: [],
+                                      error: 'Решения проекта в каталоге заметок поменялись' }
+    openWith(() => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: failed } }),
+             () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+               A: { decisions_search: failed, project_decisions: [], questions: QUESTIONS_SEEKING } })))
+    fireEvent.click(await screen.findByRole('button', { name: ru['project.skip'] }))
+    expect(await screen.findByText(ru['project.none'])).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'project-decisions', body: {
+      run: 'g1', revision: 0, search_run: 'ps2', keep: [], idea: TEXT_IDEA.text } }])
   })
 
   it('отбор решений идёт — опрос его ждёт; готов — рекомендованные уже отмечены', async () => {

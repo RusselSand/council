@@ -4,10 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from spec_council.export import WORDS as LANGUAGES
 from spec_council.export import (
     drafted,
     graph_problems,
     numbered_issues,
+    outcome_text,
     translations,
     untranslated,
     words_for,
@@ -28,7 +30,7 @@ from spec_council.models import (
     Stream,
     StreamIdea,
 )
-from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
+from spec_council.notes import Catalog, Note, NotesError, declared_issues, path_of, rendered
 from spec_council.slicing import BadAnswer
 
 WORDS = words_for("Russian")
@@ -322,17 +324,38 @@ def test_a_renamed_note_file_is_deleted_where_it_lies(root):
     assert "ADR-0002" not in Catalog.load(root).notes
 
 
-def test_a_reserved_issue_number_taken_by_another_stream_is_not_reused(root):
+def test_an_issue_whose_outcomes_are_not_exported_gets_no_number(root):
     held = ISSUES.model_copy(update={"issues": [*ISSUES.issues, Issue(
         id="I2", title="Где хранить секреты", user_story="…", outcome_ids=["O2"])]})
-    stream = STREAM.model_copy(update={"issues": held})
-    first, _, _, _ = export(root, stream)
-    assert [(n.id, n.issue_id) for n in first.numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
-    # Итог O2 не выгружен, ISS-0009 в каталоге нет — и другой поток его занял.
-    other = Note("OUT-0099", "outcome", "Чужой итог\n\nЗадачи:\n- ISS-0009: Чужая", ("ADR-0001",))
+    record, _, _, skipped = export(root, STREAM.model_copy(update={"issues": held}))
+    # Итог O2 не выгружается: номер ей нигде в каталоге не закрепить — его не раздаём.
+    assert [(n.id, n.issue_id) for n in record.numbers] == [("ISS-0008", "I1")]
+    assert any("I2" in reason and "без номера" in reason for reason in skipped)
+
+
+def test_a_previous_issue_number_taken_by_another_stream_is_not_reused(root):
+    first, _, _, _ = export(root)
+    # Строку задачи из нашего итога убрали руками, а другой поток объявил ISS-0008 своим.
+    ours = root / "outcomes" / "OUT-0002.md"
+    ours.write_text(ours.read_text(encoding="utf-8").split("\n\nЗадачи:")[0] + "\n",
+                    encoding="utf-8")
+    other = Note("OUT-0099", "outcome", "Чужой итог\n\nЗадачи:\n- ISS-0008: Чужая", ("ADR-0001",))
     path_of(root, other).write_text(rendered(other), encoding="utf-8")
-    numbers = numbered_issues(stream, Catalog.load(root), first)
-    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0010", "I2")]
+    numbers = numbered_issues(STREAM, Catalog.load(root), first)
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0009", "I1")]
+
+
+def test_a_file_edited_by_hand_keeps_the_text_it_was_exported_from(root):
+    first, _, _, _ = export(root)
+    path = root / "ideas" / "IDEA-0002.md"
+    original = path.read_bytes()
+    path.write_bytes(original + "Дописали руками.\n".encode())
+    other = STREAM.model_copy(update={"idea": StreamIdea(text="Деплой идёт сам.", by="human")})
+    second, _, _, _ = export(root, other, previous=first)          # файл правили — не трогаем
+    path.write_bytes(original)                                       # правку откатили
+    notes, _, _, _ = draft(root, other, previous=second)
+    idea = by_id(notes)["IDEA-0002"]
+    assert (idea.action, idea.text) == ("update", "Деплой идёт сам.")    # новое — предложено
 
 
 def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):
@@ -364,6 +387,13 @@ def test_a_revisited_decision_gone_from_the_catalog_stops_the_draft(root):
     (root / "outcomes" / "OUT-0001.md").unlink()
     with pytest.raises(NotesError, match="Q3 пересматривает ADR-0001"):
         draft(root)
+
+
+@pytest.mark.parametrize("language", sorted(LANGUAGES))
+def test_criteria_with_issue_numbers_are_not_the_issue_list(language):
+    text = outcome_text("Поиск", "Ищется.", ["ISS-0042: регресс не вернулся"], [],
+                        LANGUAGES[language])
+    assert declared_issues(text) == []
 
 
 def test_a_translation_keeps_exactly_the_numbers_of_the_source():

@@ -39,7 +39,11 @@ UPSTREAM = {"idea": frozenset(), "open_question": frozenset({"idea", "proposal",
             "outcome": frozenset({"adr"})}
 ISSUE_ID = re.compile(r"\bISS-\d+\b")
 # Строка задачи в теле итога: «- ISS-0012: название». Номер в другом месте — упоминание.
-ISSUE_LINE = re.compile(r"^- (ISS-\d+):", re.MULTILINE)
+ISSUE_LINE = re.compile(r"- (ISS-\d+):")
+# Подписи критериев готовности в итоге (export.WORDS): список под ними — критерии, пусть и из
+# строк «- ISS-…:».
+CRITERIA = frozenset({"критерии готовности", "acceptance criteria"})
+NUMBERED = re.compile(r"([A-Z]+)-(\d+)")
 FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
 
 
@@ -136,9 +140,10 @@ class Catalog:
 
     @classmethod
     def load(cls, root: Path) -> Catalog:
-        """Заметки из папок типов. Другие .md в каталоге не читаются; два файла с одним id —
-        ошибка."""
+        """Заметки из папок типов. Другие .md в каталоге не читаются; два файла с одним id (или
+        одним номером, записанным по-разному) — ошибка."""
         notes: dict[str, Note] = {}
+        numbers: dict[tuple[str, int], Note] = {}     # ADR-7 и ADR-0007 — один номер
         for kind, folder in FOLDERS.items():
             for path in sorted((root / folder).glob("*.md")) if (root / folder).is_dir() else ():
                 try:
@@ -147,9 +152,12 @@ class Catalog:
                     raise NotesError(f"Заметку {path} не прочитать: {exc}") from None
                 if note.type != kind:
                     raise NotesError(f"Заметка {note.id} типа {note.type} лежит в {folder}/")
-                if note.id in notes:
-                    raise NotesError(f"Две заметки с id {note.id}: {notes[note.id].path} и "
-                                     f"{path}")
+                twin = numbers.setdefault(number_of(note.id), note)
+                if twin is not note:
+                    raise NotesError(f"Две заметки с id {note.id}: {twin.path} и {path}"
+                                     if twin.id == note.id else
+                                     f"{twin.id} и {note.id} — один номер, записанный "
+                                     f"по-разному: {twin.path} и {path}")
                 notes[note.id] = note
         return cls(notes)
 
@@ -203,10 +211,13 @@ class Catalog:
                        if note.id == idea_id or self.roots(note.id) == {idea_id}), key=order)
 
     def next_id(self, kind: str, taken: Iterable[str] = ()) -> str:
-        """Следующий свободный номер типа — после самого большого в каталоге и в taken."""
+        """Следующий свободный номер типа — после самого большого в каталоге и в taken. Имя
+        файла тоже занимает номер: в ADR-0002.md могла лечь другая заметка, и новая ADR-0002
+        её бы затёрла."""
         prefix = PREFIXES[kind]
         pattern = re.compile(rf"{prefix}-(\d+)")
-        numbers = [int(found.group(1)) for note_id in (*self.notes, *taken)
+        names = [note.path.stem for note in self.notes.values() if note.path is not None]
+        numbers = [int(found.group(1)) for note_id in (*self.notes, *taken, *names)
                    if (found := pattern.fullmatch(note_id))]
         return f"{prefix}-{max(numbers, default=0) + 1:04d}"
 
@@ -259,8 +270,23 @@ def issues_in(text: str) -> list[str]:
 
 
 def declared_issues(text: str) -> list[str]:
-    """Задачи итога — только его строки задач, а не каждое упоминание номера в тексте."""
-    return list(dict.fromkeys(ISSUE_LINE.findall(text)))
+    """Задачи итога — его список задач: последний блок, строка-подпись («Задачи:», «Issues:» —
+    на любом языке, только не подпись критериев) и под ней только строки «- ISS-…: название».
+    Номер в другом месте, и в критериях готовности тоже, — упоминание, а не задача итога."""
+    blocks = [block for block in re.split(r"\n\s*\n", text.strip()) if block.strip()]
+    lines = [line.strip() for line in blocks[-1].splitlines()] if blocks else []
+    if (len(lines) < 2 or not lines[0].endswith(":")
+            or lines[0][:-1].strip().casefold() in CRITERIA):
+        return []
+    found = [ISSUE_LINE.match(line) for line in lines[1:]]
+    if not all(found):
+        return []
+    return list(dict.fromkeys(match.group(1) for match in found if match))
+
+
+def number_of(note_id: str) -> tuple[str, int]:
+    found = NUMBERED.fullmatch(note_id)
+    return (found.group(1), int(found.group(2))) if found else (note_id, -1)
 
 
 # --- команда для агентов

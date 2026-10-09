@@ -190,12 +190,12 @@ export interface ProjectDecision {
 /** Отбор прошлых решений проекта для потока: сколько их в каталоге, у скольких есть след и что отобрал совет. */
 export interface DecisionsSearch {
   state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; design: string
-  catalog: number; traced: number; steps: Step[]; decisions: ProjectDecision[]; error: string | null
+  catalog: number; traced: number; fingerprint: string; steps: Step[]; decisions: ProjectDecision[]; error: string | null
 }
 /** Поиск вопросов к утверждённой идее (idea — к какой; repository и design — с какой картой и описанием макета). */
 export interface QuestionDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; design: string
-  decisions: string[]; steps: Step[]
+  decisions: string[]; decisions_seen: string; steps: Step[]
   questions: OpenQuestion[]; error: string | null
 }
 /**
@@ -427,7 +427,7 @@ export const api = {
       body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
     }),
   /** Отметить прошлые решения проекта, которые учитывать в потоке (пусто — ни одного). Совет сразу ищет вопросы. */
-  selectDecisions: (id: string, at: GroupsVersion, group: string, searchRun: string | null, keep: string[], idea: string) =>
+  selectDecisions: (id: string, at: GroupsVersion, group: string, searchRun: string, keep: string[], idea: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/project-decisions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, search_run: searchRun, keep, idea }),

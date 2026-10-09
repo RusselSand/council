@@ -12,6 +12,7 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
@@ -97,7 +98,7 @@ from ..pipeline import (
     start_questions,
     start_scan,
 )
-from ..project import records
+from ..project import fingerprint, records
 from ..questions import QUESTION_MAX, same_question
 from ..repository import (
     Inventory,
@@ -367,11 +368,12 @@ def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep,
     """Вопросы ищутся заново, если их ещё не искали или искали к другой идее, карте
     репозитория, описанию макета или другим отобранным решениям проекта."""
     questions = stream.questions
-    chosen = [d.adr_id for d in (stream.project_decisions if decisions is None
-                                 else decisions) or []]
+    picked = (stream.project_decisions if decisions is None else decisions) or []
     return (questions is None or questions.idea != stream.idea.text
             or questions.repository != step_key(repository)
-            or questions.design != step_key(design) or questions.decisions != chosen)
+            or questions.design != step_key(design)
+            or questions.decisions != [d.adr_id for d in picked]
+            or questions.decisions_seen != fingerprint(picked))
 
 
 def repository_map(stream: Stream) -> str:
@@ -531,6 +533,16 @@ def changed_in(catalog: Catalog | None, stream: Stream,
     return [d.adr_id for d in chosen if d.adr_id not in now or seen(now[d.adr_id]) != seen(d)]
 
 
+def searched_another(catalog: Catalog | None, stream: Stream) -> bool:
+    """Каталог решений не тот, что видели модели в отборе: решение добавили, поправили,
+    заменили или убрали — и пусть даже его никто не отмечал."""
+    search = stream.decisions_search
+    if search is None or search.state != "done" or not search.fingerprint:
+        return False
+    own = [note.id for note in stream.notes.notes] if stream.notes else []
+    return fingerprint(records(catalog, {}, own) if catalog else []) != search.fingerprint
+
+
 def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
     """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
     Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
@@ -571,12 +583,15 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
         chosen = selection_for(stream, edit)
         # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
         # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
-        stale = changed_in(catalog_at(notes), stream, chosen)
-        if stale:
-            message = (f"Решения проекта в каталоге заметок поменялись, пока смотрели отбор "
-                       f"({', '.join(stale)}): отберите их заново")
-            failed = stream.decisions_search.model_copy(update={"state": "failed",
-                                                                "error": message})
+        catalog = catalog_at(notes)
+        stale = changed_in(catalog, stream, chosen)
+        if stale or searched_another(catalog, stream):
+            what = f" ({', '.join(stale)})" if stale else ""
+            message = (f"Решения проекта в каталоге заметок поменялись, пока смотрели "
+                       f"отбор{what}: отберите их заново")
+            # Новый номер отбора: вкладка с прежним не пройдёт мимо отказа и «без решений».
+            failed = stream.decisions_search.model_copy(update={
+                "state": "failed", "error": message, "run": uuid4().hex[:8]})
             store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"decisions_search": failed}))})
             raise HTTPException(409, message)
@@ -595,8 +610,7 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
             if missing:
                 questions = unconnected(start_questions(
                     council.participants, council.judge, stream.idea.text,
-                    step_key(stream.repository), step_key(stream.design),
-                    [d.adr_id for d in chosen]), missing)
+                    step_key(stream.repository), step_key(stream.design), chosen), missing)
             else:
                 runs = [question_run(council, group, ready, agents, store)]
                 questions = runs[0].state.model_copy(deep=True)
@@ -617,9 +631,13 @@ def selection_for(stream: Stream, edit: SelectDecisions) -> list[ProjectDecision
     search = stream.decisions_search
     if running(search):
         raise HTTPException(409, "Совет ещё отбирает решения проекта — дождитесь его")
+    # И «без решений» — к тому отбору, что на экране: вкладка с прежним его не отменит.
+    if search is not None and search.run != edit.search_run:
+        raise HTTPException(409, "Решения проекта уже отбирали заново — посмотрите на нынешний "
+                                 "отбор")
     if not edit.keep:
         return []
-    if search is None or search.run != edit.search_run or search.state != "done":
+    if search is None or search.state != "done":
         raise HTTPException(409, "Решения проекта уже отбирали заново — посмотрите на нынешний "
                                  "отбор")
     found = {d.adr_id: d for d in search.decisions}

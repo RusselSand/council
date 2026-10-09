@@ -521,6 +521,9 @@ class DecisionsSearch(BaseModel):
     # Сколько решений в каталоге и сколько из них со следом в коде.
     catalog: int = 0
     traced: int = 0
+    # Отпечаток всего каталога решений, который видели модели (project.fingerprint): решение
+    # добавили, поправили или убрали — отбор устарел.
+    fingerprint: str = ""
     steps: list[Step]
     decisions: list[ProjectDecision] = []
     error: str | None = None
@@ -560,6 +563,9 @@ class QuestionDiscovery(BaseModel):
     design: str = ""
     # С какими принятыми решениями проекта: номера, которые человек отобрал для потока.
     decisions: list[str] = []
+    # Отпечаток отмеченных решений (project.fingerprint): решение с тем же номером переписали —
+    # вопросы ищутся заново.
+    decisions_seen: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -1022,8 +1028,8 @@ class ApproveDesign(GroupsEdit):
 
 class SelectDecisions(GroupsEdit):
     """Человек отмечает, какие прошлые решения проекта учитывать в потоке: keep — номера из
-    отбора search_run (пусто — ни одного), и совет сразу ищет вопросы. idea — идея, которую
-    человек видел."""
+    отбора search_run (пусто — ни одного), и совет сразу ищет вопросы. search_run — отбор, что
+    был на экране, и для «ни одного» тоже, хоть упавший. idea — идея, которую человек видел."""
 
     search_run: str | None = None
     keep: list[str] = []

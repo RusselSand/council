@@ -204,7 +204,8 @@ def agents(tmp_path):
 
 
 def picks(council_id, keep, group="C", search_run=None):
-    run = search_run or (streams_of(council_id)[group].decisions_search.run if keep else None)
+    search = streams_of(council_id)[group].decisions_search
+    run = search_run or (search.run if search else None)
     return client.post(f"/api/councils/{council_id}/streams/{group}/project-decisions",
                        json={"run": "g1", "revision": 0, "search_run": run, "keep": list(keep),
                              "idea": seen_idea(council_id, group)})
@@ -286,6 +287,35 @@ def test_a_decision_not_from_the_selection_is_refused(agents):
     res = picks(council_id, ["ADR-0002"])
     assert res.status_code == 422 and "ADR-0002" in res.json()["detail"]
     assert picks(council_id, ["ADR-0001"], search_run="прежний").status_code == 409
+    assert picks(council_id, [], search_run="прежний").status_code == 409   # и «без решений»
+
+
+def test_a_decision_added_to_the_catalog_meanwhile_sends_even_none_back(agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    first = streams_of(council_id)["C"].decisions_search.run
+    newer = Note("ADR-0003", "adr", "Счета шлёт бот по расписанию.", ("PRO-0002",))
+    path_of(root, newer).write_text(rendered(newer), encoding="utf-8")
+    assert picks(council_id, []).status_code == 409                  # нового решения не видели
+    stream = streams_of(council_id)["C"]
+    assert stream.decisions_search.state == "failed" and stream.decisions_search.run != first
+    assert stream.questions is None
+
+
+def test_a_selected_decision_rewritten_in_the_catalog_finds_the_questions_anew(agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    assert picks(council_id, ["ADR-0001"]).status_code == 200
+    first = streams_of(council_id)["C"].questions.run
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    assert picks(council_id, ["ADR-0001"]).status_code == 409        # отбор устарел
+    assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
+                       ).status_code == 202
+    assert picks(council_id, ["ADR-0001"]).status_code == 200        # то же решение, другой текст
+    assert streams_of(council_id)["C"].questions.run != first
 
 
 def test_without_models_the_selection_fails_and_the_questions_go_without_it(agents):

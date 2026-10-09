@@ -1146,7 +1146,7 @@ function ProjectDecisions({ council, structure, stream, group, onChange }: Reado
   })
   const submit = (ids: string[]) => void act.go(async () => {
     try {
-      return await api.selectDecisions(council.id, at, group.id, search.state === 'done' ? search.run : null, ids, idea.text)
+      return await api.selectDecisions(council.id, at, group.id, search.run, ids, idea.text)
     } catch (e) {
       // Отбор уже другой или идею поменяли (другая вкладка) — показываем нынешнее.
       if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))

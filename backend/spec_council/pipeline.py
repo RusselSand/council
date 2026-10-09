@@ -143,6 +143,7 @@ from .outcomes import outcome_list, same_outcomes
 from .project import (
     catalog_prompt,
     evidence_files,
+    fingerprint,
     issue_outcomes,
     records,
     same_selection,
@@ -279,9 +280,11 @@ def start_decisions(participants: list[str], judge: str, idea: str, repository: 
 
 def start_questions(participants: list[str], judge: str, idea: str,
                     repository: str = SKIPPED, design: str = SKIPPED,
-                    decisions: Sequence[str] = ()) -> QuestionDiscovery:
+                    decisions: Sequence[ProjectDecision] = ()) -> QuestionDiscovery:
     return QuestionDiscovery(state="running", run=uuid4().hex[:8], idea=idea,
-                             repository=repository, design=design, decisions=list(decisions),
+                             repository=repository, design=design,
+                             decisions=[decision.adr_id for decision in decisions],
+                             decisions_seen=fingerprint(decisions),
                              steps=steps(participants, judge,
                                          (StepName.question_discovery, StepName.question_judge)))
 
@@ -773,7 +776,7 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
                  accepted: Sequence[ProjectDecision] = ()) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_questions(participants, judge, idea, repository, design,
-                                         [decision.adr_id for decision in accepted]))
+                                         accepted))
         self.idea = idea
         self.repository = repository_map
         self.design = design_map
@@ -1418,6 +1421,7 @@ class DecisionsRun(CouncilRun[DecisionsSearch]):
         catalog = records(self.catalog, trails, self.own)
         with self._lock:
             self.state.catalog = len(catalog)
+            self.state.fingerprint = fingerprint(catalog)
             self.state.traced = sum(1 for record in catalog if record.found_in_code)
             self._publish()
         values = {"idea": self.idea, "fragments": fragments_prompt(self.fragments),

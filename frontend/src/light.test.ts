@@ -22,7 +22,7 @@ const structure = (state: Structure['state'], labels: Structure['labels'] = { 1:
 const search = (state: IdeaDiscovery['state']): IdeaDiscovery =>
   ({ state, run: 'i1', steps: [], options: [], proposal: null, error: null })
 const asked = (state: QuestionDiscovery['state']): QuestionDiscovery =>
-  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', decisions: [], steps: [], questions: [], error: null })
+  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', steps: [], questions: [], error: null })
 const offered = (state: ProposalDiscovery['state']): ProposalDiscovery =>
   ({ state, run: 'p1', scope: [], steps: [], options: [], error: null })
 const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>

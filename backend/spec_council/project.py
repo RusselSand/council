@@ -8,6 +8,8 @@
 (код старше, клон без истории) — тогда следа нет, и остаётся отбор по смыслу.
 """
 
+import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -43,6 +45,16 @@ def records(catalog: Catalog, trails: Mapping[str, list[CodeTrail]],
             question=question_of(catalog, adr.links), decision=adr.body, status=status,
             superseded_by=by, found_in_code=trails.get(adr.id, [])))
     return found
+
+
+def fingerprint(decisions: Sequence[ProjectDecision]) -> str:
+    """Отпечаток решений — того, что видят модели: номер, идея, вопрос, решение, статус, чем
+    заменено. След в коде не входит — его ищет git, а не каталог. Пусто — пустая строка."""
+    if not decisions:
+        return ""
+    rows = [[d.adr_id, d.idea, d.question, d.decision, d.status, d.superseded_by]
+            for d in decisions]
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
 def question_of(catalog: Catalog, links: Sequence[str]) -> str:
