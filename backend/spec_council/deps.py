@@ -55,8 +55,9 @@ def repository() -> Path | None:
 
 @cache
 def get_config() -> AppConfig:
-    """Совет из окружения или .env: COUNCIL_PARTICIPANT_1, COUNCIL_PARTICIPANT_2 и COUNCIL_JUDGE
-    (config.config_of). Читаются один раз: поменяли — перезапустите сервер."""
+    """Совет из окружения или .env: COUNCIL_PARTICIPANT_1, COUNCIL_PARTICIPANT_2 (none — второго
+    нет) и COUNCIL_JUDGE (config.config_of). Читаются один раз: поменяли — перезапустите
+    сервер."""
     settings = Settings.load()
     return config_of(settings.get("COUNCIL_PARTICIPANT_1"), settings.get("COUNCIL_PARTICIPANT_2"),
                      settings.get("COUNCIL_JUDGE"))

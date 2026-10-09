@@ -24,7 +24,7 @@ const SETTINGS: Settings = {
     { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude', available: true },
     { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini', available: false },
   ],
-  min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true, notes: null,
+  min_participants: 1, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true, notes: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -1494,17 +1494,16 @@ describe('Ввод', () => {
     expect([...judge().options].map(o => o.text)).toEqual(['Sol', 'Fable', 'Astra'])
   })
 
-  it('не даёт оставить меньше двух участников', async () => {
+  it('участник может остаться один, но не ни одного', async () => {
     await open()
     const locked = () => [/GPT-5.6 Sol/, /Claude Fable/, /Gemini Astra/]
       .map(name => checkbox(name).getAttribute('aria-disabled') === 'true')
-    expect(locked()).toEqual([true, true, false])
-    fireEvent.click(checkbox(/GPT-5.6 Sol/))
-    expect(checkbox(/GPT-5.6 Sol/).checked).toBe(true)
-
-    fireEvent.click(checkbox(/Gemini Astra/))
-    await waitFor(() => expect(patches).toEqual([{ participants: ['sol', 'fable', 'astra'] }]))
     expect(locked()).toEqual([false, false, false])
+    fireEvent.click(checkbox(/GPT-5.6 Sol/))
+    await waitFor(() => expect(patches).toEqual([{ participants: ['fable'] }]))
+    expect(locked()).toEqual([false, true, false])                   // последнего не снять
+    fireEvent.click(checkbox(/Claude Fable/))
+    expect(checkbox(/Claude Fable/).checked).toBe(true)
   })
 
   it('судью можно выбрать и не из участников, он сохраняется сразу', async () => {
@@ -1657,6 +1656,16 @@ describe('Нарезка', () => {
 
     expect(screen.getByText(ru['progress.stepState.skipped'])).toBeTruthy()
     expect(screen.getByText('нет входа в подписку')).toBeTruthy()
+  })
+
+  it('совет из одного: судья подтвердил тип — без пометки, поправил — «судья проверил»', async () => {
+    // Единственный голос — Sol: у F1 тот же тип, что выбрал судья, у F2 — другой.
+    const fragments = DONE.fragments.slice(0, 2).map((f, i) => ({
+      ...f, decided_by: 'judge' as const, slice_note: null,
+      votes: [{ model: 'sol', labels: [i === 0 ? 'idea' : 'constraint'] as Label[] }] }))
+    openSlices(() => ({ ...COUNCIL, participants: ['sol'], judge: 'sol', slicing: { ...DONE, fragments } }))
+    expect(await screen.findByText('судья проверил (Sol — ограничение) и решил: Способ хранения.')).toBeTruthy()
+    expect(screen.queryByText(/судья проверил \(Sol — идея\)/)).toBeNull()      // F1 — подтвердил
   })
 
   it('тип можно поменять: сохраняется сразу, тип совета остаётся виден', async () => {

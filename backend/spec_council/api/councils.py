@@ -295,7 +295,7 @@ def check_models(patch: CouncilPatch, config: AppConfig) -> None:
         if len(set(patch.participants)) != len(patch.participants):
             raise HTTPException(422, "Модель указана в совете дважды")
         if len(patch.participants) < MIN_PARTICIPANTS:
-            raise HTTPException(422, f"Нужны минимум {MIN_PARTICIPANTS} модели")
+            raise HTTPException(422, "В совете нужен хотя бы один участник")
         unknown = [alias for alias in patch.participants if alias not in known]
         if unknown:
             raise HTTPException(422, f"Неизвестные модели: {', '.join(unknown)}")

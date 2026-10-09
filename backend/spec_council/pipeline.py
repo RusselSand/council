@@ -1,4 +1,6 @@
 """Ход совета: участники работают по отдельности, судья решает только там, где разошлись.
+Ответ один (участник в совете один или другие упали) — сравнивать не с чем, и судья его
+проверяет: «сошлись» — это минимум два одинаковых ответа.
 
 Нарезка (SlicingRun):
 1. slice — каждый участник нарезает текст (prompts/slice.md);
@@ -583,7 +585,7 @@ class SlicingRun(CouncilRun[Slicing]):
                 reasons = distinct.setdefault(option.bounds, [])
                 if option.reason and option.reason not in reasons:
                     reasons.append(option.reason)
-        if len(distinct) == 1:
+        if len(answers) > 1 and len(distinct) == 1:
             self._skip(StepName.slice_judge)
             return next(iter(distinct)), []
 
@@ -608,7 +610,7 @@ class SlicingRun(CouncilRun[Slicing]):
         disputed: dict[int, list[LabelOption]] = {}
         for i in ids:
             per_model = [options[i] for options in answers.values()]
-            agreed = agreed_label(per_model)
+            agreed = agreed_label(per_model) if len(answers) > 1 else None
             if agreed:
                 final[i] = agreed
             else:
@@ -667,7 +669,7 @@ class GroupingRun(CouncilRun[Structure]):
         for options in answers.values():
             for option in options:
                 distinct.setdefault(option.key(), option)
-        if len(distinct) == 1:
+        if len(answers) > 1 and len(distinct) == 1:
             self._skip(StepName.structure_judge)
             return final_structure(next(iter(distinct.values())), [])
 
@@ -735,7 +737,9 @@ class IdeaRun(CouncilRun[IdeaDiscovery]):
                                 lambda data: idea_options(data, known))
         options = merged(answers)
         found = [as_option(option) for option in options]
-        if len(options) <= 1:
+        # Идеи не нашли — проверять нечего; одна — судья нужен, если её предложил один ответ
+        # (другой участник мог ответить, что идеи не видит, — это не согласие).
+        if not options or (len(options) == 1 and len(options[0].models) > 1):
             self._skip(StepName.idea_judge)
             if not options:
                 proposal = IdeaProposal(idea=None, reason=declined(answers), decided_by="agreed")

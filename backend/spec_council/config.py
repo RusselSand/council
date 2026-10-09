@@ -1,9 +1,9 @@
 """Настройки инструмента: какие модели в совете, на чём они работают и кто судья.
 
-Совет задаёт человек в .env тремя переменными: два участника — COUNCIL_PARTICIPANT_1 и
-COUNCIL_PARTICIPANT_2 («имя=провайдер/модель») — и судья COUNCIL_JUDGE: имя одного из них или
-третья модель «имя=провайдер/модель». Без настройки — Sol (Codex) и Fable (Claude Code), судья
-Fable. Каталог учётной записи
+Совет задаёт человек в .env тремя переменными: участники — COUNCIL_PARTICIPANT_1 и
+COUNCIL_PARTICIPANT_2 («имя=провайдер/модель»; второго нет — COUNCIL_PARTICIPANT_2=none) — и
+судья COUNCIL_JUDGE: имя одного из них или третья модель «имя=провайдер/модель». Без настройки —
+Sol (Codex) и Fable (Claude Code), судья Fable; участник один — судья он же. Каталог учётной записи
 каждой модели — .accounts/<имя> (или COUNCIL_ACCOUNTS/<имя>, или COUNCIL_<ИМЯ>_HOME): там
 токены входа, см. README. Роуты берут настройки через deps.ConfigDep.
 """
@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 
 from .models import Council, Model
 
-# Меньше двух — сравнивать судье нечего; больше — пока не нужно: совет из двух моделей.
-MIN_PARTICIPANTS = 2
+# Участник может быть и один: его ответ проверяет судья. Больше двух пока не нужно.
+MIN_PARTICIPANTS = 1
+# COUNCIL_PARTICIPANT_2 с этим значением — второго участника нет. Пусто — по умолчанию.
+NONE = "none"
 
 # Через что agent-workers запускает модель: его провайдеры.
 PROVIDERS = ("codex", "claude")
@@ -69,16 +71,17 @@ def entry_of(text: str, variable: str) -> tuple[str, str, str]:
 
 def config_of(first: str | None = "", second: str | None = "",
               judge: str | None = "") -> AppConfig:
-    """Совет из настройки: два участника «имя=провайдер/модель» и судья — имя одного из них
-    или третья модель. Пусто или не задано (None) — как по умолчанию; судья не задан — второй
-    участник."""
-    participants = [entry_of(first or DEFAULT_PARTICIPANTS[0], "COUNCIL_PARTICIPANT_1"),
-                    entry_of(second or DEFAULT_PARTICIPANTS[1], "COUNCIL_PARTICIPANT_2")]
-    if participants[0][0] == participants[1][0]:
+    """Совет из настройки: участники «имя=провайдер/модель» — два или один (второй — none) — и
+    судья — имя одного из них или третья модель. Пусто или не задано (None) — как по умолчанию;
+    судья не задан — последний участник: второй, а у одного — он же."""
+    participants = [entry_of(first or DEFAULT_PARTICIPANTS[0], "COUNCIL_PARTICIPANT_1")]
+    if (second or "").strip().lower() != NONE:
+        participants.append(entry_of(second or DEFAULT_PARTICIPANTS[1], "COUNCIL_PARTICIPANT_2"))
+    if len(participants) == 2 and participants[0][0] == participants[1][0]:
         raise ConfigError(f"COUNCIL_PARTICIPANT_1 и _2: имя {participants[0][0]} у обоих — "
                           "нужны разные")
     known = {alias: (alias, provider, model) for alias, provider, model in participants}
-    judge = (judge or "").strip() or participants[1][0]
+    judge = (judge or "").strip() or participants[-1][0]
     if "=" in judge:
         entry = entry_of(judge, "COUNCIL_JUDGE")
         if entry[0] in known and known[entry[0]] != entry:
@@ -101,14 +104,15 @@ def config_of(first: str | None = "", second: str | None = "",
 
 def fitted(council: Council, config: AppConfig) -> Council:
     """Совет под нынешнюю настройку. Участник, которого больше нет среди моделей, уходит, и
-    до двух его место занимают заданные; выбранные в совете и всё ещё настроенные остаются.
-    Судья — свой, если он среди моделей, иначе заданный. Поменяли модели в .env — старые
-    советы работают на новых, а не падают на «нет подключения» к тем, кого больше нет.
-    Подгонять нечего — тот же совет."""
+    его место, пока есть кем, занимают заданные: совет из двух остаётся из двух, если в .env
+    их хоть двое; выбранные в совете и всё ещё настроенные остаются. Судья — свой, если он
+    среди моделей, иначе заданный. Поменяли модели в .env — старые советы работают на новых, а
+    не падают на «нет подключения» к тем, кого больше нет. Подгонять нечего — тот же совет."""
     aliases = {model.alias for model in config.models}
     participants = [alias for alias in council.participants if alias in aliases]
+    wanted = max(MIN_PARTICIPANTS, len(council.participants))
     for alias in config.default_participants:
-        if len(participants) >= MIN_PARTICIPANTS:
+        if len(participants) >= wanted:
             break
         if alias not in participants:
             participants.append(alias)

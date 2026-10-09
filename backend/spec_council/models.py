@@ -21,13 +21,13 @@ RunState = Literal["waiting", "running", "done", "failed"]
 
 class StepName(StrEnum):
     slice = "slice"              # участники нарезают текст, каждый сам по себе
-    slice_judge = "slice_judge"  # судья выбирает нарезку, если участники разошлись
+    slice_judge = "slice_judge"  # судья выбирает нарезку, если разошлись или ответ один
     label = "label"              # участники размечают итоговые фрагменты
-    label_judge = "label_judge"  # судья решает фрагменты, где типы разошлись
+    label_judge = "label_judge"  # судья решает фрагменты, где типы разошлись или голос один
     structure = "structure"              # участники раскладывают фрагменты по группам
-    structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись
+    structure_judge = "structure_judge"  # судья выбирает раскладку, если разошлись или одна
     idea_discovery = "idea_discovery"    # участники восстанавливают идею группы без неё
-    idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
+    idea_judge = "idea_judge"            # судья выбирает идею: вариантов несколько или ответ один
     repository_discovery = "repository_discovery"  # участники исследуют репозиторий под идею
     repository_judge = "repository_judge"          # судья проверяет их находки и покрытие
     design_discovery = "design_discovery"  # участники исследуют макет Figma под идею
@@ -56,7 +56,7 @@ class ModelRun(BaseModel):
 
 class Step(BaseModel):
     name: StepName
-    # skipped — судья не понадобился: участники сошлись.
+    # skipped — судья не понадобился: участники сошлись (минимум двое) или решать нечего.
     state: Literal["waiting", "running", "done", "failed", "skipped"] = "waiting"
     runs: list[ModelRun]
 
@@ -75,7 +75,7 @@ class LabeledFragment(BaseModel):
     label: Label
     reason: str
     council_label: Label
-    # agreed — участники сошлись, judge — разошлись и решил судья.
+    # agreed — участники сошлись, judge — разошлись или голос один, и решил судья.
     decided_by: Literal["agreed", "judge"] = "agreed"
     votes: list[Vote] = []
     # Решение судьи нарезки о границе перед этим фрагментом или внутри него.
@@ -183,7 +183,8 @@ class IdeaProposal(BaseModel):
     idea: str | None
     evidence: list[int] = []
     reason: str
-    # agreed — вариант один, судья не понадобился; judge — решал судья.
+    # agreed — вариант один у нескольких ответов (или идеи нет), судья не понадобился; judge —
+    # решал судья.
     decided_by: Literal["agreed", "judge"]
     # Какой из IdeaDiscovery.options предложен как есть; None — судья свёл формулировки.
     option: int | None = None
