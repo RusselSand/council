@@ -15,6 +15,7 @@ from ..models import (
     CouncilPatch,
     CouncilStatus,
     DecisionAnalysis,
+    DesignScan,
     IdeaDiscovery,
     IssueDiscovery,
     Label,
@@ -48,8 +49,9 @@ council_lock = Lock()
 # Сколько раз проверять вход заново, если состав совета меняют прямо во время проверки.
 PROBE_ATTEMPTS = 3
 
-RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
-            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery | IssueDiscovery)
+RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
+            | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery
+            | IssueDiscovery)
 
 
 @dataclass(frozen=True)

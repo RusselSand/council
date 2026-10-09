@@ -14,6 +14,7 @@ from fastapi import Depends
 
 from .agents import AgentRunner, launch
 from .config import AppConfig, config_of, fitted
+from .figma import Fetcher, Figma
 from .store import FileStore, Store
 
 
@@ -68,6 +69,13 @@ def get_repositories() -> Path | None:
     return Settings.load().path_of("COUNCIL_REPOS")
 
 
+def get_figma() -> Fetcher | None:
+    """Figma для скана макета: персональный токен FIGMA_TOKEN из окружения или .env, с правом
+    file_content:read. Без него макет не сканировать."""
+    token = Settings.load().get("FIGMA_TOKEN").strip()
+    return Figma(token) if token else None
+
+
 @cache
 def get_agents() -> AgentRunner:
     """Подключения к моделям. Одно на процесс: .env читается один раз, воркеры переиспользуются."""
@@ -78,6 +86,7 @@ StoreDep = Annotated[Store, Depends(get_store)]
 ConfigDep = Annotated[AppConfig, Depends(get_config)]
 AgentsDep = Annotated[AgentRunner, Depends(get_agents)]
 RepositoriesDep = Annotated[Path | None, Depends(get_repositories)]
+FigmaDep = Annotated[Fetcher | None, Depends(get_figma)]
 
 Launcher = Callable[[Callable[[], object]], None]
 

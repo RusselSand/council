@@ -16,6 +16,7 @@ from spec_council.models import (
     LabeledFragment,
     ModelRun,
     RepositoryScan,
+    RepositoryStep,
     Slicing,
     Stream,
     StreamIdea,
@@ -196,6 +197,25 @@ def test_streams_saved_before_the_repository_step_passed_it_by_skipping(tmp_path
     first, second = after.streams
     assert (first.repository.by, first.questions.repository) == ("skipped", "skipped")
     assert second.repository is None                    # вопросов не было — шаг впереди
+
+
+def test_streams_saved_before_the_design_step_passed_it_by_skipping(tmp_path):
+    """Совет, сохранённый до шага «Дизайн»: у потока, где вопросы уже искали, шаг считается
+    пропущенным, а вопросы — найденными без описания макета; карта репозитория — как была."""
+    before = FileStore(tmp_path)
+    council = before.create_council(participants=["sol", "fable"], judge="fable")
+    questions = start_questions(["sol"], "sol", "Идея", "s1").model_copy(
+        update={"state": "done", "design": ""})
+    before.update_council(council.id, {"streams": [
+        Stream(group="A", idea=StreamIdea(text="Идея", by="human"), questions=questions,
+               repository=RepositoryStep(by="scan", scan_run="s1")),
+        Stream(group="B", idea=StreamIdea(text="Другая", by="human"),
+               repository=RepositoryStep(by="skipped"))]})
+    after = FileStore(tmp_path).get_council(council.id)
+    first, second = after.streams
+    assert (first.repository.scan_run, first.design.by) == ("s1", "skipped")
+    assert (first.questions.repository, first.questions.design) == ("s1", "skipped")
+    assert second.design is None                        # вопросов не было — шаг впереди
 
 
 def test_a_scan_and_a_cut_saved_with_one_repository_read_as_a_list_of_one():

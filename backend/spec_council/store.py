@@ -21,6 +21,8 @@ from .models import (
     Council,
     CouncilStatus,
     DecisionAnalysis,
+    DesignScan,
+    DesignStep,
     IdeaDiscovery,
     IssueDiscovery,
     OutcomeDiscovery,
@@ -29,6 +31,7 @@ from .models import (
     RepositoryScan,
     RepositoryStep,
     Slicing,
+    Stream,
     Structure,
 )
 
@@ -169,17 +172,33 @@ def writable(folder: Path) -> None:
 
 
 def migrated(council: Council) -> Council:
-    """Совет, сохранённый до шага «Репозиторий»: у потока, где вопросы уже искали, шаг
-    считается пропущенным, и вопросы — найденными без карты. Иначе он вернулся бы на этот шаг,
-    а «Пропустить» пересчитало бы всё, что ниже. Менять нечего — тот же совет."""
-    streams = [stream.model_copy(update={
-        "repository": RepositoryStep(by="skipped"),
-        "questions": stream.questions.model_copy(update={"repository": SKIPPED})})
-        if stream.questions is not None and stream.repository is None else stream
-        for stream in council.streams or []]
+    """Совет, сохранённый до шагов «Репозиторий» или «Дизайн»: у потока, где вопросы уже
+    искали, шаг считается пропущенным, и вопросы — найденными без карты или описания макета.
+    Иначе он вернулся бы на этот шаг, а «Пропустить» пересчитало бы всё, что ниже. Менять
+    нечего — тот же совет."""
+    streams = [passed(stream) for stream in council.streams or []]
     if streams == (council.streams or []):
         return council
     return council.model_copy(update={"streams": streams})
+
+
+def passed(stream: Stream) -> Stream:
+    """Поток, где вопросы искали раньше, чем появились шаги перед ними: эти шаги пропущены.
+    Сейчас вопросы ищут только после обоих шагов, так что у новых потоков менять нечего."""
+    if stream.questions is None:
+        return stream
+    changes: dict[str, Any] = {}
+    keys: dict[str, str] = {}
+    if stream.repository is None:
+        changes["repository"] = RepositoryStep(by="skipped")
+        keys["repository"] = SKIPPED
+    if stream.design is None:
+        changes["design"] = DesignStep(by="skipped")
+        keys["design"] = SKIPPED
+    if not changes:
+        return stream
+    return stream.model_copy(update={**changes,
+                                     "questions": stream.questions.model_copy(update=keys)})
 
 
 def interrupted(council: Council) -> Council:
@@ -200,14 +219,14 @@ def interrupted(council: Council) -> Council:
     return council.model_copy(update=changes) if changes else council
 
 
-def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery
-            | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery | IssueDiscovery
-            | None) -> bool:
+def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
+            | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery
+            | IssueDiscovery | None) -> bool:
     return state is not None and state.state == "running"
 
 
-def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
-               ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
+def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, DesignScan,
+               QuestionDiscovery, ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
                IssueDiscovery)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={

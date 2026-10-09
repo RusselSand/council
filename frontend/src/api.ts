@@ -5,6 +5,7 @@ export type Label = (typeof LABELS)[number]
 export type RunState = 'waiting' | 'running' | 'done' | 'failed'
 export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'structure' | 'structure_judge'
   | 'idea_discovery' | 'idea_judge' | 'repository_discovery' | 'repository_judge'
+  | 'design_discovery' | 'design_judge'
   | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
   | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge'
@@ -120,6 +121,47 @@ export interface RepositoryScan {
 }
 /** Шаг «Репозиторий», как его прошёл человек: пропустил или утвердил карту скана scan_run. */
 export interface RepositoryStep { by: 'skipped' | 'scan'; scan_run: string }
+/** Сколько ссылок на макет можно дать разом — как на сервере. */
+export const LINKS_MAX = 10
+/** Узел макета Figma: страница, сам узел и его имя. */
+export interface DesignNode { page_id: string; node_id: string; name: string }
+/** Факт о макете: verified — видно в макете (evidence — узлы), inferred — вывод, unknown — не установлено. */
+export interface DesignFinding {
+  id: string; statement: string; status: 'verified' | 'inferred' | 'unknown'; evidence: DesignNode[]; relevance: string
+}
+export interface DesignAction {
+  action: string; result: string | null; status: 'verified' | 'inferred' | 'unknown'; finding_ids: string[]
+}
+/** Экран макета: зачем он, какие данные, что на нём можно сделать и в каких состояниях он нарисован. */
+export interface DesignScreen {
+  name: string; node_id: string; purpose: string; data: string[]; actions: DesignAction[]
+  states: { name: string; node_id: string }[]
+}
+export interface DesignFlow { name: string; steps: RepositoryFlow['steps']; status: 'verified' | 'inferred' | 'unknown' }
+export interface DesignCoverage { area: string; status: CoverageArea['status']; reason: string }
+export interface DesignUnknown { question: string; reason: string; investigate: DesignNode[] }
+export interface DesignFollowUp { objective: string; reason: string; targets: DesignNode[]; related_finding_ids: string[] }
+/** Проверенное описание макета: что предусмотрено в дизайне, а не как это реализовать. */
+export interface DesignMap {
+  findings: DesignFinding[]; screens: DesignScreen[]; flows: DesignFlow[]; coverage: DesignCoverage[]
+  unknowns: DesignUnknown[]; design_conflicts: string[]
+}
+/** Какой макет читали: файл, его версия, узлы из ссылок, сколько страниц и картинок в снимке. */
+export interface FigmaSource {
+  file_key: string; name: string; version: string; last_modified: string; requested: DesignNode[]
+  pages: number; images: number
+}
+/**
+ * Скан макета Figma под идею: по каким ссылкам, что легло в снимок (source — пусто, пока его нет) и сколько
+ * проходов. complete — судья счёл исследование достаточным; иначе в follow_up — что доисследовать не успели.
+ */
+export interface DesignScan {
+  state: 'running' | 'done' | 'failed'; run: string; idea: string; links: string[]; source: FigmaSource | null
+  rounds: number; steps: Step[]; complete: boolean; result: DesignMap | null
+  follow_up: DesignFollowUp[]; error: string | null
+}
+/** Шаг «Дизайн», как его прошёл человек: пропустил или утвердил описание скана scan_run. */
+export interface DesignStep { by: 'skipped' | 'scan'; scan_run: string }
 /** Идея потока, утверждённая человеком: записана в тексте, вариант совета как есть или своя. */
 export interface StreamIdea { text: string; by: 'text' | 'council' | 'human'; evidence: number[] }
 /**
@@ -130,9 +172,9 @@ export interface OpenQuestion {
   id: string; text: string; source: 'user' | 'inferred' | 'discovered' | 'added'
   source_question_id: number | null; proposal_ids: number[]; reason: string | null
 }
-/** Поиск вопросов к утверждённой идее (idea — к какой; repository — с какой картой): идёт в фоне. */
+/** Поиск вопросов к утверждённой идее (idea — к какой; repository и design — с какой картой и описанием макета). */
 export interface QuestionDiscovery {
-  state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; steps: Step[]
+  state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; design: string; steps: Step[]
   questions: OpenQuestion[]; error: string | null
 }
 /**
@@ -229,6 +271,7 @@ export interface IssueDiscovery {
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
   scan: RepositoryScan | null; repository: RepositoryStep | null
+  design_scan: DesignScan | null; design: DesignStep | null
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
@@ -249,6 +292,8 @@ export interface Settings {
   models: Model[]; min_participants: number; default_participants: string[]; default_judge: string
   /** Каталог репозиториев для скана (COUNCIL_REPOS): пути — от него; null — путь абсолютный. */
   repositories: string | null
+  /** Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать. */
+  figma: boolean
 }
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
@@ -313,9 +358,21 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, paths, idea }),
     }),
-  /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Совет сразу ищет вопросы. */
+  /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Дальше — шаг «Дизайн». */
   approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+    }),
+  /** Сканировать макет Figma под идею потока: ссылки на страницы или фреймы одного файла. */
+  scanDesign: (id: string, at: GroupsVersion, group: string, links: string[], idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design/scan`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, links, idea }),
+    }),
+  /** Пройти шаг «Дизайн»: scanRun — утвердить описание этого скана, null — пропустить. Совет сразу ищет вопросы. */
+  approveDesign: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
     }),

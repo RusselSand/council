@@ -30,6 +30,8 @@ class StepName(StrEnum):
     idea_judge = "idea_judge"            # судья выбирает идею, если вариантов несколько
     repository_discovery = "repository_discovery"  # участники исследуют репозиторий под идею
     repository_judge = "repository_judge"          # судья проверяет их находки и покрытие
+    design_discovery = "design_discovery"  # участники исследуют макет Figma под идею
+    design_judge = "design_judge"          # судья проверяет их описание макета и покрытие
     question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
     question_judge = "question_judge"          # судья сводит их в один канонический список
     proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
@@ -344,6 +346,137 @@ class RepositoryStep(BaseModel):
     scan_run: str = ""
 
 
+class DesignNode(BaseModel):
+    """Узел макета Figma: страница, сам узел и его имя — на что ссылаются находки и задания."""
+
+    page_id: str = ""
+    node_id: str = ""
+    name: str = ""
+
+
+class DesignFinding(BaseModel):
+    """Факт о макете: что в нём предусмотрено. verified — видно в макете (evidence есть),
+    inferred — следует из его структуры, unknown — установить не удалось."""
+
+    id: str
+    statement: str
+    status: Literal["verified", "inferred", "unknown"]
+    evidence: list[DesignNode] = []
+    relevance: str = ""
+
+
+class DesignAction(BaseModel):
+    """Действие пользователя на экране и что оно даёт, если это видно в макете."""
+
+    action: str
+    result: str | None = None
+    status: Literal["verified", "inferred", "unknown"] = "unknown"
+    finding_ids: list[str] = []
+
+
+class DesignState(BaseModel):
+    name: str
+    node_id: str = ""
+
+
+class DesignScreen(BaseModel):
+    """Экран макета: зачем он, какие данные показывает и принимает, что на нём можно сделать
+    и в каких состояниях он нарисован."""
+
+    name: str
+    node_id: str = ""
+    purpose: str = ""
+    data: list[str] = []
+    actions: list[DesignAction] = []
+    states: list[DesignState] = []
+
+
+class DesignFlow(BaseModel):
+    """Сценарий пользователя через экраны макета."""
+
+    name: str
+    steps: list[FlowStep] = []
+    status: Literal["verified", "inferred", "unknown"] = "unknown"
+
+
+class DesignCoverage(BaseModel):
+    """Насколько исследована область макета относительно идеи."""
+
+    area: str
+    status: Literal["covered", "partial", "not_investigated", "not_applicable"]
+    reason: str = ""
+
+
+class DesignUnknown(BaseModel):
+    """Что по макету установить не удалось, почему это важно и где смотреть дальше."""
+
+    question: str
+    reason: str = ""
+    investigate: list[DesignNode] = []
+
+
+class DesignFollowUp(BaseModel):
+    """Задание на доисследование макета от судьи: что установить и в каких узлах."""
+
+    objective: str
+    reason: str = ""
+    targets: list[DesignNode] = []
+    related_finding_ids: list[str] = []
+
+
+class DesignMap(BaseModel):
+    """Проверенное описание макета: факты, экраны, сценарии, покрытие, неизвестное и
+    противоречия. Описывает, что предусмотрено в дизайне, а не как это реализовать."""
+
+    findings: list[DesignFinding] = []
+    screens: list[DesignScreen] = []
+    flows: list[DesignFlow] = []
+    coverage: list[DesignCoverage] = []
+    unknowns: list[DesignUnknown] = []
+    design_conflicts: list[str] = []
+
+
+class FigmaSource(BaseModel):
+    """Какой макет читали: файл Figma, его версия и что из него легло в снимок."""
+
+    file_key: str = ""
+    name: str = ""
+    # Версия файла в Figma: снимок взят ровно с неё, даже если файл правили, пока он делался.
+    version: str = ""
+    last_modified: str = ""
+    # Узлы из ссылок: страницы или фреймы, с которых начинают.
+    requested: list[DesignNode] = []
+    # Сколько страниц легло в снимок целиком и сколько фреймов отрисовано картинками.
+    pages: int = 0
+    images: int = 0
+
+
+class DesignScan(BaseModel):
+    """Скан макета Figma под идею потока: снимок файла — страниц из ссылок, со структурой и
+    картинками фреймов, — участники исследуют его, судья проверяет и, если пробелы
+    существенны, отправляет их доисследовать — до двух раз. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К какой идее и каким ссылкам; source — что легло в снимок (пусто, пока его нет).
+    idea: str = ""
+    links: list[str] = []
+    source: FigmaSource | None = None
+    rounds: int = 0
+    steps: list[Step]
+    complete: bool = False
+    result: DesignMap | None = None
+    follow_up: list[DesignFollowUp] = []
+    error: str | None = None
+
+
+class DesignStep(BaseModel):
+    """Шаг «Дизайн», как его прошёл человек: пропустил или утвердил описание скана макета."""
+
+    by: Literal["skipped", "scan"]
+    scan_run: str = ""
+
+
 class OpenQuestion(BaseModel):
     """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
     нет: предложения из текста связаны с ним через proposal_ids."""
@@ -368,8 +501,10 @@ class QuestionDiscovery(BaseModel):
     run: str = ""
     # Идея, к которой ищут: утвердили другую — вопросы ищутся заново.
     idea: str = ""
-    # С какой картой репозитория: «skipped» или run скана. Прошли шаг иначе — ищут заново.
+    # С какой картой репозитория и каким описанием макета: «skipped» или run скана. Прошли
+    # шаг иначе — ищут заново.
     repository: str = ""
+    design: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -587,7 +722,8 @@ class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
     её ищет совет (discovery), утверждает человек (idea); потом необязательный скан
     репозитория — его ведёт совет (scan), а человек утверждает карту или пропускает шаг
-    (repository), и карта идёт во все следующие шаги; потом вопросы — их ищет совет
+    (repository), и карта идёт во все следующие шаги; потом так же необязательный скан
+    макета Figma (design_scan) и шаг «Дизайн» (design); потом вопросы — их ищет совет
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
     (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
@@ -599,6 +735,8 @@ class Stream(BaseModel):
     idea: StreamIdea | None = None
     scan: RepositoryScan | None = None
     repository: RepositoryStep | None = None
+    design_scan: DesignScan | None = None
+    design: DesignStep | None = None
     questions: QuestionDiscovery | None = None
     # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
     scope: list[OpenQuestion] | None = None
@@ -610,9 +748,10 @@ class Stream(BaseModel):
     issues: IssueDiscovery | None = None
 
 
-# Ходы потока по его цепочке: поиск идеи, скан репозитория, поиск вопросов, вариантов,
-# проверка выбора, сборка итогов, нарезка на задачи.
-STREAM_RUNS = ("discovery", "scan", "questions", "proposals", "analysis", "outcomes", "issues")
+# Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
+# вариантов, проверка выбора, сборка итогов, нарезка на задачи.
+STREAM_RUNS = ("discovery", "scan", "design_scan", "questions", "proposals", "analysis",
+               "outcomes", "issues")
 
 
 class Council(BaseModel):
@@ -703,7 +842,27 @@ class ScanRepository(GroupsEdit):
 
 class ApproveRepository(GroupsEdit):
     """Человек проходит шаг «Репозиторий»: scan_run — утверждает карту этого скана, None —
-    пропускает шаг. И совет сразу ищет вопросы. idea — идея, которую человек видел."""
+    пропускает шаг. Дальше — шаг «Дизайн». idea — идея, которую человек видел."""
+
+    scan_run: str | None = None
+    idea: str
+
+
+# Сколько ссылок на макет можно дать разом: страницы и фреймы одного файла.
+LINKS_MAX = 10
+
+
+class ScanDesign(GroupsEdit):
+    """Человек запускает скан макета потока: ссылки на страницы или фреймы одного файла Figma
+    (без node-id — весь файл). idea — идея, которую человек видел."""
+
+    links: list[str] = Field(min_length=1, max_length=LINKS_MAX)
+    idea: str
+
+
+class ApproveDesign(GroupsEdit):
+    """Человек проходит шаг «Дизайн»: scan_run — утверждает описание этого скана макета, None
+    — пропускает шаг. И совет сразу ищет вопросы. idea — идея, которую человек видел."""
 
     scan_run: str | None = None
     idea: str
@@ -766,6 +925,8 @@ class Settings(BaseModel):
     models: list[Model]
     # Каталог репозиториев для скана (COUNCIL_REPOS): пути — от него. None — путь абсолютный.
     repositories: str | None = None
+    # Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать.
+    figma: bool = False
     min_participants: int
     default_participants: list[str]
     default_judge: str

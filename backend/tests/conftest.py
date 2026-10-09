@@ -12,6 +12,8 @@ os.environ["COUNCIL_DATA"] = DATA
 # пустое значение в окружении сильнее .env и значит «по умолчанию».
 for variable in ("COUNCIL_PARTICIPANT_1", "COUNCIL_PARTICIPANT_2", "COUNCIL_JUDGE"):
     os.environ[variable] = ""
+# И без токена Figma: тесты не ходят в настоящую Figma, а ждут её только там, где подменили.
+os.environ["FIGMA_TOKEN"] = ""
 
 from spec_council.app import app  # noqa: E402
 from spec_council.deps import get_agents  # noqa: E402

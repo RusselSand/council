@@ -24,6 +24,14 @@
    существенны, даёт задания follow_up (repository_judge.md); участники доисследуют их, судья
    проверяет снова — до двух раз. Карта идёт во все следующие шаги: {{repository}}.
 
+Скан макета (DesignRun) — необязательный, после шага «Репозиторий»; совет сам снимает файл
+Figma через REST API, модели читают снимок:
+1. design_discovery — каждый участник по снимку устанавливает, какой интерфейс и какое
+   поведение предусмотрены в макете для идеи (design_discovery.md);
+2. design_judge — судья проверяет их описания по снимку, сводит в одно и, если пробелы
+   существенны, даёт задания follow_up (design_judge.md) — так же до двух раз. Описание идёт
+   во все следующие шаги: {{design}}.
+
 Вопросы потока (QuestionRun) — к утверждённой идее:
 1. question_discovery — каждый участник ищет открытые вопросы: из текста, восстановленные
    по предложениям и недостающие (question_discovery.md);
@@ -74,6 +82,13 @@ from uuid import uuid4
 from .decisions import Analysis, analysis_of, judged_analysis
 from .decisions import Context as DecisionContext
 from .decisions import as_prompt as analysis_prompt
+from .design import Context as DesignContext
+from .design import as_prompt as design_prompt
+from .design import context_prompt as design_context
+from .design import judged_design
+from .design import map_of as design_map_of
+from .figma import Fetcher, FigmaError, Link
+from .figma import snapshot as figma_snapshot
 from .grouping import StructureOption, judged_structure, structure_options
 from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
@@ -86,6 +101,7 @@ from .models import (
     Choice,
     Decision,
     DecisionAnalysis,
+    DesignScan,
     Group,
     GroupRelation,
     IdeaDiscovery,
@@ -229,10 +245,18 @@ def start_scan(participants: list[str], judge: str, idea: str,
                                                             StepName.repository_judge)))
 
 
+def start_design(participants: list[str], judge: str, idea: str,
+                 links: Sequence[Link]) -> DesignScan:
+    return DesignScan(state="running", run=uuid4().hex[:8], idea=idea,
+                      links=[link.url for link in links],
+                      steps=steps(participants, judge, (StepName.design_discovery,
+                                                        StepName.design_judge)))
+
+
 def start_questions(participants: list[str], judge: str, idea: str,
-                    repository: str = SKIPPED) -> QuestionDiscovery:
+                    repository: str = SKIPPED, design: str = SKIPPED) -> QuestionDiscovery:
     return QuestionDiscovery(state="running", run=uuid4().hex[:8], idea=idea,
-                             repository=repository,
+                             repository=repository, design=design,
                              steps=steps(participants, judge,
                                          (StepName.question_discovery, StepName.question_judge)))
 
@@ -298,8 +322,8 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, QuestionDiscovery,
-                     ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
+class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, DesignScan,
+                     QuestionDiscovery, ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
                      IssueDiscovery)]:
     """Общий ход совета: вызовы участников и судьи, ключи ответов, лоток, состояние шагов.
     Что именно делают шаги — в work() наследника; он возвращает поля итога."""
@@ -361,6 +385,40 @@ class CouncilRun[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, Question
                 yield folder
             finally:
                 self.workspace = None
+
+    def _explored(self, discovery: StepName, judge: StepName, values: dict[str, str],
+                  parse: Callable[[dict], Any], judged: Callable[[dict], Any],
+                  shown: Callable[[Any], dict]) -> dict[str, Any]:
+        """Исследование в несколько проходов — репозитория или макета: участники по
+        отдельности, судья проверяет их по снимку и сводит в одно, а если пробелы существенны,
+        участники доисследуют именно их — до SCAN_ROUNDS проходов; судья видит и прежнее
+        описание. Одинаковые описания судья видит одним: число согласных — не довод. Промпты
+        — по именам шагов."""
+        requests: list[dict] = []
+        previous: list | dict = []
+        failures: dict[str, list[str]] = {}
+        for n in range(1, SCAN_ROUNDS + 1):
+            answers = self._ask_all(
+                discovery,
+                render(discovery.value, **values, investigation_requests=as_json(requests)),
+                parse)
+            self._keep_failures(discovery, f"проход {n}", failures)
+            distinct = {as_json(shown(m)): shown(m) for m in answers.values()}
+            variants = shuffled(list(distinct.values()))
+            prompt = render(judge.value, **values, previous_findings=as_json(previous),
+                            discovery_results=as_json(
+                                [{"discovery": i, **v} for i, v in enumerate(variants, 1)]))
+            verdict = self._ask_judge(judge, prompt, judged)
+            with self._lock:
+                self.state.rounds, self.state.complete = n, verdict.complete
+                self.state.result, self.state.follow_up = verdict.result, list(verdict.follow_up)
+                self._publish()
+            if verdict.complete:
+                break
+            requests = [item.model_dump(mode="json") for item in verdict.follow_up]
+            previous = shown(verdict.result)
+        return {"rounds": self.state.rounds, "complete": self.state.complete,
+                "result": self.state.result, "follow_up": self.state.follow_up}
 
     # --- вызовы моделей
 
@@ -685,18 +743,20 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
     def __init__(self, council_id: str, idea: str, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
                  report: Callable[[QuestionDiscovery], None], *, repository: str = SKIPPED,
-                 repository_map: str = context_prompt(None)) -> None:
+                 repository_map: str = context_prompt(None), design: str = SKIPPED,
+                 design_map: str = design_context(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_questions(participants, judge, idea, repository))
+                         start_questions(participants, judge, idea, repository, design))
         self.idea = idea
         self.repository = repository_map
+        self.design = design_map
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
         group = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
                          for f in self.fragments.values()])
         prompt = render("question_discovery", idea=self.idea, fragments=group,
-                        repository=self.repository)
+                        repository=self.repository, design=self.design)
         answers = self._ask_all(StepName.question_discovery, prompt,
                                 lambda data: question_list(data, self.fragments))
         lists = list(answers.values())
@@ -707,7 +767,7 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
             candidates = shuffled([{"questions": as_prompt(questions)} for questions in lists])
             numbered_lists = [{"agent": n, **c} for n, c in enumerate(candidates, 1)]
             prompt = render("question_judge", idea=self.idea, fragments=group,
-                            repository=self.repository,
+                            repository=self.repository, design=self.design,
                             question_candidates=as_json(numbered_lists))
             chosen = self._ask_judge(StepName.question_judge, prompt,
                                      lambda data: question_list(data, self.fragments))
@@ -731,11 +791,13 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
     def __init__(self, council_id: str, idea: str, scope: list[OpenQuestion],
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[ProposalDiscovery], None], *,
-                 repository: str = context_prompt(None)) -> None:
+                 repository: str = context_prompt(None),
+                 design: str = design_context(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_proposals(participants, judge, scope))
         self.idea = idea
         self.repository = repository
+        self.design = design
         self.scope = scope
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
@@ -761,6 +823,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                                                if i in self.fragments]),
                 "constraints_and_risks": known,
                 "repository": self.repository,
+            "design": self.design,
             }
             answers = self._ask_all(
                 StepName.proposal_discovery,
@@ -829,11 +892,13 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                  choices: list[Choice], proposals: ProposalDiscovery | None,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[DecisionAnalysis], None], *,
-                 repository: str = context_prompt(None)) -> None:
+                 repository: str = context_prompt(None),
+                 design: str = design_context(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_analysis(participants, judge, choices))
         self.idea = idea
         self.repository = repository
+        self.design = design
         self.scope = scope
         self.choices = {choice.question_id: choice.proposal for choice in choices}
         self.found = {options.question_id: options.proposals
@@ -880,6 +945,7 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
             "related_questions": as_json([self._related(q) for q in self.scope
                                           if q.id != question.id]),
             "repository": self.repository,
+            "design": self.design,
         }
         answers = self._ask_all(StepName.decision_analysis,
                                 render("decision_analysis", **values, accepted_decisions="[]"),
@@ -970,11 +1036,13 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
                  decisions: list[Decision], proposals: ProposalDiscovery | None,
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[OutcomeDiscovery], None], *,
-                 repository: str = context_prompt(None)) -> None:
+                 repository: str = context_prompt(None),
+                 design: str = design_context(None)) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_outcomes(participants, judge, decisions))
         self.idea = idea
         self.repository = repository
+        self.design = design
         self.scope = scope
         self.decisions = {decision.question_id: decision for decision in decisions}
         self.found = {options.question_id: options.proposals
@@ -996,6 +1064,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             "accepted_adrs": as_json(adrs),
             "constraints_and_risks": limits_prompt(limits),
             "repository": self.repository,
+            "design": self.design,
         }
         answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
                                 partial(outcome_list, context=context))
@@ -1050,42 +1119,64 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
 
     def work(self) -> dict[str, Any]:
         with self._reading(self.sources, self.copy) as folder:
-            return self._rounds(RepositoryContext(self.copied, (folder,)))
+            context = RepositoryContext(self.copied, (folder,))
+            values = {
+                "idea": self.idea,
+                "fragments": fragments_prompt(self.fragments),
+                "inventory": sources_prompt(self.sources),
+                "commit_sha": commits_prompt(self.sources),
+            }
+            return self._explored(StepName.repository_discovery, StepName.repository_judge,
+                                  values, partial(map_of, context=context),
+                                  partial(judged_map, context=context), map_prompt)
 
-    def _rounds(self, context: RepositoryContext) -> dict[str, Any]:
-        values = {
-            "idea": self.idea,
-            "fragments": as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
-                                  for f in self.fragments]),
-            "inventory": sources_prompt(self.sources),
-            "commit_sha": commits_prompt(self.sources),
-        }
-        requests: list[dict] = []
-        previous: list | dict = []
-        failures: dict[str, list[str]] = {}
-        for n in range(1, SCAN_ROUNDS + 1):
-            answers = self._ask_all(
-                StepName.repository_discovery,
-                render("repository_discovery", **values, investigation_requests=as_json(requests)),
-                partial(map_of, context=context))
-            self._keep_failures(StepName.repository_discovery, f"проход {n}", failures)
-            distinct = {as_json(map_prompt(m)): map_prompt(m) for m in answers.values()}
-            variants = shuffled(list(distinct.values()))
-            prompt = render("repository_judge", **values, previous_findings=as_json(previous),
-                            discovery_results=as_json(
-                                [{"discovery": i, **v} for i, v in enumerate(variants, 1)]))
-            judged = self._ask_judge(StepName.repository_judge, prompt,
-                                     partial(judged_map, context=context))
+
+def fragments_prompt(fragments: Iterable[LabeledFragment]) -> str:
+    return as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in fragments])
+
+
+class DesignRun(CouncilRun[DesignScan]):
+    """Скан макета Figma под идею потока. Снимок файла совет делает сам, через REST API, с
+    одной версии: страницы из ссылок целиком — структура и узлы как есть, — картинки фреймов
+    и сводка файла. Модели читают снимок, а не Figma: все видят одно и то же, ответы ключуются
+    его отпечатком, а токена и сети в ходе модели нет. Дальше — как у скана репозитория:
+    участники по отдельности, судья проверяет по снимку и сводит, доисследование — до двух
+    раз. Снимок удаляется, когда скан закончен."""
+
+    what = "скан макета"
+
+    def __init__(self, council_id: str, idea: str, links: Sequence[Link],
+                 fragments: list[LabeledFragment], participants: list[str], judge: str,
+                 runner: Runner, report: Callable[[DesignScan], None], *,
+                 fetch: Fetcher) -> None:
+        super().__init__(council_id, participants, judge, runner, report,
+                         start_design(participants, judge, idea, links))
+        self.idea = idea
+        self.links = links
+        self.fragments = fragments
+        self.fetch = fetch
+
+    def work(self) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory(prefix="council-design-") as place:
+            folder = Path(place)
+            try:
+                shot = figma_snapshot(self.links, self.fetch, folder)
+            except FigmaError as exc:
+                raise StageFailed(str(exc)) from exc
+            self.fingerprint = shot.fingerprint
             with self._lock:
-                self.state.rounds, self.state.complete = n, judged.complete
-                self.state.result, self.state.follow_up = judged.result, list(judged.follow_up)
+                self.state.source = shot.source
                 self._publish()
-            if judged.complete:
-                break
-            requests = [item.model_dump(mode="json") for item in judged.follow_up]
-            previous = map_prompt(judged.result)
-        return {"rounds": self.state.rounds, "complete": self.state.complete,
-                "result": self.state.result, "follow_up": self.state.follow_up}
+            context = DesignContext(shot.nodes, shot.pages)
+            values = {"idea": self.idea, "fragments": fragments_prompt(self.fragments),
+                      "figma_source": shot.prompt}
+            self.workspace = folder
+            try:
+                return self._explored(StepName.design_discovery, StepName.design_judge, values,
+                                      partial(design_map_of, context=context),
+                                      partial(judged_design, context=context), design_prompt)
+            finally:
+                self.workspace = None
 
 
 class IssueRun(CouncilRun[IssueDiscovery]):
@@ -1104,6 +1195,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                  report: Callable[[IssueDiscovery], None], *,
                  sources: Sequence[Source] = (),
                  repository: str = context_prompt(None),
+                 design: str = design_context(None),
                  copy: Copier = snapshot_all) -> None:
         """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
@@ -1118,6 +1210,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         self.fragments = {fragment.id: fragment for fragment in fragments}
         self.sources = sources
         self.repository = repository
+        self.design = design
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
@@ -1161,6 +1254,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             "accepted_adrs": as_json(adrs),
             "constraints_and_risks": limits_prompt(limits),
             "repository_context": self._code_note() + self.repository,
+            "design": self.design,
         }
         parse = partial(issue_set, context=context)
         answers = self._ask_all(StepName.issue_discovery, render("issue_discovery", **values),

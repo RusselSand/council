@@ -1,6 +1,6 @@
 import {
   councilPath, issueReady, seeking, structureIsStale,
-  type Council, type DecisionAnalysis, type IdeaDiscovery, type IssueDiscovery, type OutcomeDiscovery,
+  type Council, type DecisionAnalysis, type DesignScan, type IdeaDiscovery, type IssueDiscovery, type OutcomeDiscovery,
   type ProposalDiscovery, type QuestionDiscovery, type RepositoryScan, type Slicing, type Stream, type Structure,
 } from './api'
 import type { Stage } from './pages/CouncilPage'
@@ -13,7 +13,7 @@ import type { Stage } from './pages/CouncilPage'
 export type Light = 'running' | 'done' | 'yours' | 'failed' | 'idle'
 
 /** Шаги цепочки потока. Работает пока первый — группа и её идея. */
-export const CHAIN = ['group', 'repository', 'questions', 'options', 'decisions', 'outcomes', 'issues'] as const
+export const CHAIN = ['group', 'repository', 'design', 'questions', 'options', 'decisions', 'outcomes', 'issues'] as const
 export type ChainStep = (typeof CHAIN)[number]
 
 /** Что важнее показать, если состояний несколько: сначала то, что требует человека. */
@@ -21,7 +21,7 @@ const ORDER: Light[] = ['failed', 'yours', 'running', 'done', 'idle']
 export const strongest = (lights: Light[]): Light => ORDER.find(light => lights.includes(light)) ?? 'idle'
 
 /** Ход модели: идёт — зелёный, упал — красный. Готов или не было — решает этап. */
-type Run = Slicing | Structure | IdeaDiscovery | RepositoryScan | QuestionDiscovery | ProposalDiscovery
+type Run = Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan | QuestionDiscovery | ProposalDiscovery
   | DecisionAnalysis | OutcomeDiscovery | IssueDiscovery
 
 const ofRun = (run: Run | null): Light | null => {
@@ -32,12 +32,14 @@ const ofRun = (run: Run | null): Light | null => {
 
 /**
  * Где поток: пока нет идеи — на группе, пока не пройден (сканом или пропуском) шаг «Репозиторий» —
- * на нём, пока не отобраны вопросы — на вопросах, пока не выбраны варианты — на вариантах, пока не
- * зафиксированы решения — на решениях, пока итоги не утверждены — на итогах, дальше — задачи.
+ * на нём, потом так же шаг «Дизайн», пока не отобраны вопросы — на вопросах, пока не выбраны
+ * варианты — на вариантах, пока не зафиксированы решения — на решениях, пока итоги не утверждены —
+ * на итогах, дальше — задачи.
  */
 export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.idea) return 'group'
   if (!stream.repository) return 'repository'
+  if (!stream.design) return 'design'
   if (!stream.scope) return 'questions'
   if (!stream.choices) return 'options'
   if (!stream.decisions) return 'decisions'
@@ -55,7 +57,8 @@ export const currentStep = (stream: Stream): ChainStep => {
 export const chainLight = (stream: Stream, step: ChainStep): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
   if (step === 'repository' && stream.idea) return stream.repository ? 'done' : ofRun(stream.scan) ?? 'yours'
-  if (step === 'questions' && stream.repository) return stream.scope ? 'done' : ofRun(stream.questions) ?? 'yours'
+  if (step === 'design' && stream.repository) return stream.design ? 'done' : ofRun(stream.design_scan) ?? 'yours'
+  if (step === 'questions' && stream.design) return stream.scope ? 'done' : ofRun(stream.questions) ?? 'yours'
   if (step === 'options' && stream.scope) return stream.choices ? 'done' : ofRun(stream.proposals) ?? 'yours'
   if (step === 'decisions' && stream.choices) return stream.decisions ? 'done' : ofRun(stream.analysis) ?? 'yours'
   if (step === 'outcomes' && stream.decisions) return stream.issues ? 'done' : ofRun(stream.outcomes) ?? 'yours'
@@ -113,7 +116,8 @@ export const councilLight = (council: Council): Light =>
 export interface Attention {
   light: 'yours' | 'failed'
   what: 'slicingFailed' | 'slicesDone' | 'groupingFailed' | 'groupsStale' | 'groupsReady'
-    | 'ideaFailed' | 'ideaWaits' | 'repositoryFailed' | 'repositoryWait' | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
+    | 'ideaFailed' | 'ideaWaits' | 'repositoryFailed' | 'repositoryWait' | 'designFailed' | 'designWait'
+    | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
     | 'decisionsFailed' | 'decisionsWait' | 'outcomesFailed' | 'outcomesWait' | 'issuesFailed' | 'issuesWait'
   /** Буква потока — у того, что про поток. */
   group?: string
