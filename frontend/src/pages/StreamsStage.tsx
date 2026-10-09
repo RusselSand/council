@@ -1524,7 +1524,9 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, p
           </div>
           <p className="idea-fixed">{idea.text}</p>
         </div>
-        <ProjectDecisions key={stream.decisions_search?.run ?? ''} council={council} structure={structure}
+        {/* Ключ — и состояние: отбор закончился — рекомендованные отмечаются заново, уже по найденному. */}
+        <ProjectDecisions key={`${stream.decisions_search?.run ?? ''}:${stream.decisions_search?.state ?? ''}`}
+                          council={council} structure={structure}
                           stream={stream} group={group} onChange={onChange} />
         {list}
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}

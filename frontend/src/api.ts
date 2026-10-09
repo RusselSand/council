@@ -546,9 +546,13 @@ export const structureIsStale = (council: Council): boolean => {
 export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
-/** Ходы потока: поиск идеи, скан репозитория, поиск вопросов, вариантов, проверка выбора и сборка итогов. */
+/**
+ * Ходы потока: поиск идеи, сканы репозитория и макета, отбор решений проекта, поиск вопросов и вариантов,
+ * проверка выбора, сборка итогов, нарезка задач и перевод заметок. Какой идёт — страница опрашивает сервер.
+ */
 export const searchesOf = (stream: Stream) =>
-  [stream.discovery, stream.scan, stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
+  [stream.discovery, stream.scan, stream.design_scan, stream.decisions_search, stream.questions, stream.proposals,
+   stream.analysis, stream.outcomes, stream.issues, stream.notes_draft]
 
 /** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
 export const seeking = (council: Council): boolean =>

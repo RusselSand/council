@@ -86,7 +86,8 @@ def trails_of(files: Sequence[tuple[Path, str, str]],
     found: dict[str, dict[tuple[str, str], CodeTrail]] = {}
     for root, path, shown in files:
         try:
-            output = git_bytes(root, "log", "-n", str(COMMITS_MAX),
+            # --follow: коммит задачи мог трогать файл ещё под прежним именем.
+            output = git_bytes(root, "log", "--follow", "-n", str(COMMITS_MAX),
                                "--format=%h%x1f%s%x1f%b%x1e", "--", path)
         except RepositoryError:
             continue

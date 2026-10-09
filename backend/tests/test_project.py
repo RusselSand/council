@@ -109,6 +109,15 @@ def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path)
     assert trails_of([(tmp_path / "нет", "app.py", "app.py")], issue_outcomes(catalog)) == {}
 
 
+def test_the_trail_follows_a_file_through_its_renames(tmp_path):
+    repo = project_with(tmp_path, "Поиск по базе", "ISS-0003")
+    git(repo, "mv", "app.py", "search.py")
+    git(repo, "commit", "-q", "-m", "Переименовали")
+    catalog = Catalog.load(put(tmp_path / "notes"))
+    trails = trails_of([(repo, "search.py", "search.py")], issue_outcomes(catalog))
+    assert [(t.issue, t.file) for t in trails.get("ADR-0001", [])] == [("ISS-0003", "search.py")]
+
+
 def test_an_issue_of_several_outcomes_leaves_its_trail_on_the_decisions_of_each(tmp_path):
     notes = [*PAST[:5],
              Note("OQ-0004", "open_question", "Как ранжировать ответы?", ("IDEA-0001",)),

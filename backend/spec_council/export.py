@@ -19,6 +19,7 @@ import hashlib
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -221,8 +222,12 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
 def numbered_issues(stream: Stream, catalog: Catalog,
                     previous: NotesExport | None) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию) — прежний номер, новая —
-    следующий после самого большого в каталоге и прежней выгрузке."""
+    следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого
+    тогда в каталог не легло (итог не выгружался), мог занять другой поток — тогда новый."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
+    ours = {note.id for note in previous.notes} if previous else set()
+    foreign = {issue for note in catalog.notes.values() if note.id not in ours
+               for issue in issues_in(note.body)}
     used = [int(found.group(1)) for note in catalog.notes.values()
             for issue in issues_in(note.body) if (found := ISSUE.fullmatch(issue))]
     used += [int(found.group(1)) for number in known.values()
@@ -233,7 +238,7 @@ def numbered_issues(stream: Stream, catalog: Catalog,
     keys = keyed([f"i:{same_question(issue.title)}" for issue in issues],
                  [same_question(issue.user_story) for issue in issues], set())
     for issue, key in zip(issues, keys, strict=True):
-        if key in known:
+        if key in known and known[key] not in foreign:
             identifier = known[key]
         else:
             top += 1
@@ -309,8 +314,8 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено, —
     и исчезнувшие, что человек оставил в каталоге: они всё ещё потока.
 
-    Сначала всё, что может не выйти, — пустой текст, временные файлы, удаление; только потом
-    временные файлы подменяют заметки: отказ не оставит каталог выгруженным наполовину."""
+    Сначала пустой текст и временные файлы, потом подмена и удаление одним шагом с откатом
+    (committed): отказ на любом шаге не оставит каталог выгруженным наполовину."""
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
     texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
@@ -326,13 +331,11 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
             path = path_of(root, Note(plan.id, plan.type, ""))
             note = Note(plan.id, plan.type, texts[plan.key], tuple(plan.links))
             staged.append((staged_file(path, rendered(note)), path))
-        for note_id in delete:
-            removed(path_of(root, Note(note_id, gone[note_id].type, "")))
     except NotesError:
         for part, _ in staged:
             part.unlink(missing_ok=True)
         raise
-    placed(staged)
+    committed(staged, [path_of(root, Note(note_id, gone[note_id].type, "")) for note_id in delete])
     exported: list[ExportedNote] = []
     for plan in notes:
         if plan.action == "edited":
@@ -411,7 +414,7 @@ def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
 
 
 def staged_file(path: Path, text: str) -> Path:
-    """Заметка во временном файле рядом: подменит её placed, когда всё остальное вышло."""
+    """Заметка во временном файле рядом: на её место его поставит committed."""
     part = path.with_suffix(".md.part")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,20 +425,47 @@ def staged_file(path: Path, text: str) -> Path:
     return part
 
 
-def placed(staged: Sequence[tuple[Path, Path]]) -> None:
-    """Временные файлы — на место заметок. Подмена в той же папке: оборванная запись заметку
-    не испортит."""
-    for n, (part, path) in enumerate(staged):
-        try:
-            part.replace(path)
-        except OSError as exc:
-            for rest, _ in staged[n:]:
-                rest.unlink(missing_ok=True)
-            raise NotesError(f"Заметку {path.name} не записать: {exc.strerror or exc}") from exc
-
-
-def removed(path: Path) -> None:
+def committed(staged: Sequence[tuple[Path, Path]], deleted: Sequence[Path]) -> None:
+    """Подмена заметок временными файлами и удаление — одним шагом, который откатывается:
+    прежние файлы сначала уходят в .bak, временные встают на их место, и только потом .bak
+    убираются. Не вышло на любом шаге — всё назад, каталог как был. Каталог читает только .md:
+    .part и .bak, если их не убрать, в заметки не попадут."""
+    backups: list[tuple[Path, Path]] = []
+    placed: list[Path] = []
     try:
-        path.unlink(missing_ok=True)
+        for path, verb in [*((path, "записать") for _, path in staged),
+                           *((path, "удалить") for path in deleted)]:
+            if path.exists():
+                backup = path.with_suffix(".md.bak")
+                moved(path, backup, path, verb)
+                backups.append((path, backup))
+        for part, path in staged:
+            moved(part, path, path, "записать")
+            placed.append(path)
+    except NotesError:
+        rolled_back(staged, placed, backups)
+        raise
+    for _, backup in backups:
+        with suppress(OSError):
+            backup.unlink()
+
+
+def moved(source: Path, target: Path, note: Path, verb: str) -> None:
+    try:
+        source.replace(target)
     except OSError as exc:
-        raise NotesError(f"Заметку {path.name} не удалить: {exc.strerror or exc}") from exc
+        raise NotesError(f"Заметку {note.name} не {verb}: {exc.strerror or exc}") from exc
+
+
+def rolled_back(staged: Sequence[tuple[Path, Path]], placed: Sequence[Path],
+                backups: Sequence[tuple[Path, Path]]) -> None:
+    """Всё назад, насколько выйдет: вставшее — убрать, прежнее — из .bak, временное — стереть."""
+    for path in placed:
+        with suppress(OSError):
+            path.unlink()
+    for path, backup in backups:
+        with suppress(OSError):
+            backup.replace(path)
+    for part, _ in staged:
+        with suppress(OSError):
+            part.unlink(missing_ok=True)

@@ -1244,6 +1244,24 @@ describe('Поток: решения и итоги', () => {
       run: 'g1', revision: 0, search_run: 'ps1', keep: ['ADR-0001'], idea: TEXT_IDEA.text } }])
   })
 
+  it('отбор решений идёт — опрос его ждёт; готов — рекомендованные уже отмечены', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const running: DecisionsSearch = { ...SEARCH, state: 'running', decisions: [] }
+      const replies = [confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: running } }),
+                       confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: SEARCH } })]
+      let polls = 0
+      openWith(() => replies[Math.min(polls++, 1)], () => json(atStart()))
+      expect(await screen.findByText(ru['project.searching'], { exact: false })).toBeTruthy()
+      vi.advanceTimersByTime(POLL_MS)
+      await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(2))
+      const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+      expect(boxes.map(box => box.checked)).toEqual([true, false])        // «неясно» — не отмечено
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('вопрос из текста — со своей формулировкой для заметки, пересмотр — с номером решения', async () => {
     const questions: QuestionDiscovery = { ...QUESTIONS_FOUND, questions: [
       { ...QUESTIONS_FOUND.questions[0], note: 'Где лежит состояние воркера?', revisits: 'ADR-0001' }] }

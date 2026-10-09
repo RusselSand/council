@@ -223,23 +223,44 @@ def twins(order=(0, 1)):
         "issues": ISSUES.model_copy(update={"issues": [issues[i] for i in order]})})
 
 
-def test_a_note_that_cannot_be_deleted_stops_the_export_before_any_write(root, monkeypatch):
-    first, _, _, _ = export(root)
-    other = STREAM.model_copy(update={"decisions": [
-        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
-    unlink = Path.unlink
+def snapshot(root):
+    return {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+            for path in root.rglob("*") if path.is_file()}
 
-    def refused(path, missing_ok=False):
-        if path.name == "ADR-0002.md":
+
+def refusing(monkeypatch, name):
+    """Файл name не сдвинуть с места: нет прав или его заняли."""
+    replace = Path.replace
+
+    def refused(path, target):
+        if path.name == name:
             raise PermissionError(13, "Permission denied")
-        return unlink(path, missing_ok=missing_ok)
+        return replace(path, target)
 
-    monkeypatch.setattr(Path, "unlink", refused)
+    monkeypatch.setattr(Path, "replace", refused)
+
+
+def chose_p1():
+    return STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
+
+
+def test_a_note_that_cannot_be_deleted_leaves_the_catalog_as_it_was(root, monkeypatch):
+    first, _, _, _ = export(root)
+    before = snapshot(root)
+    refusing(monkeypatch, "ADR-0002.md")
     with pytest.raises(NotesError, match="ADR-0002.md не удалить"):
-        export(root, other, previous=first, delete=["ADR-0002"])
-    assert not (root / "adrs" / "ADR-0004.md").exists()                  # новое не записано
-    assert list(root.rglob("*.part")) == []
-    assert (root / "adrs" / "ADR-0002.md").exists()
+        export(root, chose_p1(), previous=first, delete=["ADR-0002"])
+    assert snapshot(root) == before                     # ни новых, ни временных файлов
+
+
+def test_a_note_that_cannot_be_replaced_rolls_the_whole_export_back(root, monkeypatch):
+    first, _, _, _ = export(root)
+    before = snapshot(root)
+    refusing(monkeypatch, "OUT-0002.md.part")          # новый ADR уже встал, итог — нет
+    with pytest.raises(NotesError, match="OUT-0002.md не записать"):
+        export(root, chose_p1(), previous=first, delete=["ADR-0002"])
+    assert snapshot(root) == before                     # и удалённое вернулось
 
 
 def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
@@ -256,6 +277,19 @@ def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
     assert {n.id: n.text.split("\n")[2] for n in swapped if n.type == "outcome"} == {
         "OUT-0002": "После merge CI сам выкладывает.", "OUT-0003": "И откат по merge."}
     assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0009", "I2"), ("ISS-0008", "I1")]
+
+
+def test_a_reserved_issue_number_taken_by_another_stream_is_not_reused(root):
+    held = ISSUES.model_copy(update={"issues": [*ISSUES.issues, Issue(
+        id="I2", title="Где хранить секреты", user_story="…", outcome_ids=["O2"])]})
+    stream = STREAM.model_copy(update={"issues": held})
+    first, _, _, _ = export(root, stream)
+    assert [(n.id, n.issue_id) for n in first.numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
+    # Итог O2 не выгружен, ISS-0009 в каталоге нет — и другой поток его занял.
+    other = Note("OUT-0099", "outcome", "Чужой итог\n\nЗадачи:\n- ISS-0009: Чужая", ("ADR-0001",))
+    path_of(root, other).write_text(rendered(other), encoding="utf-8")
+    numbers = numbered_issues(stream, Catalog.load(root), first)
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0010", "I2")]
 
 
 def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):

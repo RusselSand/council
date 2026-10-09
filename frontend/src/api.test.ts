@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, councilPath } from './api'
+import { api, ApiError, councilPath, seeking, type Council } from './api'
 
 afterEach(() => { vi.unstubAllGlobals() })
 
@@ -26,5 +26,14 @@ describe('councilPath', () => {
   it('кодирует id', () => {
     expect(councilPath('a/b c')).toBe('/councils/a%2Fb%20c/brief')
     expect(councilPath('demo-1', 'spec')).toBe('/councils/demo-1/spec')
+  })
+})
+
+describe('seeking', () => {
+  it('опрос идёт, пока работает любой ход потока: скан макета, отбор решений, перевод заметок', () => {
+    for (const run of ['design_scan', 'decisions_search', 'notes_draft'] as const) {
+      const council = { streams: [{ group: 'A', [run]: { state: 'running', run: 'r1' } }] } as unknown as Council
+      expect(seeking(council)).toBe(true)
+    }
   })
 })
