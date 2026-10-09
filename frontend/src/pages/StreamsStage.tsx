@@ -621,7 +621,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
                          setPaths(current => current.map(f => f.key === field.key ? { ...f, path: value } : f))
                        }} />
                 {paths.length > 1 && (
-                  <button type="button" className="btn-link" disabled={busy || sought}
+                  <button type="button" className="btn-link repo-remove" disabled={busy || sought}
                           aria-label={t('repository.removePath', { n: n + 1 })}
                           onClick={() => setPaths(current => current.filter(f => f.key !== field.key))}>×</button>
                 )}
