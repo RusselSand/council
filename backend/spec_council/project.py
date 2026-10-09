@@ -52,13 +52,14 @@ def question_of(catalog: Catalog, links: Sequence[str]) -> str:
     return question.body if question is not None else ""
 
 
-def issue_outcomes(catalog: Catalog) -> dict[str, tuple[str, tuple[str, ...]]]:
-    """Задача → её итог и решения итога — по строкам задач в заметках итогов."""
-    found: dict[str, tuple[str, tuple[str, ...]]] = {}
-    for note in catalog.notes.values():
+def issue_outcomes(catalog: Catalog) -> dict[str, list[tuple[str, tuple[str, ...]]]]:
+    """Задача → её итоги и решения каждого — по строкам задач в заметках итогов. Задача может
+    делать несколько итогов: тогда в каждом строка с её номером."""
+    found: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    for note in sorted(catalog.notes.values(), key=lambda note: note.id):
         if note.type == "outcome":
             for issue in issues_in(note.body):
-                found.setdefault(issue, (note.id, note.links))
+                found.setdefault(issue, []).append((note.id, note.links))
     return found
 
 
@@ -78,7 +79,8 @@ def evidence_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
 
 
 def trails_of(files: Sequence[tuple[Path, str, str]],
-              outcomes: Mapping[str, tuple[str, tuple[str, ...]]]) -> dict[str, list[CodeTrail]]:
+              outcomes: Mapping[str, Sequence[tuple[str, tuple[str, ...]]]]
+              ) -> dict[str, list[CodeTrail]]:
     """След решений в коде: коммиты по файлам карты с номерами задач, которые есть в заметках.
     git не запускается или файла нет в истории — у этого файла следа просто нет."""
     found: dict[str, dict[tuple[str, str], CodeTrail]] = {}
@@ -91,11 +93,11 @@ def trails_of(files: Sequence[tuple[Path, str, str]],
         for record in output.decode("utf-8", "replace").split("\x1e"):
             commit, _, message = record.strip().partition("\x1f")
             for issue in issues_in(message):
-                outcome, adrs = outcomes.get(issue, ("", ()))
-                for adr in adrs:
-                    found.setdefault(adr, {}).setdefault(
-                        (issue, shown), CodeTrail(issue=issue, outcome=outcome, commit=commit,
-                                                  file=shown))
+                for outcome, adrs in outcomes.get(issue, ()):
+                    for adr in adrs:
+                        found.setdefault(adr, {}).setdefault(
+                            (issue, shown), CodeTrail(issue=issue, outcome=outcome,
+                                                      commit=commit, file=shown))
     return {adr: list(trail.values()) for adr, trail in found.items()}
 
 

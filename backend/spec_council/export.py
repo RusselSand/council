@@ -48,8 +48,29 @@ NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 
 
 def words_for(language: str) -> dict[str, str]:
+    """Связки на языке работы; язык, которого совет не знает, — по-английски: их доведёт
+    перевод (knows_words)."""
+    return WORDS.get(word_language(language), WORDS["english"])
+
+
+def knows_words(language: str) -> bool:
+    return word_language(language) in WORDS
+
+
+def word_language(language: str) -> str:
     name = language.strip().lower()
-    return WORDS.get(ALIASES.get(name, name), WORDS["english"])
+    return ALIASES.get(name, name)
+
+
+def unique(key: str, taken: set[str]) -> str:
+    """Ключ части — один на часть: две с одной формулировкой (два итога с одним названием)
+    иначе легли бы одной заметкой. У второй — «#2», у третьей — «#3»."""
+    found, n = key, 1
+    while found in taken:
+        n += 1
+        found = f"{key}#{n}"
+    taken.add(found)
+    return found
 
 
 @dataclass(frozen=True)
@@ -116,9 +137,10 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     adrs: list[Part] = []
     adr_of: dict[str, str] = {}          # ADR-n потока → ключ части
     external: set[str] = set()           # решения вопросов, что растут из прошлых решений
+    taken: set[str] = set()
     for n, question in enumerate(stream.scope or [], 1):
         asked, offered, adr = question_parts(question, options_of(question, fragments, found),
-                                             decisions.get(question.id), catalog, words)
+                                             decisions.get(question.id), catalog, words, taken)
         questions.append(asked)
         proposals += offered
         if adr is not None:
@@ -126,33 +148,34 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
             adr_of[f"ADR-{n}"] = adr.key
             if asked.links != ("idea",):
                 external.add(adr.key)
-    outcomes, skipped = outcome_parts(stream, numbers, adr_of, external, words)
+    outcomes, skipped = outcome_parts(stream, numbers, adr_of, external, words, taken)
     return [Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
             *outcomes], skipped
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
-                   decision: Decision | None, catalog: Catalog,
-                   words: Mapping[str, str]) -> tuple[Part, list[Part], Part | None]:
+                   decision: Decision | None, catalog: Catalog, words: Mapping[str, str],
+                   taken: set[str]) -> tuple[Part, list[Part], Part | None]:
     """Вопрос, его варианты и решение, если оно принято. Вопрос, который пересматривает
     прошлое решение, растёт из того ADR, а не из идеи."""
-    key = question_key(question)
+    key = unique(question_key(question), taken)
     revisited = catalog.notes.get(question.revisits or "")
     links = (revisited.id,) if revisited is not None and revisited.type == "adr" else ("idea",)
     asked = Part(key, "open_question", question.note or question.text, links)
     offered: list[Part] = []
     adr = None
     for option in options:
-        option_part = f"p:{key[2:]}:{option_key(option)}"
+        option_part = unique(f"p:{key[2:]}:{option_key(option)}", taken)
         offered.append(Part(option_part, "proposal", option["text"], (key,)))
         if decision is not None and decision.proposal == option["id"]:
-            adr = Part(f"a:{key[2:]}:{option_key(option)}", "adr",
+            adr = Part(f"a:{option_part[2:]}", "adr",
                        because(option["text"], decision.rationale, words), (option_part,))
     return asked, offered, adr
 
 
 def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mapping[str, str],
-                  external: set[str], words: Mapping[str, str]) -> tuple[list[Part], list[str]]:
+                  external: set[str], words: Mapping[str, str],
+                  taken: set[str]) -> tuple[list[Part], list[str]]:
     """Итоги со своими задачами. Итог ссылается только на решения своей идеи: без них он не
     выгружается."""
     by_outcome: dict[str, list[IssueNumber]] = {}
@@ -173,7 +196,7 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
             continue
         text = outcome_text(outcome.title, outcome.behavior, outcome.acceptance_criteria,
                             by_outcome.get(outcome.id, []), words)
-        parts.append(Part(f"o:{same_question(outcome.title)}", "outcome", text,
+        parts.append(Part(unique(f"o:{same_question(outcome.title)}", taken), "outcome", text,
                           tuple(dict.fromkeys(own))))
     return parts, skipped
 
@@ -189,8 +212,9 @@ def numbered_issues(stream: Stream, catalog: Catalog,
              if (found := ISSUE.fullmatch(number))]
     top = max(used, default=0)
     numbers: list[IssueNumber] = []
+    taken: set[str] = set()
     for issue in stream.issues.issues if stream.issues else []:
-        key = f"i:{same_question(issue.title)}"
+        key = unique(f"i:{same_question(issue.title)}", taken)
         if key in known:
             identifier = known[key]
         else:
@@ -298,6 +322,27 @@ def deletable(vanished: Sequence[VanishedNote], delete: Sequence[str]) -> dict[s
             raise NotesError(f"{note_id} не удалить: на неё ссылаются "
                              f"{', '.join(gone[note_id].linked_from)}")
     return gone
+
+
+def graph_problems(catalog: Catalog, notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
+                   edits: Mapping[str, str], delete: Sequence[str]) -> None:
+    """Граф после записи — по правилам: проверяем до того, как трогать файлы. Поломки, что
+    были в каталоге и до выгрузки, её не держат; держат поломки заметок потока и новые — например,
+    исчезнувший итог остался, а его ADR удаляют."""
+    deletable(vanished, delete)
+    after = dict(catalog.notes)
+    for plan in notes:
+        if plan.action != "edited":
+            after[plan.id] = Note(plan.id, plan.type, edits.get(plan.key, plan.text),
+                                  tuple(plan.links))
+    for note_id in delete:
+        after.pop(note_id, None)
+    ours = {plan.id for plan in notes}
+    before = set(catalog.problems())
+    found = [problem for problem in Catalog(after).problems()
+             if problem.split(":", 1)[0] in ours or problem not in before]
+    if found:
+        raise NotesError("Граф заметок вышел бы не по правилам: " + "; ".join(found))
 
 
 def untranslated(notes: Sequence[NotePlan]) -> dict[str, str]:

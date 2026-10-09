@@ -2,7 +2,7 @@
 
 import pytest
 
-from spec_council.export import drafted, numbered_issues, words_for, written
+from spec_council.export import drafted, graph_problems, numbered_issues, words_for, written
 from spec_council.models import (
     Decision,
     Issue,
@@ -85,6 +85,7 @@ def draft(root, stream=STREAM, previous=None):
 
 def export(root, stream=STREAM, previous=None, edits=None, delete=()):
     notes, vanished, numbers, skipped = draft(root, stream, previous)
+    graph_problems(Catalog.load(root), notes, vanished, edits or {}, delete)
     done = written(notes, vanished, edits or {}, delete, root, previous)
     return NotesExport(run="r", issues=stream.issues.run, language="Russian", notes=done,
                        numbers=numbers), notes, vanished, skipped
@@ -178,6 +179,40 @@ def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
     assert [(v.id, v.linked_from) for v in vanished] == [("ADR-0002", ["OQ-0009"])]
     with pytest.raises(NotesError, match="ссылаются OQ-0009"):
         export(root, other, previous=first, delete=["ADR-0002"])
+
+
+def test_a_vanished_parent_is_not_deleted_while_a_vanished_child_links_to_it(root):
+    first, _, _, _ = export(root)
+    # Выбрали другой вариант, а итог переназвали: прежние ADR и итог исчезли из потока оба.
+    retitled = OUTCOMES.model_copy(update={"outcomes": [
+        OUTCOMES.outcomes[0].model_copy(update={"title": "Деплой по тегу"}),
+        *OUTCOMES.outcomes[1:]]})
+    other = STREAM.model_copy(update={"outcomes": retitled, "decisions": [
+        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
+    _, vanished, _, _ = draft(root, other, previous=first)
+    assert [(v.id, v.linked_from) for v in vanished] == [("ADR-0002", []), ("OUT-0002", [])]
+    with pytest.raises(NotesError, match="OUT-0002: ссылка на несуществующую заметку ADR-0002"):
+        export(root, other, previous=first, delete=["ADR-0002"])
+    assert (root / "adrs" / "ADR-0002.md").exists()                     # файлы не тронуты
+    export(root, other, previous=first, delete=["ADR-0002", "OUT-0002"])
+    assert Catalog.load(root).problems() == []
+
+
+def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
+    twin = OUTCOMES.outcomes[0].model_copy(update={"id": "O3", "behavior": "И откат по merge."})
+    stream = STREAM.model_copy(update={
+        "outcomes": OUTCOMES.model_copy(update={"outcomes": [*OUTCOMES.outcomes, twin]}),
+        "issues": ISSUES.model_copy(update={"issues": [
+            *ISSUES.issues, ISSUES.issues[0].model_copy(update={"id": "I2",
+                                                                "outcome_ids": ["O3"]})]})})
+    first, notes, _, _ = export(root, stream)
+    assert len({note.key for note in notes}) == len(notes)
+    assert [n.id for n in notes if n.type == "outcome"] == ["OUT-0002", "OUT-0003"]
+    assert "И откат по merge." in (root / "outcomes" / "OUT-0003.md").read_text(encoding="utf-8")
+    assert [(n.id, n.issue_id) for n in first.numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
+    again, _, numbers, _ = draft(root, stream, previous=first)
+    assert {note.action for note in again} == {"same"}
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
 
 
 def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):

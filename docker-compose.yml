@@ -65,11 +65,13 @@ services:
         read_only: true
         bind: { create_host_path: true }
       # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
-      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне.
+      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне. Каталог не
+      # создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не смог бы туда писать.
+      # .notes есть в репозитории, свой путь создайте заранее.
       - type: bind
         source: ${COUNCIL_NOTES:-./.notes}
         target: /notes
-        bind: { create_host_path: true }
+        bind: { create_host_path: false }
     environment:
       <<: *paths
       # Bind-mount с Windows не шлёт события файловой системы, без опроса --reload молчит.
@@ -129,11 +131,13 @@ services:
         read_only: true
         bind: { create_host_path: true }
       # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
-      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне.
+      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне. Каталог не
+      # создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не смог бы туда писать.
+      # .notes есть в репозитории, свой путь создайте заранее.
       - type: bind
         source: ${COUNCIL_NOTES:-./.notes}
         target: /notes
-        bind: { create_host_path: true }
+        bind: { create_host_path: false }
     environment: *paths
 
 # Токен только на чтение приватного agent-workers: нужен сборке образов, в образ не попадает.

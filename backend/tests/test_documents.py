@@ -119,6 +119,23 @@ def test_a_stale_draft_or_a_changed_catalog_is_not_written(agents, notes_dir):
     assert path.read_text(encoding="utf-8") == rendered(other)
 
 
+def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents, notes_dir):
+    council_id = cut_c()
+    past = Note("OUT-0001", "outcome", "Чужой итог", ("ADR-0099",))
+    path = path_of(notes_dir, past)
+    path.parent.mkdir(parents=True)
+    path.write_text(rendered(past), encoding="utf-8")
+    drafts(council_id)
+    assert [n.id for n in streams_of(council_id)["C"].notes_draft.numbers] == ["ISS-0001"]
+    # Пока смотрели черновик, в чужой итог дописали задачу: ISS-0001 уже занят.
+    taken = Note("OUT-0001", "outcome", "Чужой итог\n\nЗадачи:\n- ISS-0001: Чужая",
+                 ("ADR-0099",))
+    path.write_text(rendered(taken), encoding="utf-8")
+    res = writes(council_id)
+    assert res.status_code == 409 and "поменялся" in res.json()["detail"]
+    assert not (notes_dir / "ideas").exists()
+
+
 class Translating(Agents):
     """Судья переводит заметки: каждый текст — с пометкой EN."""
 
@@ -155,6 +172,19 @@ def test_notes_in_another_language_are_translated_by_the_judge(notes_dir, transl
     again = streams_of(council_id)["C"].notes_draft
     assert {n.action for n in again.notes} == {"same"}
     assert again.steps == []                                       # судью не звали
+
+
+def test_a_language_the_council_has_no_wording_for_is_finished_by_the_judge(
+        notes_dir, translating, monkeypatch):
+    monkeypatch.setattr(documents, "language", lambda: "French")
+    monkeypatch.setattr(documents, "notes_language", lambda: "French")
+    council_id = cut_c()
+    drafts(council_id)
+    draft = streams_of(council_id)["C"].notes_draft
+    assert draft.state == "done" and draft.language == "French"
+    assert all(n.text.startswith("EN ") for n in draft.notes)
+    assert re.search(r"translate the notes .* into French", translating.prompts[
+        "notes_translation"])
 
 
 def test_without_models_a_translated_draft_is_recorded_failed(notes_dir, translating):

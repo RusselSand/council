@@ -1242,14 +1242,16 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
   const draft = stream.notes_draft
   const [edits, setEdits] = useState<Record<string, string>>({})
   const [remove, setRemove] = useState<ReadonlySet<string>>(new Set())
+  // Сборка и запись — порознь: отказ сборки виден и там, где черновика ещё нет.
+  const drafting = useAction(onChange, 'notes.draftFailed')
   const act = useAction(onChange, 'notes.writeFailed')
   const at = { run: structure.run, revision: structure.revision }
   const building = draft?.state === 'running'
   const stale = !!draft && stream.issues?.run !== draft.issues
   const ready = draft?.state === 'done' && !stale
   const written = !!draft && stream.notes?.run === draft.run && exported(stream)
-  const locked = act.busy || building || structureIsStale(council)
-  const build = () => void act.go(() => startOrFollow(
+  const locked = act.busy || drafting.busy || building || structureIsStale(council)
+  const build = () => void drafting.go(() => startOrFollow(
     () => api.draftNotes(council.id, at, group.id), council, c => streamOf(c, group.id)?.notes_draft))
   const write = () => void act.go(async () => {
     if (!draft) return council
@@ -1283,6 +1285,7 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
             {t(draft ? 'notes.rebuild' : 'notes.build')}
           </button>
         </div>
+        {drafting.error && <p className="error-text" role="alert">{drafting.error}</p>}
         {building && <p className="muted">{t('notes.translating', { language: draft.language })} {t('run.note')}</p>}
         {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
         {stale && <p className="fragment-note">{t('notes.stale')}</p>}

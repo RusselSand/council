@@ -629,6 +629,7 @@ export const en: Dict = {
   'notes.issues': 'Issue numbers',
   'notes.write': 'Write to the folder',
   'notes.done': 'Written',
+  'notes.draftFailed': 'Could not build the notes: the server is unavailable or answered with an error.',
   'notes.writeFailed': 'Could not write the notes: the server is unavailable or answered with an error.',
   'notes.count_one': '{{count}} note',
   'notes.count_few': '{{count}} notes',

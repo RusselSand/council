@@ -73,7 +73,7 @@ def test_the_catalog_tells_each_decision_with_its_idea_question_and_status(tmp_p
     assert [(r.adr_id, r.idea, r.question, r.status) for r in found] == [
         ("ADR-0001", "Ответы находятся без помощи людей.", "Где искать ответы?",
          "under_review")]
-    assert issue_outcomes(catalog) == {"ISS-0003": ("OUT-0001", ("ADR-0001",))}
+    assert issue_outcomes(catalog) == {"ISS-0003": [("OUT-0001", ("ADR-0001",))]}
 
 
 def scan_of(*repos, paths=("app.py",)):
@@ -85,13 +85,18 @@ def scan_of(*repos, paths=("app.py",)):
                                           for name, root in repos])
 
 
-def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path):
+def project_with(tmp_path, *message):
     repo = tmp_path / "project"
     repo.mkdir()
     git(repo, "init", "-q")
     (repo / "app.py").write_text("def find(): ...\n", encoding="utf-8")
     git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "Поиск по базе", "-m", "Closes ISS-0003")
+    git(repo, "commit", "-q", *(part for line in message for part in ("-m", line)))
+    return repo
+
+
+def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path):
+    repo = project_with(tmp_path, "Поиск по базе", "Closes ISS-0003")
     (repo / "app.py").write_text("def find(): return []\n", encoding="utf-8")
     git(repo, "commit", "-q", "-am", "Мелочь без номера и ISS-0999 чужая")
     catalog = Catalog.load(put(tmp_path / "notes"))
@@ -102,6 +107,22 @@ def test_the_trail_follows_commits_with_issue_numbers_to_the_decisions(tmp_path)
     assert (trail.issue, trail.outcome, trail.file) == ("ISS-0003", "OUT-0001", "app.py")
     assert records(catalog, trails)[0].found_in_code == [trail]
     assert trails_of([(tmp_path / "нет", "app.py", "app.py")], issue_outcomes(catalog)) == {}
+
+
+def test_an_issue_of_several_outcomes_leaves_its_trail_on_the_decisions_of_each(tmp_path):
+    notes = [*PAST[:5],
+             Note("OQ-0004", "open_question", "Как ранжировать ответы?", ("IDEA-0001",)),
+             Note("PRO-0004", "proposal", "Ранжируем по свежести.", ("OQ-0004",)),
+             Note("ADR-0004", "adr", "Ранжируем по свежести.", ("PRO-0004",)),
+             Note("OUT-0002", "outcome", "Ранжирование\n\nЗадачи:\n- ISS-0003: Поиск по базе",
+                  ("ADR-0004",))]
+    catalog = Catalog.load(put(tmp_path / "notes", notes))
+    assert issue_outcomes(catalog) == {"ISS-0003": [("OUT-0001", ("ADR-0001",)),
+                                                    ("OUT-0002", ("ADR-0004",))]}
+    repo = project_with(tmp_path, "Поиск с ранжированием", "ISS-0003")
+    trails = trails_of(evidence_files(scan_of(("", repo))), issue_outcomes(catalog))
+    assert {adr: [(t.issue, t.outcome) for t in found] for adr, found in trails.items()} == {
+        "ADR-0001": [("ISS-0003", "OUT-0001")], "ADR-0004": [("ISS-0003", "OUT-0002")]}
 
 
 def test_several_repositories_split_the_map_paths_by_folder(tmp_path):

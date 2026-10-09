@@ -625,6 +625,7 @@ export const ru = {
   'notes.issues': 'Номера задач',
   'notes.write': 'Записать в каталог',
   'notes.done': 'Записано',
+  'notes.draftFailed': 'Не удалось собрать заметки: сервер недоступен или ответил ошибкой.',
   'notes.writeFailed': 'Не удалось записать заметки: сервер недоступен или ответил ошибкой.',
   'notes.count_one': '{{count}} заметка',
   'notes.count_few': '{{count}} заметки',

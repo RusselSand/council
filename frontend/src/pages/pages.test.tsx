@@ -1303,6 +1303,15 @@ describe('Поток: решения и итоги', () => {
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('черновик заметок не собрался — причина видна, собрать можно снова', async () => {
+    const detail = 'Каталог заметок /notes: в adrs/ADR-0001.md нет frontmatter'
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json({ detail }, 422))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe(detail)
+    expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
                               notes: { run: 'n1', issues: 'i1', language: 'Russian', notes: [], numbers: DRAFT.numbers } }),

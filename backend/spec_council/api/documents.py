@@ -13,9 +13,17 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 
 from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, StoreDep
-from ..export import deletable, drafted, settled, untranslated, words_for, written
+from ..export import (
+    drafted,
+    graph_problems,
+    knows_words,
+    settled,
+    untranslated,
+    words_for,
+    written,
+)
 from ..models import Council, GroupsEdit, NotePlan, NotesDraft, NotesExport, Stream
-from ..notes import Catalog, Note, NotesError
+from ..notes import Catalog, NotesError
 from ..pipeline import CouncilRun, NotesRun, translating
 from ..prompts import language, notes_language
 from .councils import MISSING, NOT_FOUND, council_lock, reporter, running
@@ -91,9 +99,11 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                 notes: NotesDep) -> Council:
     """Черновик выгрузки потока в заметки: что ляжет в каталог, под какими номерами и что
     будет с каждой заметкой. Язык документации тот же, что у работы, — черновик готов сразу;
-    другой — новые тексты переводит судья, и без подключения к нему черновик записан упавшим."""
+    другой — новые тексты переводит судья, и без подключения к нему черновик записан упавшим.
+    Связки заметок («потому что», «Задачи») совет знает по-русски и по-английски: на другом
+    языке их доводит тот же перевод, даже если язык заметок — язык работы."""
     root = root_of(notes)
-    translate = notes_language() != language()
+    translate = notes_language() != language() or not knows_words(language())
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
@@ -140,16 +150,17 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         draft = checked_draft(stream, edit)
         catalog = catalog_of(root)
         fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
-        fresh, vanished, _, _ = drafted(stream, fragments, catalog, root, stream.notes,
+        fresh, vanished, numbers, _ = drafted(stream, fragments, catalog, root, stream.notes,
                                         words_for(language()))
         if (shape(fresh) != shape(draft.notes)
+                or [(n.key, n.id) for n in numbers] != [(n.key, n.id) for n in draft.numbers]
                 or [v.id for v in vanished] != [v.id for v in draft.vanished]):
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         before = {note.key: note for note in stream.notes.notes} if stream.notes else {}
         planned = [settled(note, before.get(note.key), catalog, root) for note in draft.notes]
         try:
-            graph_problems(catalog, planned, edit.edits, deletable(vanished, edit.delete))
+            graph_problems(catalog, planned, vanished, edit.edits, edit.delete)
             exported = written(planned, vanished, edit.edits, edit.delete, root, stream.notes)
         except NotesError as exc:
             raise HTTPException(422, str(exc)) from None
@@ -173,23 +184,7 @@ def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
     return draft
 
 
-def shape(notes: Sequence[NotePlan]) -> list[tuple[str, str, list[str]]]:
-    return [(note.key, note.id, note.links) for note in notes]
-
-
-def graph_problems(catalog: Catalog, planned: Sequence[NotePlan], edits: dict[str, str],
-                   gone: dict) -> None:
-    """Граф после записи — по правилам: проверяем до того, как трогать файлы. Чужие поломки
-    каталога выгрузку не держат — только то, что касается заметок потока."""
-    notes = dict(catalog.notes)
-    for plan in planned:
-        if plan.action != "edited":
-            notes[plan.id] = Note(plan.id, plan.type, edits.get(plan.key, plan.text),
-                                  tuple(plan.links))
-    for note_id in gone:
-        notes.pop(note_id, None)
-    ours = {plan.id for plan in planned}
-    found = [problem for problem in Catalog(notes).problems()
-             if problem.split(":", 1)[0] in ours]
-    if found:
-        raise NotesError("Граф заметок вышел бы не по правилам: " + "; ".join(found))
+def shape(notes: Sequence[NotePlan]) -> list[tuple[str, str, list[str], str]]:
+    """Что совет выгрузил бы: номера, связи и тексты — в итогах и номера задач, их тоже
+    раздают по каталогу."""
+    return [(note.key, note.id, note.links, note.generated) for note in notes]
