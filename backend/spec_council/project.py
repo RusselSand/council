@@ -11,7 +11,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 
 from .models import CodeTrail, ProjectDecision, RepositoryScan
@@ -57,6 +57,22 @@ def fingerprint(decisions: Sequence[ProjectDecision]) -> str:
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
+def catalog_print(catalog: Catalog | None, own: Iterable[str] = ()) -> str:
+    """Отпечаток того, на что опирается отбор: решения каталога, какими их видят модели, и
+    какие задачи каких итогов к ним ведут — по ним ищется след в коде (история git — со
+    сканированного коммита, она не меняется). Решений нет — пустая строка."""
+    decisions = records(catalog, {}, own) if catalog is not None else []
+    if not decisions:
+        return ""
+    ids = {decision.adr_id for decision in decisions}
+    rows = [[d.adr_id, d.idea, d.question, d.decision, d.status, d.superseded_by]
+            for d in decisions]
+    links = sorted([issue, outcome, adr] for issue, found in issue_outcomes(catalog).items()
+                   for outcome, adrs in found for adr in adrs if adr in ids)
+    return hashlib.sha256(json.dumps([rows, links], ensure_ascii=False).encode()
+                          ).hexdigest()[:16]
+
+
 def question_of(catalog: Catalog, links: Sequence[str]) -> str:
     """Вопрос, на который отвечает решение: ADR → его вариант → вопрос варианта."""
     proposal = catalog.notes.get(links[0]) if links else None
@@ -75,17 +91,19 @@ def issue_outcomes(catalog: Catalog) -> dict[str, list[tuple[str, tuple[str, ...
     return found
 
 
-def evidence_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
+def evidence_files(scan: RepositoryScan,
+                   only: Collection[Path] | None = None) -> list[tuple[Path, str, str]]:
     """Файлы, на которые опирается карта: доводы находок и точки входа потоков — (корень
     рабочей копии, путь в ней, путь в карте). У нескольких копий путь в карте начинается с её
-    папки."""
+    папки. only — из каких рабочих копий (до предела FILES_MAX: чужие его не съедят)."""
     roots = {source.name: Path(source.root) for source in scan.repositories if source.root}
     result = scan.result
     shown = [evidence.path for finding in (result.findings if result else [])
              for evidence in finding.evidence]
     shown += [path for flow in (result.flows if result else [])
               if (path := flow.entry_file or entry_on_disk(flow.entry_point, roots))]
-    files = [found for path in dict.fromkeys(shown) if (found := located(path, roots))]
+    files = [found for path in dict.fromkeys(shown) if (found := located(path, roots))
+             and (only is None or found[0] in only)]
     return files[:FILES_MAX]
 
 
@@ -102,14 +120,13 @@ def entry_on_disk(entry: str, roots: Mapping[str, Path]) -> str:
     return ""
 
 
-def traced_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
-    """Файлы карты, по которым искать след: только в рабочих копиях, что всё ещё те, что
-    сканировали, — сканированный коммит в них есть. Папку заменили другим репозиторием — его
-    история к карте отношения не имеет; скан без коммита этого не проверит."""
-    same = {Path(source.root) for source in scan.repositories
+def scanned_commits(scan: RepositoryScan) -> dict[Path, str]:
+    """Рабочие копии скана, где след искать можно, и их сканированный коммит: только те, что
+    всё ещё те же — этот коммит в них есть. Папку заменили другим репозиторием — его история к
+    карте отношения не имеет; скан без коммита этого не проверит."""
+    return {Path(source.root): source.commit_sha for source in scan.repositories
             if source.root and source.commit_sha
             and has_commit(Path(source.root), source.commit_sha)}
-    return [found for found in evidence_files(scan) if found[0] in same]
 
 
 def has_commit(root: Path, sha: str) -> bool:
@@ -129,16 +146,20 @@ def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | No
 
 
 def trails_of(files: Sequence[tuple[Path, str, str]],
-              outcomes: Mapping[str, Sequence[tuple[str, tuple[str, ...]]]]
-              ) -> dict[str, list[CodeTrail]]:
+              outcomes: Mapping[str, Sequence[tuple[str, tuple[str, ...]]]],
+              commits: Mapping[Path, str] | None = None) -> dict[str, list[CodeTrail]]:
     """След решений в коде: коммиты по файлам карты с номерами задач, которые есть в заметках.
-    git не запускается или файла нет в истории — у этого файла следа просто нет."""
+    commits — с какого коммита каждой рабочей копии читать историю: со сканированного — карта
+    о нём, и новый коммит потом не поменяет след, на который опирался отбор. git не запускается
+    или файла нет в истории — у этого файла следа просто нет."""
     found: dict[str, dict[tuple[str, str], CodeTrail]] = {}
     for root, path, shown in files:
+        since = (commits or {}).get(root)
         try:
             # --follow: коммит задачи мог трогать файл ещё под прежним именем.
             output = git_bytes(root, "log", "--follow", "-n", str(COMMITS_MAX),
-                               "--format=%h%x1f%s%x1f%b%x1e", "--", path)
+                               "--format=%h%x1f%s%x1f%b%x1e", *([since] if since else []),
+                               "--", path)
         except RepositoryError:
             continue
         for record in output.decode("utf-8", "replace").split("\x1e"):

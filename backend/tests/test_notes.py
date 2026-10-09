@@ -92,6 +92,11 @@ def test_a_file_name_in_lower_case_still_takes_its_number(tmp_path):
     assert catalog.occupant("ADR-0002").id == ADR.id
 
 
+def test_one_number_written_another_way_takes_the_place_too(tmp_path):
+    put(tmp_path, Note("ADR-7", "adr", "Руками.", ("PRO-0001",)))
+    assert Catalog.load(tmp_path).occupant("ADR-0007").id == "ADR-7"
+
+
 def test_an_issue_number_is_read_in_one_spelling():
     assert issues_in("Сделано ISS-7, а ISS-0007 — то же") == ["ISS-0007"]
     assert declared_issues("Поиск\n\nЗадачи:\n- ISS-12: Поиск") == ["ISS-0012"]

@@ -26,12 +26,14 @@ from spec_council.models import (
 )
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.project import (
+    FILES_MAX,
+    catalog_print,
     evidence_files,
     issue_outcomes,
     records,
     same_selection,
+    scanned_commits,
     selected,
-    traced_files,
     trails_of,
 )
 from spec_council.slicing import BadAnswer
@@ -131,18 +133,50 @@ def test_an_issue_number_without_zeros_is_the_same_issue(tmp_path):
     assert [trail.issue for trail in trails["ADR-0001"]] == ["ISS-0003"]
 
 
+def head(repo):
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
 def test_a_working_copy_replaced_by_another_repository_leaves_no_trail(tmp_path):
     repo = project_with(tmp_path, "Поиск по базе ISS-0003")
-    scanned = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                             capture_output=True, text=True).stdout.strip()
     scan = scan_of(("", repo))
-    scan.repositories[0].commit_sha = scanned
-    assert traced_files(scan) == [(repo, "app.py", "app.py")]
+    scan.repositories[0].commit_sha = head(repo)
+    assert scanned_commits(scan) == {repo: head(repo)}
     # На том же месте — другой репозиторий: сканированного коммита в нём нет.
     scan.repositories[0].commit_sha = "0" * 40
-    assert traced_files(scan) == []
+    assert scanned_commits(scan) == {}
     scan.repositories[0].commit_sha = ""                # скан без коммита — не проверить
-    assert traced_files(scan) == []
+    assert scanned_commits(scan) == {}
+
+
+def test_the_trail_is_read_from_the_scanned_commit(tmp_path):
+    repo = project_with(tmp_path, "Начало")
+    scanned = head(repo)
+    (repo / "app.py").write_text("def find(): return []\n", encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "Поиск по базе ISS-0003")    # уже после скана
+    catalog = Catalog.load(put(tmp_path / "notes"))
+    files = evidence_files(scan_of(("", repo)))
+    assert trails_of(files, issue_outcomes(catalog), {repo: scanned}) == {}
+    assert "ADR-0001" in trails_of(files, issue_outcomes(catalog))   # с нынешнего — есть
+
+
+def test_stale_working_copies_do_not_eat_the_file_limit(tmp_path):
+    stale, good = tmp_path / "stale", tmp_path / "good"
+    paths = (*(f"stale/f{n}.py" for n in range(FILES_MAX)), "good/app.py")
+    scan = scan_of(("stale", stale), ("good", good), paths=paths)
+    assert evidence_files(scan, {good}) == [(good, "app.py", "good/app.py")]
+
+
+def test_the_search_print_follows_the_issues_that_lead_to_decisions(tmp_path):
+    catalog = Catalog.load(put(tmp_path / "notes"))
+    before = catalog_print(catalog)
+    assert catalog_print(Catalog.load(put(tmp_path / "notes"))) == before
+    # Новая задача у итога ADR-0001: след в коде к нему теперь другой — отбор устарел.
+    outcome = Note("OUT-0001", "outcome", "Поиск\n\nЗадачи:\n- ISS-0003: Поиск по базе\n"
+                   "- ISS-0004: Поиск по чату", ("ADR-0001",))
+    assert catalog_print(Catalog.load(put(tmp_path / "notes", [*PAST[:4], outcome]))) != before
+    assert catalog_print(None) == ""
 
 
 def test_only_the_issue_lines_of_an_outcome_declare_its_issues(tmp_path):

@@ -141,12 +141,14 @@ from .outcomes import Context as OutcomeContext
 from .outcomes import as_prompt as outcome_prompt
 from .outcomes import outcome_list, same_outcomes
 from .project import (
+    catalog_print,
     catalog_prompt,
+    evidence_files,
     fingerprint,
     issue_outcomes,
     records,
     same_selection,
-    traced_files,
+    scanned_commits,
     trails_of,
 )
 from .project import selected as selected_decisions
@@ -1416,12 +1418,13 @@ class DecisionsRun(CouncilRun[DecisionsSearch]):
         self.own = list(own)
 
     def work(self) -> dict[str, Any]:
-        files = traced_files(self.scan) if self.scan and self.scan.result else []
-        trails = trails_of(files, issue_outcomes(self.catalog)) if files else {}
+        commits = scanned_commits(self.scan) if self.scan and self.scan.result else {}
+        files = evidence_files(self.scan, commits) if commits else []
+        trails = trails_of(files, issue_outcomes(self.catalog), commits) if files else {}
         catalog = records(self.catalog, trails, self.own)
         with self._lock:
             self.state.catalog = len(catalog)
-            self.state.fingerprint = fingerprint(catalog)
+            self.state.fingerprint = catalog_print(self.catalog, self.own)
             self.state.traced = sum(1 for record in catalog if record.found_in_code)
             self._publish()
         values = {"idea": self.idea, "fragments": fragments_prompt(self.fragments),

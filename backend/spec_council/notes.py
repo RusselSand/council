@@ -211,12 +211,15 @@ class Catalog:
                        if note.id == idea_id or self.roots(note.id) == {idea_id}), key=order)
 
     def occupant(self, note_id: str) -> Note | None:
-        """Другая заметка в файле с именем note_id (ADR-0001.md, adr-0001.md — на Windows и
-        macOS это один файл) — его переименовали: новая заметка с этим номером легла бы туда и
-        затёрла её."""
-        return next((note for note in self.notes.values() if note.path is not None
-                     and note.path.stem.casefold() == note_id.casefold()
-                     and note.id != note_id), None)
+        """Другая заметка на месте заметки note_id: с тем же номером, записанным по-разному
+        (ADR-7 и ADR-0007 — каталог с обеими не читается), или в файле с её именем (ADR-0001.md,
+        adr-0001.md — на Windows и macOS это один файл): новая заметка с этим номером легла бы
+        туда и затёрла её."""
+        number = number_of(note_id)
+        return next((note for note in self.notes.values() if note.id != note_id and (
+            number_of(note.id) == number or (note.path is not None
+                                             and note.path.stem.casefold() == note_id.casefold()))
+        ), None)
 
     def next_id(self, kind: str, taken: Iterable[str] = ()) -> str:
         """Следующий свободный номер типа — после самого большого в каталоге и в taken. Имя

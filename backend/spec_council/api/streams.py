@@ -99,7 +99,7 @@ from ..pipeline import (
     start_questions,
     start_scan,
 )
-from ..project import fingerprint, records
+from ..project import catalog_print, fingerprint, records
 from ..questions import QUESTION_MAX, same_question
 from ..repository import (
     Inventory,
@@ -547,7 +547,7 @@ def searched_another(catalog: Catalog | None, own: list[str],
     заменили или убрали — и пусть даже его никто не отмечал."""
     if search is None or search.state != "done" or not search.fingerprint:
         return False
-    return fingerprint(records(catalog, {}, own) if catalog else []) != search.fingerprint
+    return catalog_print(catalog, own) != search.fingerprint
 
 
 def outdated_selection(notes: Path | None, stream: Stream,
