@@ -4,6 +4,11 @@ You are given:
 - the final fragments with immutable IDs;
 - labeling options proposed independently by other models.
 
+There may be only one candidate: the council has a single participant, or the others failed.
+Then there is nothing to compare, and you are its reviewer: check it against the source
+by the same rules and within the same limits as several candidates, keep what is grounded,
+correct or drop what is not. Do not accept it just because nobody disagrees.
+
 For each fragment, choose exactly one final type.
 
 ## Types

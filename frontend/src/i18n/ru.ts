@@ -119,7 +119,7 @@ export const ru = {
   'brief.nameTitle': 'Название',
   'brief.nameHint': 'Как совет будет называться в списке проектов.',
   'brief.councilTitle': 'Совет',
-  'brief.councilHint': 'Кто участвует. Нужны минимум две модели.',
+  'brief.councilHint': 'Кто участвует: одна модель или несколько. Ответ единственной проверяет судья.',
   'brief.connectModel': '+ Подключить модель',
   'brief.connectModelSoon': 'Скоро: пока модели задаются в настройках сервера',
   'brief.judge': 'Судья',
@@ -142,6 +142,7 @@ export const ru = {
   'slices.fragmentsTitle': 'Фрагменты',
   'slices.noteHuman': 'вы выбрали другой тип, у совета — «{{label}}»',
   'slices.noteJudge': 'модели разошлись ({{votes}}), решил судья: {{reason}}',
+  'slices.noteChecked': 'судья проверил ({{votes}}) и решил: {{reason}}',
   'slices.noteSlice': 'граница — решение судьи нарезки: {{note}}',
 
   'next.caps': 'Дальше',
@@ -672,8 +673,8 @@ export const ru = {
   'run.readyHint': 'Моделей, сделавших работу независимо друг от друга: {{count}}',
 
   'progress.title': 'Ход работы',
-  'progress.hint': 'Участники работают по отдельности, судья решает только там, где они разошлись.',
-  'progress.skippedNote': 'Участники сошлись — судье нечего решать.',
+  'progress.hint': 'Участники работают по отдельности, судья решает там, где они разошлись, а ответ единственного — проверяет.',
+  'progress.skippedNote': 'Судье нечего решать: участники сошлись или решать не из чего.',
   'progress.stepState.waiting': 'ждёт',
   'progress.stepState.running': 'идёт',
   'progress.stepState.done': 'готово',

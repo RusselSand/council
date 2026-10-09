@@ -46,7 +46,7 @@ def test_new_council_gets_default_participants_and_judge():
 def test_settings_list_models_with_their_cli():
     settings = client.get("/api/settings").json()
     assert {model["cli"] for model in settings["models"]} == {"codex", "claude", "gemini"}
-    assert settings["min_participants"] == 2
+    assert settings["min_participants"] == 1
 
 
 def test_patch_changes_only_what_was_sent():
@@ -66,6 +66,14 @@ def test_judge_does_not_have_to_take_part():
     assert res.status_code == 200
 
 
+def test_one_participant_is_a_council_too():
+    council_id = new_council()
+    res = client.patch(f"/api/councils/{council_id}",
+                       json={"participants": ["sol"], "judge": "sol"})
+    assert res.status_code == 200
+    assert (res.json()["participants"], res.json()["judge"]) == (["sol"], "sol")
+
+
 def test_null_means_no_change():
     council_id = new_council()
     client.patch(f"/api/councils/{council_id}", json={"name": "Проект"})
@@ -74,7 +82,7 @@ def test_null_means_no_change():
 
 
 @pytest.mark.parametrize("patch", [
-    {"participants": ["sol"]},
+    {"participants": []},
     {"participants": ["sol", "sol"]},
     {"participants": ["sol", "nobody"]},
     {"judge": "nobody"},

@@ -129,11 +129,14 @@ function notesOf(fragment: LabeledFragment, models: Model[], t: ReturnType<typeo
   if (fragment.label !== fragment.council_label) {
     notes.push(t('slices.noteHuman', { label: labelName(fragment.council_label) }))
   }
-  if (fragment.decided_by === 'judge') {
+  // Голос один (участник в совете один) — судья его проверял: подтвердил — пометка ни к чему.
+  const [only] = fragment.votes
+  const confirmed = fragment.votes.length === 1 && only.labels.length === 1 && only.labels[0] === fragment.council_label
+  if (fragment.decided_by === 'judge' && !confirmed) {
     const votes = fragment.votes
       .map(v => `${modelOf(models, v.model).short_name} — ${v.labels.map(labelName).join(' / ')}`)
       .join(', ')
-    notes.push(t('slices.noteJudge', { votes, reason: fragment.reason }))
+    notes.push(t(fragment.votes.length === 1 ? 'slices.noteChecked' : 'slices.noteJudge', { votes, reason: fragment.reason }))
   }
   if (fragment.slice_note) notes.push(t('slices.noteSlice', { note: fragment.slice_note }))
   return notes

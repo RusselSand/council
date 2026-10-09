@@ -123,7 +123,7 @@ export const en: Dict = {
   'brief.nameTitle': 'Name',
   'brief.nameHint': 'How the council is listed among projects.',
   'brief.councilTitle': 'Council',
-  'brief.councilHint': 'Who takes part. At least two models.',
+  'brief.councilHint': 'Who takes part: one model or more. The judge checks a lone answer.',
   'brief.connectModel': '+ Connect a model',
   'brief.connectModelSoon': 'Coming soon: models are set in the server settings for now',
   'brief.judge': 'Judge',
@@ -146,6 +146,7 @@ export const en: Dict = {
   'slices.fragmentsTitle': 'Fragments',
   'slices.noteHuman': 'you picked another type; the council said “{{label}}”',
   'slices.noteJudge': 'models disagreed ({{votes}}); the judge decided: {{reason}}',
+  'slices.noteChecked': 'the judge checked ({{votes}}) and decided: {{reason}}',
   'slices.noteSlice': 'boundary set by the slicing judge: {{note}}',
 
   'next.caps': 'Next',
@@ -676,8 +677,8 @@ export const en: Dict = {
   'run.readyHint': 'Models that did the work independently: {{count}}',
 
   'progress.title': 'Progress',
-  'progress.hint': 'Participants work separately; the judge decides only where they disagree.',
-  'progress.skippedNote': 'Participants agreed, nothing for the judge to decide.',
+  'progress.hint': 'Participants work separately; the judge decides where they disagree and checks a lone answer.',
+  'progress.skippedNote': 'Nothing for the judge to decide: participants agreed or there was nothing to decide.',
   'progress.stepState.waiting': 'waiting',
   'progress.stepState.running': 'in progress',
   'progress.stepState.done': 'done',

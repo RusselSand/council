@@ -1,4 +1,5 @@
-"""Совет из .env: два участника и судья, подгонка старых советов, каталоги учётных записей."""
+"""Совет из .env: участники (два или один) и судья, подгонка старых советов, каталоги учётных
+записей."""
 
 import pytest
 
@@ -35,6 +36,17 @@ def test_the_judge_may_be_a_third_model():
     same = config_of("fable=claude/claude-fable-5-1", "opus=claude/claude-opus-5-5",
                      "opus=claude/claude-opus-5-5")
     assert [m.alias for m in same.models] == ["fable", "opus"]
+
+
+@pytest.mark.parametrize("none", ["none", " None "])
+def test_one_participant_is_its_own_judge_unless_another_is_set(none):
+    config = config_of("fable=claude/claude-fable-5-1", none)
+    assert (config.default_participants, config.default_judge) == (["fable"], "fable")
+    assert [m.alias for m in config.models] == ["fable"]       # подписка нужна одна
+    judged = config_of("fable=claude/claude-fable-5-1", none, "sol=codex/gpt-5.6-sol")
+    assert (judged.default_participants, judged.default_judge) == (["fable"], "sol")
+    # Пусто — не «нет второго», а второй по умолчанию: у тех, кто настроил, ничего не меняется.
+    assert config_of("sol=codex/gpt-5.6-sol", "").default_participants == ["sol", "fable"]
 
 
 def test_an_unknown_model_is_shown_as_it_was_named():
@@ -89,6 +101,16 @@ def test_a_lineup_of_models_still_configured_is_kept():
     # Ушла одна — на её место встаёт заданная, остальные остаются.
     partly = fitted(council(["astra", "sol"], "sol"), config)
     assert (partly.participants, partly.judge) == (["sol", "fable"], "sol")
+
+
+def test_a_council_keeps_as_many_participants_as_the_models_allow():
+    two = config_of("fable=claude/claude-fable-5-1", "opus=claude/claude-opus-5-5")
+    one = config_of("fable=claude/claude-fable-5-1", "none")
+    alone = council(["fable"], "fable")
+    assert fitted(alone, two) is alone                       # выбрали одного — один и остаётся
+    assert fitted(council(["sol", "opus"], "opus"), two).participants == ["opus", "fable"]
+    assert (fitted(council(["fable", "opus"], "opus"), one).participants,
+            fitted(council(["fable", "opus"], "opus"), one).judge) == (["fable"], "fable")
 
 
 def test_without_the_variables_at_all_the_council_is_the_default(tmp_path, monkeypatch):

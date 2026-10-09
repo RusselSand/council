@@ -33,7 +33,7 @@ export interface Slicing {
 }
 export interface Council {
   id: string; name: string; status: CouncilStatus; brief: string
-  /** Каждый участник предлагает свой вариант, не видя чужих; судья выбирает лучший. */
+  /** Каждый участник (хоть один) предлагает свой вариант, не видя чужих; судья выбирает лучший, а единственный проверяет. */
   participants: string[]; judge: string
   updated_at: string
   slicing: Slicing | null

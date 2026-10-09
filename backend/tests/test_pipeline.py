@@ -168,12 +168,32 @@ def test_only_disputed_labels_go_to_the_judge():
 
 
 def test_failed_participant_drops_out_and_the_rest_go_on():
-    replies = {**AGREED, ("slice", "sol"): ModelFailed("нет входа в подписку")}
+    replies = {**AGREED, ("slice", "sol"): ModelFailed("нет входа в подписку"),
+               ("slice_judge", "fable"): {"status": "ok", "fragments": PARTS, "decisions": []}}
     result, _, _ = run(replies)
     assert result.state == "done"
     slice_step = result.steps[0]
     assert [(r.model, r.state, r.error) for r in slice_step.runs] == [
         ("sol", "failed", "нет входа в подписку"), ("fable", "done", None)]
+    # Ответ остался один — сравнить не с чем, и его проверяет судья.
+    assert steps(result)["slice_judge"] == "done"
+
+
+def test_a_council_of_one_has_every_answer_checked_by_the_judge():
+    replies = {("slice", "sol"): sliced(PARTS),
+               ("slice_judge", "sol"): {"status": "ok", "fragments": PARTS, "decisions": []},
+               ("label", "sol"): labeled("idea", "proposal", "risk"),
+               ("label_judge", "sol"): {"labels": [
+                   {"id": 1, "label": "idea", "reason": "цель"},
+                   {"id": 2, "label": "constraint", "reason": "уже задано"},
+                   {"id": 3, "label": "risk", "reason": "потеря"}]}}
+    result, runner, _ = run(replies, participants=("sol",), judge="sol")
+    assert result.state == "done"
+    assert steps(result) == {"slice": "done", "slice_judge": "done", "label": "done",
+                             "label_judge": "done"}
+    assert [(f.label, f.decided_by) for f in result.fragments] == [
+        ("idea", "judge"), ("constraint", "judge"), ("risk", "judge")]   # судья поправил F2
+    assert '"variant": 1' in runner.asked["slice_judge", "sol"]          # вариант один
 
 
 def test_unreadable_answer_is_a_failed_run_and_leaves_the_outbox():
@@ -319,6 +339,16 @@ def test_agreeing_groupings_need_no_judge_and_come_out_lettered_by_first_fragmen
     assert sorted(runner.forgotten) == sorted(runner.keys)
 
 
+def test_a_council_of_one_has_its_grouping_checked_by_the_judge():
+    result, runner, _ = group_it({("structure", "sol"): {"options": [ONE]},
+                                  ("structure_judge", "sol"): {"status": "ok", **ONE,
+                                                               "decisions": []}},
+                                 participants=("sol",), judge="sol")
+    assert result.state == "done"
+    assert {s.name.value: s.state for s in result.steps}["structure_judge"] == "done"
+    assert [g.fragment_ids for g in result.groups] == [[1, 2], [3]]
+
+
 def test_different_groupings_go_to_the_judge_and_shared_fragments_are_marked():
     merged = grouping(grp("A", [1, 2, 3], ideas=[1]))
     judged = {"status": "ok", **grouping(grp("A", [1, 2, 3], ideas=[1]), grp("B", [3], shared=[3]),
@@ -387,6 +417,20 @@ def test_one_idea_from_everyone_needs_no_judge():
     prompt = runner.asked["idea_discovery", "sol"]
     assert '"id": "F5"' in prompt and '"type": "constraint"' in prompt
     assert sorted(runner.forgotten) == sorted(runner.keys)
+
+
+def test_a_council_of_one_has_its_idea_checked_by_the_judge():
+    result, _ = seek({("idea_discovery", "sol"): ideas((FIND, ["F2", "F3"])),
+                      ("idea_judge", "sol"): {"status": "ok", "idea": FIND + " в треде",
+                                              "evidence": ["F2", "F3"], "reason": "точнее"}},
+                     participants=("sol",), judge="sol")
+    assert (result.proposal.idea, result.proposal.decided_by) == (FIND + " в треде", "judge")
+    assert {s.name.value: s.state for s in result.steps}["idea_judge"] == "done"
+    # Идеи участник не нашёл — проверять нечего: судья не нужен.
+    empty, _ = seek({("idea_discovery", "sol"): {"number": 0, "options": [],
+                                                 "reason": "фрагменты о разном"}},
+                    participants=("sol",), judge="sol")
+    assert {s.name.value: s.state for s in empty.steps}["idea_judge"] == "skipped"
 
 
 def test_different_ideas_go_to_the_judge_without_model_names():

@@ -8,6 +8,11 @@ You are given:
 - a catalog of previously accepted ADRs in a short format: ID, the IDEA the decision belongs to, OPEN QUESTION, accepted decision, status; some ADRs have a trail in the code (`found_in_code`): a commit with the number of the issue that implemented the OUTCOME of this decision, in a file that the new IDEA, according to the repository map, is going to touch;
 - the results of independent Project Decisions Discovery runs.
 
+There may be only one candidate: the council has a single participant, or the others failed.
+Then there is nothing to compare, and you are its reviewer: check it against the source
+by the same rules and within the same limits as several candidates, keep what is grounded,
+correct or drop what is not. Do not accept it just because nobody disagrees.
+
 Your task is to check the agents' conclusions and form a single list of ADRs for the user to approve.
 
 You do not make decisions for the user.

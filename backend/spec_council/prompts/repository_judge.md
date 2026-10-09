@@ -10,6 +10,11 @@ You are given:
 - the commit SHA;
 - the results of the independent Repository Discovery.
 
+There may be only one candidate: the council has a single participant, or the others failed.
+Then there is nothing to compare, and you are its reviewer: check it against the source
+by the same rules and within the same limits as several candidates, keep what is grounded,
+correct or drop what is not. Do not accept it just because nobody disagrees.
+
 Your task is to produce a single verified map of the existing implementation and to determine whether additional investigation is required.
 
 ## Core principle
