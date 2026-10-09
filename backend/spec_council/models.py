@@ -32,6 +32,9 @@ class StepName(StrEnum):
     repository_judge = "repository_judge"          # судья проверяет их находки и покрытие
     design_discovery = "design_discovery"  # участники исследуют макет Figma под идею
     design_judge = "design_judge"          # судья проверяет их описание макета и покрытие
+    # участники отбирают прошлые решения проекта, относящиеся к идее; судья сводит отбор
+    project_decisions_discovery = "project_decisions_discovery"
+    project_decisions_judge = "project_decisions_judge"
     question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
     question_judge = "question_judge"          # судья сводит их в один канонический список
     proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
@@ -42,6 +45,7 @@ class StepName(StrEnum):
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
     issue_discovery = "issue_discovery"  # участники нарезают утверждённые итоги на задачи
     issue_judge = "issue_judge"          # судья сводит их нарезки в итоговый набор задач
+    notes_translation = "notes_translation"  # судья переводит заметки на язык документации
 
 
 class ModelRun(BaseModel):
@@ -236,6 +240,9 @@ class RepositoryFlow(BaseModel):
 
     name: str
     entry_point: str = ""
+    # Файл точки входа без символа, каким его нашли в репозитории при скане: по нему ищется след
+    # решений в коде — и после того, как файл переименовали или удалили.
+    entry_file: str = ""
     steps: list[FlowStep] = []
 
 
@@ -477,6 +484,54 @@ class DesignStep(BaseModel):
     scan_run: str = ""
 
 
+class CodeTrail(BaseModel):
+    """След решения в коде: коммит с номером задачи, которая реализовала итог этого решения, в
+    файле, который новая идея, по карте репозитория, будет затрагивать."""
+
+    issue: str
+    outcome: str
+    commit: str
+    file: str
+
+
+class ProjectDecision(BaseModel):
+    """Принятое решение проекта из каталога заметок, каким его видят шаги потока: номер, к
+    какой идее, на какой вопрос и что решено, действует ли оно, его след в коде — и, когда
+    его отобрали, насколько и почему оно относится к идее потока."""
+
+    adr_id: str
+    idea: str = ""
+    question: str = ""
+    decision: str = ""
+    status: Literal["active", "under_review", "superseded"] = "active"
+    superseded_by: str | None = None
+    found_in_code: list[CodeTrail] = []
+    relevance: Literal["applicable", "potential_conflict", "uncertain"] | None = None
+    reason: str = ""
+
+
+class DecisionsSearch(BaseModel):
+    """Отбор прошлых решений проекта для потока — в начале шага «Вопросы», когда в каталоге
+    заметок есть решения: участники по отдельности отбирают относящиеся к идее (с учётом их
+    следа в коде), судья сводит отбор, человек отмечает нужные. К какой идее, карте и
+    описанию макета — как у поиска вопросов. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    idea: str = ""
+    repository: str = ""
+    design: str = ""
+    # Сколько решений в каталоге и сколько из них со следом в коде.
+    catalog: int = 0
+    traced: int = 0
+    # Отпечаток всего каталога решений, который видели модели (project.fingerprint): решение
+    # добавили, поправили или убрали — отбор устарел.
+    fingerprint: str = ""
+    steps: list[Step]
+    decisions: list[ProjectDecision] = []
+    error: str | None = None
+
+
 class OpenQuestion(BaseModel):
     """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
     нет: предложения из текста связаны с ним через proposal_ids."""
@@ -491,6 +546,10 @@ class OpenQuestion(BaseModel):
     # Фрагменты-предложения группы, которые отвечают на этот вопрос.
     proposal_ids: list[int] = []
     reason: str | None = None
+    # Для заметки: у вопроса из текста — та же неопределённость атомарно, одним предложением.
+    note: str | None = None
+    # Принятое решение проекта, которое вопрос пересматривает (ADR-0007), — из отобранных.
+    revisits: str | None = None
 
 
 class QuestionDiscovery(BaseModel):
@@ -505,6 +564,11 @@ class QuestionDiscovery(BaseModel):
     # шаг иначе — ищут заново.
     repository: str = ""
     design: str = ""
+    # С какими принятыми решениями проекта: номера, которые человек отобрал для потока.
+    decisions: list[str] = []
+    # Отпечаток отмеченных решений (project.fingerprint): решение с тем же номером переписали —
+    # вопросы ищутся заново.
+    decisions_seen: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -685,6 +749,98 @@ class Issue(BaseModel):
     acceptance_criteria: list[str] = []
 
 
+NoteType = Literal["idea", "open_question", "proposal", "adr", "outcome"]
+
+
+class NotePlan(BaseModel):
+    """Заметка, какой она ляжет в каталог при выгрузке. key — какая это часть потока (идея,
+    вопрос, вариант, решение, итог): по нему повторная выгрузка находит свою прежнюю заметку.
+    generated — текст от совета; text — что предлагается записать (прежний, если совет
+    написал бы то же самое, — с правками человека). action: create — новая; update — файл
+    перепишется; same — в файле уже это; edited — файл правили руками после выгрузки, совет его
+    не трогает."""
+
+    key: str
+    id: str
+    type: NoteType
+    text: str
+    generated: str
+    links: list[str] = []
+    action: Literal["create", "update", "same", "edited"]
+    # Что в файле сейчас — у update и edited.
+    current: str | None = None
+    # Ключ части прошлой выгрузки, которую заметка продолжает: обычно тот же key, но у итога
+    # с поправленным поведением ключ другой, а заметка — та же.
+    was: str | None = None
+
+
+class VanishedNote(BaseModel):
+    """Заметка прежней выгрузки, которой в потоке больше нет. Сама не удаляется: удалить её
+    можно, только если на неё не ссылается ничего вне потока (linked_from)."""
+
+    id: str
+    type: NoteType
+    text: str
+    linked_from: list[str] = []
+
+
+class IssueNumber(BaseModel):
+    """Номер задачи на весь проект (ISS-0012): его пишут в финальный коммит, и по нему скан
+    репозитория находит, под какие решения сделан код."""
+
+    key: str
+    id: str
+    issue_id: str
+    title: str
+    outcome_ids: list[str] = []
+
+
+class NotesDraft(BaseModel):
+    """Черновик выгрузки потока в заметки: что ляжет, что изменится, что исчезло и номера
+    задач. Собирается сразу; если язык документации другой, — ход судьи с переводом. К
+    каким задачам собран (issues): нарезали заново — черновик устарел."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    issues: str = ""
+    language: str = ""
+    steps: list[Step] = []
+    notes: list[NotePlan] = []
+    vanished: list[VanishedNote] = []
+    numbers: list[IssueNumber] = []
+    # Что не выгружается и почему: итог без решений, решение из другой идеи в итоге.
+    skipped: list[str] = []
+    error: str | None = None
+
+
+class ExportedNote(BaseModel):
+    """Заметка, как её выгрузили: из какой части потока, под каким номером, что сгенерировал
+    совет, что записали и отпечаток файла — по нему видно, правили ли его потом руками."""
+
+    key: str
+    id: str
+    type: NoteType
+    generated: str
+    written: str
+    links: list[str] = []
+    digest: str
+    # Исчезла из потока, а человек оставил её в каталоге: заметка всё ещё потока — её решения
+    # не «прошлые» для него, и повторная выгрузка снова предложит её удалить.
+    kept: bool = False
+
+
+class NotesExport(BaseModel):
+    """Последняя выгрузка потока: по ней повторная находит свои заметки и номера задач."""
+
+    run: str
+    issues: str
+    language: str
+    # Каталог, куда записали: номера выгрузки заняты только в нём.
+    root: str = ""
+    notes: list[ExportedNote] = []
+    numbers: list[IssueNumber] = []
+
+
 class IssueDiscovery(BaseModel):
     """Нарезка утверждённых итогов на задачи: участники по отдельности, судья сводит их в
     итоговый набор. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же
@@ -737,6 +893,9 @@ class Stream(BaseModel):
     repository: RepositoryStep | None = None
     design_scan: DesignScan | None = None
     design: DesignStep | None = None
+    # Отбор прошлых решений проекта и что человек из него взял (None — блок не пройден).
+    decisions_search: DecisionsSearch | None = None
+    project_decisions: list[ProjectDecision] | None = None
     questions: QuestionDiscovery | None = None
     # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
     scope: list[OpenQuestion] | None = None
@@ -746,12 +905,16 @@ class Stream(BaseModel):
     decisions: list[Decision] | None = None
     outcomes: OutcomeDiscovery | None = None
     issues: IssueDiscovery | None = None
+    # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:
+    # по ней повторная находит свои прежние заметки.
+    notes_draft: NotesDraft | None = None
+    notes: NotesExport | None = None
 
 
 # Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
 # вариантов, проверка выбора, сборка итогов, нарезка на задачи.
-STREAM_RUNS = ("discovery", "scan", "design_scan", "questions", "proposals", "analysis",
-               "outcomes", "issues")
+STREAM_RUNS = ("discovery", "scan", "design_scan", "decisions_search", "questions",
+               "proposals", "analysis", "outcomes", "issues", "notes_draft")
 
 
 class Council(BaseModel):
@@ -868,6 +1031,16 @@ class ApproveDesign(GroupsEdit):
     idea: str
 
 
+class SelectDecisions(GroupsEdit):
+    """Человек отмечает, какие прошлые решения проекта учитывать в потоке: keep — номера из
+    отбора search_run (пусто — ни одного), и совет сразу ищет вопросы. search_run — отбор, что
+    был на экране, и для «ни одного» тоже, хоть упавший. idea — идея, которую человек видел."""
+
+    search_run: str | None = None
+    keep: list[str] = []
+    idea: str
+
+
 class ApproveScope(GroupsEdit):
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных (их id) и
     свои, добавленные при отборе (тексты). questions_run — к какому поиску (QuestionDiscovery
@@ -927,6 +1100,8 @@ class Settings(BaseModel):
     repositories: str | None = None
     # Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать.
     figma: bool = False
+    # Каталог заметок проекта (COUNCIL_NOTES): без него поток не выгрузить.
+    notes: str | None = None
     min_participants: int
     default_participants: list[str]
     default_judge: str

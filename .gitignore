@@ -12,3 +12,7 @@ __pycache__/
 # (.gitkeep): на Linux его должен создать checkout от вашего имени, а не docker от root.
 .data/*
 !.data/.gitkeep
+# Заметки проекта по умолчанию для docker compose (COUNCIL_NOTES): обычно они в репозитории
+# проекта. Сам каталог — в репозитории (.gitkeep), как и .data: docker его не создаёт.
+.notes/*
+!.notes/.gitkeep

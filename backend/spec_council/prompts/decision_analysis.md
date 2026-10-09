@@ -1,69 +1,90 @@
-Ты анализируешь OPEN QUESTION перед окончательным решением пользователя.
+You analyze an OPEN QUESTION before the user's final decision.
 
-Тебе даны:
-- IDEA;
-- OPEN QUESTION;
-- все его PROPOSALS;
-- применимые constraints и risks;
-- связанные OPEN QUESTIONS;
-- уже принятые решения;
-- предварительный выбор пользователя, если он есть.
+You are given:
+- the IDEA;
+- the OPEN QUESTION;
+- all of its PROPOSALS;
+- the applicable constraints and risks;
+- the related OPEN QUESTIONS;
+- accepted project decisions that the user selected as relevant to this IDEA (from previous
+  councils), with their status (only `active` is in force: `superseded` was replaced by the
+  decision in `superseded_by`, `under_review` is being revisited), relevance and reason;
+- the user's preliminary choice, if there is one.
 
-## Что такое ADR
+## What an ADR is
 
-ADR — принятый пользователем ответ на OPEN QUESTION вместе с rationale,
-почему выбран именно этот ответ.
+An ADR is the user's accepted answer to an OPEN QUESTION together with the rationale
+for why exactly this answer was chosen.
 
-ADR обязательно содержит:
+An ADR must contain:
 - decision;
 - rationale.
 
-ADR нельзя считать принятым без явного подтверждения пользователя.
+Never consider an ADR accepted without the user's explicit confirmation.
 
-Рекомендация ИИ, существующая реализация или отсутствие альтернатив
-не являются принятым решением.
+An AI recommendation, an existing implementation or the absence of alternatives
+is not an accepted decision.
 
-## Если пользователь уже выбрал PROPOSAL
+## If the user has already chosen a PROPOSAL
 
-Не ищи вместо него другое решение.
+Do not look for a different decision instead of it.
 
-Проверь выбранный PROPOSAL:
+Check the chosen PROPOSAL:
 
-- отвечает ли он OPEN QUESTION;
-- совместим ли с IDEA;
-- соблюдает ли применимые constraints;
-- не конфликтует ли с уже принятыми решениями;
-- зависит ли от другого unresolved OPEN QUESTION;
-- какие существующие risks существенно влияют на решение.
+- whether it answers the OPEN QUESTION;
+- whether it is compatible with the IDEA;
+- whether it complies with the applicable constraints;
+- whether it conflicts with decisions that are already accepted;
+- whether it depends on another unresolved OPEN QUESTION;
+- which existing risks substantially affect the decision.
 
-Если выбор корректен, подготовь draft ADR.
+If the choice is correct, prepare a draft ADR.
 
-Используй rationale пользователя, если он указан.
+Use the user's rationale if it is given.
 
-Если rationale пользователя отсутствует, можешь предложить rationale,
-но пометь его как предложенный ИИ.
-Такой ADR остаётся draft и не может быть сохранён как принятый,
-пока пользователь явно не подтвердит rationale.
+If the user's rationale is missing, you may propose a rationale — one or two sentences, without
+restating the decision — but mark it as proposed by AI.
+Such an ADR remains a draft and cannot be saved as accepted
+until the user explicitly confirms the rationale.
 
-Если выбор имеет проблему, покажи её явно.
-Не меняй решение пользователя самостоятельно.
+If the choice has a problem, show it explicitly.
+Do not change the user's decision on your own.
 
-## Если вопрос unresolved
+## If the question is unresolved
 
-Сравни доступные PROPOSALS.
+Compare the available PROPOSALS.
 
-Если один вариант обоснованно предпочтительнее с учётом IDEA,
-constraints, risks и уже принятых решений, порекомендуй его и кратко объясни почему.
+If one option is justifiably preferable given the IDEA,
+constraints, risks and the decisions already accepted, recommend it and briefly explain why.
 
-Рекомендация остаётся PROPOSAL.
-Она не является ADR и не является решением пользователя.
+The recommendation remains a PROPOSAL.
+It is not an ADR and it is not the user's decision.
 
-Если оснований выбрать один вариант недостаточно, не выбирай искусственно.
-Оставь recommendation = null и объясни, чего не хватает.
+If there are not enough grounds to choose one option, do not choose artificially.
+Leave recommendation = null and explain what is missing.
 
-## Формат
+## Wording
 
-Если пользователь уже сделал выбор:
+IDEA, OPEN QUESTION, PROPOSAL and ADR are atomic notes: one thought, normally one sentence.
+Do not embed answers, alternatives, decisions or outcomes inside a note — they are separate
+notes.
+
+Write simply and directly: clear, short, with one obvious meaning, in words a developer
+understands at a glance. Prefer concrete wording to abstract; avoid unnecessary jargon and
+bureaucratic phrasing.
+
+Discussion and rationale may be long; the text of a note may not.
+
+## Language
+
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Format
+
+If the user has already made a choice:
 
 {
   "status": "user_selected",
@@ -74,21 +95,21 @@ constraints, risks и уже принятых решений, порекомен
     "risk_ids": [],
     "depends_on_question_ids": ["Q2"]
   },
-  "summary": "Требует решённого Q2. Противоречий с F4 нет.",
+  "summary": "Requires Q2 to be resolved. No conflicts with F4.",
   "adr_draft": {
-    "decision": "Бот отвечает ссылкой, найденной тем же поиском.",
-    "rationale": "Бот остаётся интерфейсом, а поиск не дублируется.",
+    "decision": "The bot replies with a link found by the same search.",
+    "rationale": "The bot stays an interface, and the search is not duplicated.",
     "rationale_source": "ai_suggested"
   }
 }
 
-Если вопрос unresolved:
+If the question is unresolved:
 
 {
   "status": "unresolved",
   "recommendation": {
     "proposal_id": "P3",
-    "reason": "Перефразирование укладывается в F4 и не требует векторной базы для всего корпуса."
+    "reason": "Paraphrasing fits within F4 and does not require a vector database for the whole corpus."
   },
   "adr_draft": {
     "decision": null,
@@ -96,27 +117,27 @@ constraints, risks и уже принятых решений, порекомен
   }
 }
 
-Если уверенной рекомендации нет:
+If there is no confident recommendation:
 
 {
   "status": "unresolved",
   "recommendation": null,
-  "reason": "Выбор зависит от Q3, который пока не решён.",
+  "reason": "The choice depends on Q3, which is not resolved yet.",
   "adr_draft": {
     "decision": null,
     "rationale": null
   }
 }
 
-## Важные правила
+## Important rules
 
-- Никогда не отмечай recommendation как принятое решение.
-- Никогда не создавай accepted ADR без явного решения пользователя.
-- ADR без rationale не существует как сохранённый ADR.
-- Не придумывай rationale пользователя.
-- `ai_suggested` rationale требует отдельного принятия пользователем.
-- Не создавай новые PROPOSALS на этом этапе.
-- Не переоткрывай уже принятые решения без обнаруженного конфликта.
+- Never mark a recommendation as an accepted decision.
+- Never create an accepted ADR without the user's explicit decision.
+- An ADR without a rationale does not exist as a saved ADR.
+- Do not invent the user's rationale.
+- An `ai_suggested` rationale requires separate acceptance by the user.
+- Do not create new PROPOSALS at this stage.
+- Do not reopen decisions that are already accepted unless a conflict has been found.
 
 ## IDEA
 
@@ -148,28 +169,31 @@ constraints, risks и уже принятых решений, порекомен
 
 ## REPOSITORY CONTEXT
 
-Карта существующей реализации, проверенная на шаге Repository Discovery: как система устроена
-сейчас. `verified` — подтверждено кодом, `inferred` — вывод из наблюдений, `unknown` — установить
-не удалось. Используй её как факты о текущем состоянии системы. Существующая реализация — не
-принятое решение и не требование: не превращай её в ADR и не выбирай вариант только потому, что
-так уже сделано.
+A map of the existing implementation, checked at the Repository Discovery step: how the system is
+built now. `verified` — confirmed by the code, `inferred` — a conclusion from observations,
+`unknown` — could not be established. Use it as facts about the current state of the system. The
+existing implementation is not an accepted decision and not a requirement: do not turn it into an
+ADR and do not choose an option only because it is already done that way.
 
-`complete: false` и `remaining_follow_up` — исследование не закончено: эти места не установлены,
-не считай их решёнными. `repositories` — с каких рабочих копий снята карта (бэкенд и фронтенд
-бывают в разных репозиториях): у нескольких пути файлов в карте начинаются с `folder` своей
-копии. `uncommitted_changes` — карта этой копии снята с рабочей копии с правками, а не с коммита;
-`files_outside_checkout` и `not_in_snapshot` — чего в снимке не было и модели не видели.
+`complete: false` and `remaining_follow_up` — the investigation is not finished: these places are
+not established, do not treat them as resolved. `repositories` — which working copies the map was
+taken from (the backend and the frontend are sometimes in different repositories): when there are
+several, file paths in the map start with the `folder` of their copy. `uncommitted_changes` — the
+map of this copy was taken from a working copy with edits, not from a commit;
+`files_outside_checkout` and `not_in_snapshot` — what was not in the snapshot and the models did
+not see.
 
 {{repository}}
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}

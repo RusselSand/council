@@ -8,9 +8,11 @@
 для unresolved подбирает вариант из тех, что есть. Человек фиксирует решения — и совет сразу
 собирает из них итоги. Каждый шаг утверждают заново — то, что ниже по цепочке, ищется заново."""
 
+import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
@@ -23,11 +25,13 @@ from ..deps import (
     FigmaDep,
     Launcher,
     LauncherDep,
+    NotesDep,
     RepositoriesDep,
     Store,
     StoreDep,
 )
 from ..design import context_prompt as design_context
+from ..export import export_in
 from ..figma import FigmaError, links_of
 from ..ideas import IDEA_MAX
 from ..models import (
@@ -46,6 +50,7 @@ from ..models import (
     Decision,
     DecisionAnalysis,
     DecisionDraft,
+    DecisionsSearch,
     DesignScan,
     DesignStep,
     Group,
@@ -53,8 +58,10 @@ from ..models import (
     IdeaDiscovery,
     IssueDiscovery,
     LabeledFragment,
+    NotesDraft,
     OpenQuestion,
     OutcomeDiscovery,
+    ProjectDecision,
     ProposalDiscovery,
     QuestionDiscovery,
     RepositoryScan,
@@ -62,12 +69,15 @@ from ..models import (
     ScanDesign,
     ScannedRepository,
     ScanRepository,
+    SelectDecisions,
     Stream,
     StreamIdea,
 )
+from ..notes import Catalog, NotesError
 from ..pipeline import (
     CouncilRun,
     DecisionRun,
+    DecisionsRun,
     DesignRun,
     IdeaRun,
     IssueRun,
@@ -80,6 +90,7 @@ from ..pipeline import (
     decisions_key,
     scope_key,
     start_analysis,
+    start_decisions,
     start_design,
     start_idea,
     start_issues,
@@ -88,6 +99,7 @@ from ..pipeline import (
     start_questions,
     start_scan,
 )
+from ..project import catalog_print, fingerprint, records
 from ..questions import QUESTION_MAX, same_question
 from ..repository import (
     Inventory,
@@ -117,16 +129,19 @@ from .councils import (
 from .groups import NOT_THESE_GROUPS, current, outdated
 
 router = APIRouter(prefix="/councils", tags=["streams"])
+log = logging.getLogger(__name__)
 
 NO_STREAM = {409: {"description": "Групп уже других: потока нет, или группы не подтверждены"}}
 CHANGING = {503: {"description": "Состав совета меняется прямо сейчас"}}
 NO_IDEA = "Сначала утвердите идею потока"
 NO_REPOSITORY = "Сначала пройдите шаг «Репозиторий»"
 RESLICED = "Типы фрагментов поменялись после раскладки — сначала разложите заново"
+# Всё, что ниже отбора решений проекта: другой отбор это сбрасывает.
+BELOW_DECISIONS = {"questions": None, "scope": None, "proposals": None, "choices": None,
+                   "analysis": None, "decisions": None, "outcomes": None, "issues": None}
 # Всё, что ниже шагов «Репозиторий» и «Дизайн»: другой скан, другой выбор на шаге или другая
-# идея это сбрасывает.
-BELOW_DESIGN = {"questions": None, "scope": None, "proposals": None, "choices": None,
-                    "analysis": None, "decisions": None, "outcomes": None, "issues": None}
+# идея это сбрасывает — и отбор решений проекта тоже.
+BELOW_DESIGN = {"decisions_search": None, "project_decisions": None, **BELOW_DECISIONS}
 
 
 @router.post("/{council_id}/structure/confirm",
@@ -263,7 +278,8 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
         seen_idea(stream, edit)
         if running(stream.scan):
             raise HTTPException(409, "Скан уже идёт")
-        if below_running(stream, "questions"):
+        # Скан макета другой скан репозитория не сбрасывает — ниже него и смотрим.
+        if below_running(stream, "decisions_search"):
             raise HTTPException(423, "Совет ещё работает ниже по цепочке — дождитесь его")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
@@ -348,13 +364,17 @@ def step_key(step: RepositoryStep | DesignStep) -> str:
     return step.scan_run if step.by == "scan" else SKIPPED
 
 
-def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep) -> bool:
+def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep,
+              decisions: list[ProjectDecision] | None = None) -> bool:
     """Вопросы ищутся заново, если их ещё не искали или искали к другой идее, карте
-    репозитория или описанию макета."""
+    репозитория, описанию макета или другим отобранным решениям проекта."""
     questions = stream.questions
+    picked = (stream.project_decisions if decisions is None else decisions) or []
     return (questions is None or questions.idea != stream.idea.text
             or questions.repository != step_key(repository)
-            or questions.design != step_key(design))
+            or questions.design != step_key(design)
+            or questions.decisions != [d.adr_id for d in picked]
+            or questions.decisions_seen != fingerprint(picked))
 
 
 def repository_map(stream: Stream) -> str:
@@ -391,7 +411,7 @@ def scan_design(council_id: str, group: str, edit: ScanDesign, store: StoreDep,
             raise HTTPException(409, NO_REPOSITORY)
         if running(stream.design_scan):
             raise HTTPException(409, "Скан макета уже идёт")
-        if below_running(stream, "questions"):
+        if below_running(stream, "decisions_search"):
             raise HTTPException(423, "Совет ещё работает ниже по цепочке — дождитесь его")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
@@ -432,11 +452,14 @@ def scan_design(council_id: str, group: str, edit: ScanDesign, store: StoreDep,
                                              "поменяли или шаг «Репозиторий» не пройден"},
                         423: {"description": "Совет ещё сканирует макет или работает ниже"}})
 def approve_design(council_id: str, group: str, edit: ApproveDesign, store: StoreDep,
-                   config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                   config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                   notes: NotesDep) -> Council:
     """Человек проходит шаг «Дизайн»: утверждает описание скана макета или пропускает шаг, — и
-    совет сразу ищет открытые вопросы, а описание идёт во все следующие шаги. Пройти шаг заново
-    иначе — вопросы и всё ниже ищутся заново; так же — ничего не меняется. Описание — того
-    скана, что был на экране: сканировали заново — 409; идея — та, что человек видел."""
+    совет сразу ищет открытые вопросы, а описание идёт во все следующие шаги. Если в каталоге
+    заметок есть прошлые решения проекта, сначала совет отбирает относящиеся к идее, а вопросы
+    — когда человек отметит нужные. Пройти шаг заново иначе — всё ниже заново; так же — ничего
+    не меняется. Описание — того скана, что был на экране: сканировали заново — 409; идея — та,
+    что человек видел."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -452,20 +475,297 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
         step = design_step(stream, edit)
         changes: dict = {"design": step}
         runs: list[CouncilRun] = []
-        if asks_anew(stream, stream.repository, step):
-            ready = stream.model_copy(update={"design": step})
+        ready = stream.model_copy(update={"design": step})
+        # То же, что сочла plan(): иначе ходы ниже сбросились бы мимо её проверок (423, модели).
+        if not asks_anew(stream, stream.repository, step):
+            return store.update_council(council_id, {
+                "streams": replaced(council, stream.model_copy(update=changes))}), runs
+        catalog = project_catalog(notes, stream)
+        if catalog is not None and searches_anew(ready):
+            if missing:
+                search = unconnected(start_decisions(
+                    council.participants, council.judge, stream.idea.text,
+                    step_key(stream.repository), step_key(step)), missing)
+            else:
+                runs = [decisions_run(council, group, ready, agents, store, catalog,
+                                      own_ids(ready, notes))]
+                search = runs[0].state.model_copy(deep=True)
+            changes |= {**BELOW_DESIGN, "decisions_search": search}
+        elif catalog is None:
             if missing:
                 questions = unconnected(start_questions(
                     council.participants, council.judge, stream.idea.text,
                     step_key(stream.repository), step_key(step)), missing)
             else:
-                runs = [question_run(council, group, ready, agents, store)]
+                runs = [question_run(council, group, ready.model_copy(
+                    update={"project_decisions": None}), agents, store)]
                 questions = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DESIGN, "questions": questions}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
+
+
+def catalog_at(notes: Path | None) -> Catalog | None:
+    """Каталог заметок как есть. Нет его или не прочитать — None."""
+    if notes is None or not notes.exists():
+        return None
+    try:
+        return Catalog.load(notes)
+    except NotesError as exc:
+        log.warning("Каталог заметок %s не прочитан, решения проекта не отбираются: %s", notes,
+                    exc)
+        return None
+
+
+def own_ids(stream: Stream, notes: Path | None) -> list[str]:
+    """Заметки, которые выгрузил сам поток в этот каталог: его решения ему не «прошлые».
+    Выгрузка в другой каталог (COUNCIL_NOTES сменили) здесь ничего не значит."""
+    record = export_in(stream.notes, notes)
+    return [note.id for note in record.notes] if record else []
+
+
+def changed_in(catalog: Catalog | None, own: list[str],
+               chosen: list[ProjectDecision]) -> list[str]:
+    """Отмеченные решения, которые в каталоге уже не те, что видели в отборе: убраны, правлены,
+    заменены другим. След в коде не сверяется — его ищет git, а не каталог."""
+    if not chosen:
+        return []
+    now = {record.adr_id: record for record in records(catalog, {}, own)} if catalog else {}
+
+    def seen(record: ProjectDecision) -> tuple:
+        return (record.idea, record.question, record.decision, record.status,
+                record.superseded_by)
+
+    return [d.adr_id for d in chosen if d.adr_id not in now or seen(now[d.adr_id]) != seen(d)]
+
+
+def searched_another(catalog: Catalog | None, own: list[str],
+                     search: DecisionsSearch | None) -> bool:
+    """Каталог решений не тот, что видели модели в отборе: решение добавили, поправили,
+    заменили или убрали — и пусть даже его никто не отмечал."""
+    if search is None or search.state != "done" or not search.fingerprint:
+        return False
+    return catalog_print(catalog, own) != search.fingerprint
+
+
+def outdated_selection(notes: Path | None, stream: Stream,
+                       chosen: list[ProjectDecision]) -> str | None:
+    """Почему отбор решений проекта устарел: отмеченные в каталоге уже не те, каталог не тот,
+    что видели модели, или отмечали к отбору, который с тех пор упал. Не устарел — None."""
+    catalog, own, search = catalog_at(notes), own_ids(stream, notes), stream.decisions_search
+    stale = changed_in(catalog, own, chosen)
+    if not (stale or searched_another(catalog, own, search)
+            or (chosen and (search is None or search.state != "done"))):
+        return None
+    what = f" ({', '.join(stale)})" if stale else ""
+    return f"Решения проекта в каталоге заметок поменялись после отбора{what}: отберите их заново"
+
+
+def stale_choice(notes: Path | None, stream: Stream) -> str | None:
+    """Почему отметка решений проекта не годится для поиска вопросов: отбор устарел — или
+    отбора не было, а решения в каталоге с тех пор появились. Годится — None."""
+    if stream.decisions_search is None:
+        return (None if project_catalog(notes, stream) is None else
+                "В каталоге заметок появились решения проекта: отберите их для потока")
+    return outdated_selection(notes, stream, stream.project_decisions or [])
+
+
+def unselected(council: Council, stream: Stream, message: str) -> Stream:
+    """Поток, чей отбор решений проекта устарел или которого не было: отбор упал с причиной и
+    под новым номером — вкладка с прежним не пройдёт мимо отказа и «без решений»; отметка и
+    всё ниже неё сняты — со старыми решениями дальше не идут, их отбирают заново."""
+    search = stream.decisions_search or start_decisions(
+        council.participants, council.judge, stream.idea.text, step_key(stream.repository),
+        step_key(stream.design))
+    failed = search.model_copy(update={"state": "failed", "error": message,
+                                       "run": uuid4().hex[:8]})
+    return stream.model_copy(update={**BELOW_DECISIONS, "project_decisions": None,
+                                     "decisions_search": failed})
+
+
+def changed_choice(notes: Path | None, stream: Stream) -> str | None:
+    """Почему отметка решений проекта не годится ходу ниже вопросов: отмеченные в каталоге
+    поправили, заменили или убрали. Новые решения в каталоге работу ниже не сбрасывают: вопросы
+    к ней уже нашли. Годится — None."""
+    chosen = stream.project_decisions or []
+    stale = changed_in(catalog_at(notes), own_ids(stream, notes), chosen)
+    if not stale:
+        return None
+    return (f"Решения проекта в каталоге заметок поменялись после отбора ({', '.join(stale)}): "
+            "отберите их заново")
+
+
+def refused(message: str | None) -> None:
+    if message is not None:
+        raise HTTPException(409, message)
+
+
+def expired(store: Store, council: Council, stream: Stream, message: str | None) -> None:
+    """Под замком: отметка решений проекта устарела (message) — отбор упал, отметка и всё ниже
+    сняты (unselected), и 409. Пока ход ниже вопросов идёт — 423: его отчёт вернул бы снятое."""
+    if message is None:
+        return
+    if below_running(stream, "questions"):
+        raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
+    store.update_council(council.id, {"streams": replaced(
+        council, unselected(council, stream, message))})
+    raise HTTPException(409, message)
+
+
+def expired_before(store: Store, council_id: str, group: str, slot: Slot,
+                   why: Callable[[Council], str | None]) -> None:
+    """Перед повтором хода, которому нужна отметка решений проекта: сверка под замком, как и
+    запуск (выгрузка другого потока ждёт этот замок). why — проверки входа и что не так с
+    отметкой. Ход уже идёт — пусть отвечает запуск."""
+    with council_lock:
+        council = store.get_council(council_id)
+        if council is not None and not running(slot.get(council)):
+            expired(store, council, stream_in(council, group), why(council))
+
+
+def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
+    """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
+    Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
+    catalog = catalog_at(notes)
+    if catalog is None:
+        return None
+    own = set(own_ids(stream, notes))
+    adrs = [note for note in catalog.notes.values() if note.type == "adr" and note.id not in own]
+    return catalog if adrs else None
+
+
+def searches_anew(stream: Stream) -> bool:
+    """Решения проекта отбираются заново, если их ещё не отбирали или отбирали к другой идее,
+    карте или описанию макета."""
+    search = stream.decisions_search
+    return (search is None or search.idea != stream.idea.text
+            or search.repository != step_key(stream.repository)
+            or search.design != step_key(stream.design))
+
+
+@router.post("/{council_id}/streams/{group}/project-decisions",
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
+                        409: {"description": "Шаг «Дизайн» не пройден, отбор уже другой, ещё "
+                                             "идёт или идею поменяли"},
+                        422: {"description": "Отмечено решение не из отбора"}})
+def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: StoreDep,
+                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                     notes: NotesDep) -> Council:
+    """Человек отмечает, какие прошлые решения проекта учитывать в потоке, — и совет сразу ищет
+    вопросы: эти решения идут в промпты вопросов, вариантов и решений. Ни одного (или отбор не
+    удался) — вопросы без них. Отметить заново иначе — вопросы и всё ниже заново. Отмеченное
+    решение в каталоге с тех пор поменяли, заменили или убрали — 409, и отбор записан упавшим:
+    его запускают заново, и модели увидят решения, какие они сейчас."""
+    def plan() -> tuple[Council, bool]:
+        council = current(council_id, store, edit)
+        stream = stream_in(council, group)
+        seen_idea(stream, edit)
+        chosen = selection_for(stream, edit)
+        # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
+        # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
+        expired(store, council, stream, outdated_selection(notes, stream, chosen))
+        anew = asks_anew(stream, stream.repository, stream.design, chosen)
+        if anew and below_running(stream, "questions"):
+            raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
+        return council, anew
+
+    def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
+        stream = stream_in(council, group)
+        chosen = selection_for(stream, edit)
+        changes: dict = {"project_decisions": chosen}
+        runs: list[CouncilRun] = []
+        if asks_anew(stream, stream.repository, stream.design, chosen):
+            ready = stream.model_copy(update={"project_decisions": chosen})
+            if missing:
+                questions = unconnected(start_questions(
+                    council.participants, council.judge, stream.idea.text,
+                    step_key(stream.repository), step_key(stream.design), chosen), missing)
+            else:
+                runs = [question_run(council, group, ready, agents, store)]
+                questions = runs[0].state.model_copy(deep=True)
+            changes |= {**BELOW_DECISIONS, "questions": questions}
+        return store.update_council(council_id, {
+            "streams": replaced(council, stream.model_copy(update=changes))}), runs
+
+    return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
+
+
+def selection_for(stream: Stream, edit: SelectDecisions) -> list[ProjectDecision]:
+    """Отмеченные решения — из того отбора, что был на экране, готового; ни одного — можно и
+    без отбора (не удался или его не было)."""
+    if stream.idea is None:
+        raise HTTPException(409, NO_IDEA)
+    if stream.design is None:
+        raise HTTPException(409, "Сначала пройдите шаг «Дизайн»")
+    search = stream.decisions_search
+    if running(search):
+        raise HTTPException(409, "Совет ещё отбирает решения проекта — дождитесь его")
+    # И «без решений» — к тому отбору, что на экране: вкладка с прежним его не отменит.
+    if search is not None and search.run != edit.search_run:
+        raise HTTPException(409, "Решения проекта уже отбирали заново — посмотрите на нынешний "
+                                 "отбор")
+    if not edit.keep:
+        return []
+    if search is None or search.state != "done":
+        raise HTTPException(409, "Решения проекта уже отбирали заново — посмотрите на нынешний "
+                                 "отбор")
+    found = {d.adr_id: d for d in search.decisions}
+    unknown = [adr_id for adr_id in edit.keep if adr_id not in found]
+    if unknown:
+        raise HTTPException(422, f"Таких решений нет в отборе: {', '.join(unknown)}")
+    return [d for d in search.decisions if d.adr_id in set(edit.keep)]
+
+
+@router.post("/{council_id}/streams/{group}/project-decisions/search", status_code=202,
+             responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
+def start_decisions_search(council_id: str, group: str, store: StoreDep, config: ConfigDep,
+                           agents: AgentsDep, launch: LauncherDep, notes: NotesDep) -> Council:
+    """Отбирает прошлые решения проекта заново: после сбоя или если при прохождении шага не было
+    подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали."""
+    def ready(council: Council) -> None:
+        stream = stream_in(council, group)
+        if stream.idea is None:
+            raise HTTPException(409, NO_IDEA)
+        if stream.design is None:
+            raise HTTPException(409, "Сначала пройдите шаг «Дизайн»")
+        # Отмеченные — и отбор не упал: заново не нужно. Упал (в каталоге поменялись
+        # отмеченные) — отобрать заново можно и поверх прежней отметки.
+        search = stream.decisions_search
+        if stream.project_decisions is not None and (search is None
+                                                     or search.state != "failed"):
+            raise HTTPException(409, "Решения проекта уже отмечены")
+        if project_catalog(notes, stream) is None:
+            raise HTTPException(422, "В каталоге заметок нет прошлых решений проекта")
+        if outdated(council.slicing, council.structure):
+            raise HTTPException(409, RESLICED)
+
+    def build(council: Council, report: Callable) -> DecisionsRun:
+        stream = stream_in(council, group)
+        return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
+                            council.participants, council.judge, agents, report,
+                            catalog=project_catalog(notes, stream), scan=approved_scan(stream),
+                            own=own_ids(stream, notes))
+
+    return start_run(council_id, store, config, agents, launch, searching(group), ready, None,
+                     build)
+
+
+def approved_scan(stream: Stream) -> RepositoryScan | None:
+    """Скан, карту которого утвердили на шаге «Репозиторий», — по его файлам ищется след."""
+    step, scan = stream.repository, stream.scan
+    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
+        return None
+    return scan
+
+
+def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, store: Store,
+                  catalog: Catalog, own: list[str]) -> DecisionsRun:
+    return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
+                        council.participants, council.judge, runner,
+                        reporter(store, council.id, searching(group)), catalog=catalog,
+                        scan=approved_scan(stream), own=own)
 
 
 def design_step(stream: Stream, edit: ApproveDesign) -> DesignStep:
@@ -518,10 +818,13 @@ def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:
 @router.post("/{council_id}/streams/{group}/questions/discovery", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_question_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                             agents: AgentsDep, launch: LauncherDep) -> Council:
+                             agents: AgentsDep, launch: LauncherDep,
+                             notes: NotesDep) -> Council:
     """Ищет вопросы к идее потока заново: после сбоя или если при утверждении идеи не было
-    подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали."""
-    def ready(council: Council) -> None:
+    подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали.
+    Решения проекта в каталоге с тех пор поменялись (или появились) — 409, и отбор записан
+    упавшим, а отметка снята: вопросы ищутся только к решениям, какие они сейчас."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.idea is None:
             raise HTTPException(409, NO_IDEA)
@@ -529,10 +832,18 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
             raise HTTPException(409, NO_REPOSITORY)
         if stream.design is None:
             raise HTTPException(409, "Сначала пройдите шаг «Дизайн»")
+        if running(stream.decisions_search):
+            raise HTTPException(409, "Совет ещё отбирает решения проекта — дождитесь его")
+        if stream.decisions_search is not None and stream.project_decisions is None:
+            raise HTTPException(409, "Сначала отметьте решения проекта")
         if stream.scope is not None:
             raise HTTPException(409, "Вопросы потока уже утверждены")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(stale_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> QuestionRun:
         stream = stream_in(council, group)
@@ -541,8 +852,11 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                            council.participants, council.judge, agents, report,
                            repository=step_key(stream.repository),
                            repository_map=repository_map(stream),
-                           design=step_key(stream.design), design_map=design_map(stream))
+                           design=step_key(stream.design), design_map=design_map(stream),
+                           accepted=stream.project_decisions or ())
 
+    expired_before(store, council_id, group, asking(group),
+                   lambda council: stale_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, asking(group), ready, None,
                      build)
 
@@ -554,12 +868,14 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                         423: {"description": "Совет ещё ищет варианты или проверяет выбор "
                                              "к прежнему отбору"}})
 def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreDep,
-                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                  notes: NotesDep) -> Council:
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных и свои, — и
     совет сразу ищет к ним новые варианты ответа. Ответы он здесь не выбирает. Утвердить
     заново — поменять отбор: варианты к прежнему и выбор по ним ищутся заново; тот же отбор
     их не трогает. Если поиск вопросов упал, можно утвердить и одни свои вопросы. Отбор — к
-    тому поиску, что был на экране: нашли заново — 409, экран покажет новые вопросы."""
+    тому поиску, что был на экране: нашли заново — 409, экран покажет новые вопросы.
+    Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -568,6 +884,8 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
         if anew and below_running(stream, "proposals"):
             raise HTTPException(
                 423, "Совет ещё работает с прежним отбором — дождитесь его")
+        if anew:
+            expired(store, council, stream, changed_choice(notes, stream))
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -610,10 +928,12 @@ def proposes_anew(stream: Stream, scope: list[OpenQuestion]) -> bool:
 @router.post("/{council_id}/streams/{group}/proposals/discovery", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_proposal_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                             agents: AgentsDep, launch: LauncherDep) -> Council:
+                             agents: AgentsDep, launch: LauncherDep,
+                             notes: NotesDep) -> Council:
     """Ищет варианты к отобранным вопросам заново: после сбоя или если при утверждении отбора
-    не было подключения к моделям. Повтор не платит второй раз за уже данные ответы."""
-    def ready(council: Council) -> None:
+    не было подключения к моделям. Повтор не платит второй раз за уже данные ответы.
+    Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают заново."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.scope is None:
             raise HTTPException(409, "Сначала утвердите вопросы потока")
@@ -621,14 +941,21 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
             raise HTTPException(409, "Выбор по вопросам уже утверждён")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> ProposalRun:
         stream = stream_in(council, group)
         return ProposalRun(council.id, stream.idea.text, stream.scope,
                            fragments_of(council, group_of(council, group)),
                            council.participants, council.judge, agents, report,
-                           repository=repository_map(stream), design=design_map(stream))
+                           repository=repository_map(stream), design=design_map(stream),
+                           accepted=stream.project_decisions or ())
 
+    expired_before(store, council_id, group, proposing(group),
+                   lambda council: changed_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, proposing(group), ready, None,
                      build)
 
@@ -640,20 +967,24 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
                         423: {"description": "Совет ещё проверяет прежний выбор или собирает "
                                              "итоги по нему"}})
 def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: StoreDep,
-                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                    notes: NotesDep) -> Council:
     """Человек утверждает выбор: по каждому отобранному вопросу — вариант из текста группы
     (Fn) или найденный советом (Pn), либо None — пока не решает, вопрос уходит как unresolved.
     И совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что есть.
     Утвердить заново — поменять выбор: проверка прежнего и решения по ней уже ни к чему; тот
     же выбор их не трогает. Выбор — к тому поиску вариантов, что был на экране: нашли заново —
     409. Если поиск упал, выбирать можно из того, что есть: предложений группы и уже
-    найденного."""
+    найденного. Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают
+    заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         anew = analyzes_anew(stream, choices_for(stream, edit))
         if anew and below_running(stream, "analysis"):
             raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
+        if anew:
+            expired(store, council, stream, changed_choice(notes, stream))
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -733,10 +1064,12 @@ def offered_for(question: OpenQuestion, search: ProposalDiscovery | None) -> set
 @router.post("/{council_id}/streams/{group}/analysis", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_decision_analysis(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                            agents: AgentsDep, launch: LauncherDep) -> Council:
+                            agents: AgentsDep, launch: LauncherDep,
+                            notes: NotesDep) -> Council:
     """Проверяет выбор заново: после сбоя или если при утверждении выбора не было подключения
-    к моделям. Повтор не платит второй раз за уже данные ответы."""
-    def ready(council: Council) -> None:
+    к моделям. Повтор не платит второй раз за уже данные ответы. Отмеченные решения проекта в
+    каталоге с тех пор поменялись — 409, их отбирают заново."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.choices is None:
             raise HTTPException(409, "Сначала утвердите выбор по вопросам")
@@ -744,14 +1077,21 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
             raise HTTPException(409, "Решения уже зафиксированы")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> DecisionRun:
         stream = stream_in(council, group)
         return DecisionRun(council.id, stream.idea.text, stream.scope, stream.choices,
                            stream.proposals, fragments_of(council, group_of(council, group)),
                            council.participants, council.judge, agents, report,
-                           repository=repository_map(stream), design=design_map(stream))
+                           repository=repository_map(stream), design=design_map(stream),
+                           accepted=stream.project_decisions or ())
 
+    expired_before(store, council_id, group, checking(group),
+                   lambda council: changed_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, checking(group), ready, None,
                      build)
 
@@ -776,7 +1116,7 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         anew = assembles_anew(stream, decisions_for(stream, edit))
-        if anew and (running(stream.outcomes) or running(stream.issues)):
+        if anew and below_running(stream, "outcomes"):
             raise HTTPException(423, "Совет ещё собирает итоги по прежним решениям или нарезает "
                                      "их на задачи — дождитесь его")
         return council, anew
@@ -1079,9 +1419,9 @@ def launched_all(store: Store, council_id: str, launch: Launcher, council: Counc
     return (store.get_council(council_id) or council) if failed else council
 
 
-def unconnected[S: (IdeaDiscovery, RepositoryScan, DesignScan, QuestionDiscovery,
-                    ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
-                    IssueDiscovery)](state: S, missing: list[str]) -> S:
+def unconnected[S: (IdeaDiscovery, RepositoryScan, DesignScan, DecisionsSearch,
+                    QuestionDiscovery, ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
+                    IssueDiscovery, NotesDraft)](state: S, missing: list[str]) -> S:
     """Ход, который не запустить: к моделям нет подключения. Записан упавшим с причиной."""
     return state.model_copy(update={
         "state": "failed", "error": f"Нет подключения к моделям: {', '.join(missing)}"})
@@ -1095,6 +1435,11 @@ def discovery(group: str) -> Slot:
 def scanning(group: str) -> Slot:
     """Скан репозитория потока как место хода."""
     return stream_slot(group, "scan")
+
+
+def searching(group: str) -> Slot:
+    """Отбор решений проекта для потока как место хода."""
+    return stream_slot(group, "decisions_search")
 
 
 def designing(group: str) -> Slot:
@@ -1157,7 +1502,8 @@ def question_run(council: Council, group: str, stream: Stream, runner: Runner,
                        reporter(store, council.id, asking(group)),
                        repository=step_key(stream.repository),
                        repository_map=repository_map(stream),
-                       design=step_key(stream.design), design_map=design_map(stream))
+                       design=step_key(stream.design), design_map=design_map(stream),
+                       accepted=stream.project_decisions or ())
 
 
 def proposal_run(council: Council, group: str, stream: Stream, scope: list[OpenQuestion],
@@ -1166,7 +1512,8 @@ def proposal_run(council: Council, group: str, stream: Stream, scope: list[OpenQ
                        fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, proposing(group)),
-                       repository=repository_map(stream), design=design_map(stream))
+                       repository=repository_map(stream), design=design_map(stream),
+                       accepted=stream.project_decisions or ())
 
 
 def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
@@ -1175,7 +1522,8 @@ def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
                        stream.proposals, fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, checking(group)),
-                       repository=repository_map(stream), design=design_map(stream))
+                       repository=repository_map(stream), design=design_map(stream),
+                       accepted=stream.project_decisions or ())
 
 
 def outcome_run(council: Council, group: str, stream: Stream, runner: Runner,

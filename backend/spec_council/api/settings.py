@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from ..config import MIN_PARTICIPANTS
-from ..deps import AgentsDep, ConfigDep, FigmaDep, RepositoriesDep
+from ..deps import AgentsDep, ConfigDep, FigmaDep, NotesDep, RepositoriesDep
 from ..models import Settings
 
 router = APIRouter(tags=["settings"])
@@ -9,7 +9,7 @@ router = APIRouter(tags=["settings"])
 
 @router.get("/settings")
 def get_settings(config: ConfigDep, agents: AgentsDep, repositories: RepositoriesDep,
-                 figma: FigmaDep) -> Settings:
+                 figma: FigmaDep, notes: NotesDep) -> Settings:
     available = agents.availability(m.alias for m in config.models)
     return Settings(
         models=[m.model_copy(update={"available": available[m.alias]}) for m in config.models],
@@ -18,4 +18,5 @@ def get_settings(config: ConfigDep, agents: AgentsDep, repositories: Repositorie
         default_judge=config.default_judge,
         repositories=str(repositories) if repositories else None,
         figma=figma is not None,
+        notes=str(notes) if notes else None,
     )

@@ -21,10 +21,12 @@ from .models import (
     Council,
     CouncilStatus,
     DecisionAnalysis,
+    DecisionsSearch,
     DesignScan,
     DesignStep,
     IdeaDiscovery,
     IssueDiscovery,
+    NotesDraft,
     OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
@@ -220,14 +222,14 @@ def interrupted(council: Council) -> Council:
 
 
 def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
-            | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery
-            | IssueDiscovery | None) -> bool:
+            | DecisionsSearch | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis
+            | OutcomeDiscovery | IssueDiscovery | NotesDraft | None) -> bool:
     return state is not None and state.state == "running"
 
 
 def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, DesignScan,
-               QuestionDiscovery, ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
-               IssueDiscovery)](state: S) -> S:
+               DecisionsSearch, QuestionDiscovery, ProposalDiscovery, DecisionAnalysis,
+               OutcomeDiscovery, IssueDiscovery, NotesDraft)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

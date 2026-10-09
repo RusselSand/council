@@ -381,8 +381,8 @@ def test_a_flow_entry_point_must_be_a_file_of_the_repository():
     result = map_of({"findings": [finding()], "flows": [
         {"name": "Запрос", "entry_point": "api/deps.py:get_context", "steps": []},
         {"name": "Выдуманный", "entry_point": "api/nowhere.py", "steps": []}]}, CONTEXT)
-    assert [(f.name, f.entry_point) for f in result.flows] == [
-        ("Запрос", "api/deps.py:get_context"), ("Выдуманный", "")]
+    assert [(f.name, f.entry_point, f.entry_file) for f in result.flows] == [
+        ("Запрос", "api/deps.py:get_context", "api/deps.py"), ("Выдуманный", "", "")]
 
 
 def link_folder(link, target):
@@ -631,8 +631,9 @@ def test_an_entry_point_may_have_spaces_in_its_path():
         {"name": "Платёж", "entry_point": "services/payment worker/main.py:run", "steps": []},
         {"name": "Целиком", "entry_point": "services/payment worker/main.py", "steps": []}]},
         context)
-    assert [f.entry_point for f in result.flows] == [
-        "services/payment worker/main.py:run", "services/payment worker/main.py"]
+    assert [(f.entry_point, f.entry_file) for f in result.flows] == [
+        ("services/payment worker/main.py:run", "services/payment worker/main.py"),
+        ("services/payment worker/main.py", "services/payment worker/main.py")]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="бита исполняемости на Windows нет")

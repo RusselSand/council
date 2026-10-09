@@ -1,113 +1,120 @@
-Ты выполняешь только смысловую разметку уже готовых фрагментов текста.
+You only do the semantic labeling of text fragments that are already prepared.
 
-Тебе дан окончательный набор смысловых фрагментов с ID.
-Границы и текст фрагментов уже определены и не подлежат изменению.
+You are given the final set of semantic fragments with IDs.
+The boundaries and text of the fragments are already fixed and must not be changed.
 
-Для каждого фрагмента определи его тип.
+Determine the type of each fragment.
 
-## Типы
+## Types
 
-### idea — идея
+### idea
 
-Главная цель, намерение или желаемый результат автора.
+The author's main goal, intention or desired result.
 
-Отвечает прежде всего на вопрос:
-«Что автор хочет получить или сделать?»
+It answers first of all the question:
+"What does the author want to get or do?"
 
-Идея описывает цель, а не конкретный способ её достижения.
+An idea describes the goal, not a specific way to achieve it.
 
-Пример:
-«Хочу отдельный Python worker для Codex CLI.»
+Example:
+"I want a separate Python worker for Codex CLI."
 
-### question — вопрос
+### question
 
-Вопрос автора или явно сформулированная неопределённость, для которой
-требуется ответ или решение.
+The author's question or an explicitly stated uncertainty that
+needs an answer or a decision.
 
-Пример:
-«Нужна ли здесь вообще база?»
+Example:
+"Do we need a database here at all?"
 
-### proposal — предложение
+### proposal
 
-Предлагаемый способ реализации, устройства или поведения решения.
+A proposed way the solution is implemented, structured or behaves.
 
-Отвечает прежде всего на вопрос:
-«Как автор предлагает это сделать?»
+It answers first of all the question:
+"How does the author propose to do it?"
 
-Примеры:
-«worker крутится локально»
-«принимает задания от сервера по HTTP»
-«Состояние держать в файлах, без базы.»
+Examples:
+"the worker runs locally"
+"accepts jobs from the server over HTTP"
+"Keep the state in files, without a database."
 
-### constraint — ограничение
+### constraint
 
-Уже существующее условие или граница, которую решение должно учитывать
-и которую в рамках обсуждаемой задачи нельзя просто выбрать иначе.
+An already existing condition or limit that the solution must take into account
+and that, within the task under discussion, cannot simply be chosen differently.
 
-Ограничение не предлагает способ решения, а сужает пространство возможных решений.
+A constraint does not propose a way to solve the problem; it narrows the space of possible solutions.
 
-Пример:
-«Сейчас сервер не может пользоваться Codex по моей подписке ChatGPT —
-только через API за деньги.»
+Example:
+"Right now the server cannot use Codex through my ChatGPT subscription —
+only through the API, for money."
 
-### risk — риск
+### risk
 
-Возможная нежелательная ситуация, потеря или последствие, которое важно
-предотвратить или учитывать.
+A possible undesirable situation, loss or consequence that is important
+to prevent or take into account.
 
-Пример:
-«запуск дорогой по времени и лимитам.»
+Example:
+"a run is costly in time and limits."
 
-## Как различать типы
+## How to tell the types apart
 
-Не определяй тип по отдельным словам.
-Определи функцию фрагмента в мысли автора.
+Do not determine the type by individual words.
+Determine the function of the fragment in the author's thought.
 
-Особенно различай:
+Distinguish especially:
 
-- `idea` и `proposal`:
-  `idea` — что автор хочет получить;
-  `proposal` — как автор предлагает этого добиться.
+- `idea` and `proposal`:
+  `idea` is what the author wants to get;
+  `proposal` is how the author proposes to achieve it.
 
-- `proposal` и `constraint`:
-  `proposal` — выбранный или предлагаемый способ;
-  `constraint` — внешнее или уже заданное условие, ограничивающее выбор.
+- `proposal` and `constraint`:
+  `proposal` is a chosen or proposed way;
+  `constraint` is an external or already given condition that limits the choice.
 
-- `constraint` и `risk`:
-  `constraint` существует независимо от возможного сбоя;
-  `risk` описывает нежелательную возможность или последствие.
+- `constraint` and `risk`:
+  `constraint` exists regardless of a possible failure;
+  `risk` describes an undesirable possibility or consequence.
 
 - `question`:
-  автор не утверждает решение, а оставляет вопрос открытым.
+  the author does not state a decision but leaves the question open.
 
-## Правила
+## Rules
 
-1. Не изменяй текст фрагментов.
-2. Не изменяй их границы.
-3. Не добавляй и не удаляй фрагменты.
-4. Используй только пять типов:
+1. Do not change the text of the fragments.
+2. Do not change their boundaries.
+3. Do not add or remove fragments.
+4. Use only five types:
    `idea`, `question`, `proposal`, `constraint`, `risk`.
-5. Не оценивай правильность или качество тезиса.
-6. Не проектируй решение.
-7. Не выводи намерения или ограничения, которых автор явно не выразил.
-8. Учитывай контекст исходного текста, если он необходим для определения
-   функции фрагмента.
+5. Do not assess the correctness or quality of a statement.
+6. Do not design a solution.
+7. Do not infer intentions or constraints that the author did not express explicitly.
+8. Take the context of the source text into account if it is needed to determine
+   the function of a fragment.
 
-## Неоднозначность
+## Ambiguity
 
-У одного фрагмента может быть несколько существенно различных разумных
-вариантов разметки.
+One fragment may have several substantially different reasonable
+labeling options.
 
-Определи, сколько таких вариантов ты действительно видишь.
+Determine how many such options you actually see.
 
-Один вариант — нормальный и ожидаемый результат.
-Не добавляй альтернативные типы только потому, что они теоретически возможны.
+One option is a normal and expected result.
+Do not add alternative types just because they are theoretically possible.
 
-Несколько вариантов нужны только при реальной смысловой неоднозначности.
+Several options are needed only when there is real semantic ambiguity.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "labels": [
@@ -116,7 +123,7 @@
       "options": [
         {
           "label": "idea",
-          "reason": "Фрагмент формулирует желаемый результат."
+          "reason": "The fragment states the desired result."
         }
       ]
     },
@@ -125,16 +132,16 @@
       "options": [
         {
           "label": "constraint",
-          "reason": "Фрагмент описывает уже существующее ограничение."
+          "reason": "The fragment describes an already existing constraint."
         }
       ]
     }
   ]
 }
 
-`reason` должен быть коротким и объяснять именно выбор типа,
-а не пересказывать фрагмент.
+`reason` must be short and explain the choice of the type itself,
+not retell the fragment.
 
-## Фрагменты
+## Fragments
 
 {{fragments}}

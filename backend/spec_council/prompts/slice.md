@@ -1,128 +1,135 @@
-Ты выполняешь только нарезку исходного текста на смысловые фрагменты.
+You only slice the source text into semantic fragments.
 
-## Что такое смысловой фрагмент
+## What a semantic fragment is
 
-Смысловой фрагмент — минимальный непрерывный отрывок исходного текста,
-который выражает одну законченную мысль автора в контексте обсуждаемой задачи.
+A semantic fragment is a minimal continuous passage of the source text
+that expresses one complete thought of the author in the context of the task under discussion.
 
-Фрагмент должен сохранять смысловые связи, явно выраженные автором.
-Если одна часть текста уточняет, ограничивает, объясняет, обосновывает
-или задаёт условие другой части той же мысли, не отделяй её только потому,
-что внутри можно выделить несколько отдельных утверждений.
+A fragment must keep the semantic links that the author expressed explicitly.
+If one part of the text refines, limits, explains, justifies
+or sets a condition for another part of the same thought, do not separate it just because
+several separate statements can be singled out inside it.
 
-При этом перечисление нескольких самостоятельных решений, требований,
-проблем или идей может содержать несколько смысловых фрагментов, даже если
-они находятся в одном предложении.
+At the same time, a list of several independent decisions, requirements,
+problems or ideas may contain several semantic fragments, even if
+they are in one sentence.
 
-Граница между фрагментами нужна там, где автор заканчивает одну мысль
-и переходит к другой самостоятельной мысли.
+A boundary between fragments is needed where the author finishes one thought
+and moves on to another independent thought.
 
-Не стремись сделать фрагменты как можно меньше.
-Цель — выделить минимальные законченные мысли автора, а не минимальные
-логические утверждения.
+Do not try to make fragments as small as possible.
+The goal is to single out the author's minimal complete thoughts, not minimal
+logical statements.
 
-## Примеры
+## Examples
 
-Исходный текст:
+Source text:
 
-«Состояние держать в файлах, без базы.»
+"Keep the state in files, without a database."
 
-Правильно:
+Correct:
 
 [
-  "Состояние держать в файлах, без базы."
+  "Keep the state in files, without a database."
 ]
 
-«без базы» уточняет тот же выбор способа хранения состояния и не является
-самостоятельной мыслью.
+"without a database" refines the same choice of how to store the state and is not
+an independent thought.
 
 ---
 
-Исходный текст:
+Source text:
 
-«worker крутится локально, принимает задания от сервера по HTTP,
-запускает codex как отдельный процесс, результат отправляет обратно
-на callback_url.»
+"the worker runs locally, accepts jobs from the server over HTTP,
+launches codex as a separate process, sends the result back
+to callback_url."
 
-Разумная нарезка:
+Reasonable slicing:
 
 [
-  "worker крутится локально,",
-  "принимает задания от сервера по HTTP,",
-  "запускает codex как отдельный процесс,",
-  "результат отправляет обратно на callback_url."
+  "the worker runs locally,",
+  "accepts jobs from the server over HTTP,",
+  "launches codex as a separate process,",
+  "sends the result back to callback_url."
 ]
 
-Здесь перечислены самостоятельные решения о разных аспектах работы worker.
+Here the text lists independent decisions about different aspects of how the worker works.
 
 ---
 
-Исходный текст:
+Source text:
 
-«Главное — не потерять результат, если что-то упало.»
+"The main thing is not to lose the result if something crashes."
 
-Правильно:
-
-[
-  "Главное — не потерять результат, если что-то упало."
-]
-
-Неправильно:
+Correct:
 
 [
-  "Главное — не потерять результат,",
-  "если что-то упало."
+  "The main thing is not to lose the result if something crashes."
 ]
 
-Условие является частью той же мысли.
+Wrong:
 
-## Правила
+[
+  "The main thing is not to lose the result",
+  "if something crashes."
+]
 
-1. Сохраняй исходный текст дословно.
-   Не перефразируй, не исправляй, не нормализуй и не дополняй его.
+The condition is part of the same thought.
 
-2. Не добавляй никаких утверждений или связей, которых нет в исходном тексте.
+## Rules
 
-3. Не теряй содержательный текст.
-   Все содержательные части исходника должны присутствовать в результате.
+1. Keep the source text verbatim.
+   Do not paraphrase, correct, normalize or add to it.
 
-4. Сохраняй исходный порядок текста.
+2. Do not add any statements or links that are not in the source text.
 
-5. Каждый фрагмент должен быть непрерывным отрывком исходного текста.
+3. Do not lose meaningful text.
+   All meaningful parts of the source must be present in the result.
 
-6. Фрагменты не должны перекрываться.
+4. Keep the original order of the text.
 
-7. Не объединяй самостоятельные мысли только потому, что они находятся
-   в одном предложении или перечислении.
+5. Each fragment must be a continuous passage of the source text.
 
-8. Не разделяй одну мысль только потому, что она содержит несколько фактов,
-   объектов, действий или технических деталей.
+6. Fragments must not overlap.
 
-9. Не оценивай правильность, важность или качество тезисов.
+7. Do not merge independent thoughts just because they are
+   in one sentence or list.
 
-10. Не проектируй решение и не делай выводов из текста.
-    Твоя задача — только определить границы мыслей, уже содержащихся в исходнике.
+8. Do not split one thought just because it contains several facts,
+   objects, actions or technical details.
 
-## Неоднозначность
+9. Do not assess the correctness, importance or quality of the statements.
 
-У одного текста может быть несколько существенно различных разумных вариантов
-нарезки.
+10. Do not design a solution and do not draw conclusions from the text.
+    Your task is only to find the boundaries of the thoughts already contained in the source.
 
-Определи, сколько таких вариантов ты действительно видишь.
+## Ambiguity
 
-Один вариант — нормальный и ожидаемый результат.
-Не создавай дополнительные варианты только потому, что теоретически текст
-можно разделить иначе.
+One text may have several substantially different reasonable slicing
+options.
 
-Добавляй второй или последующие варианты только тогда, когда существует
-реальная смысловая неоднозначность: одну и ту же часть текста разумно считать
-либо частью соседней мысли, либо самостоятельной законченной мыслью.
+Determine how many such options you actually see.
 
-Варианты должны отличаться хотя бы одной такой содержательно значимой границей.
+One option is a normal and expected result.
+Do not create additional options just because the text could theoretically
+be split differently.
 
-## Формат ответа
+Add a second or further options only when there is
+real semantic ambiguity: the same part of the text can reasonably be considered
+either part of the neighboring thought or an independent complete thought.
 
-Верни только JSON:
+Options must differ in at least one such boundary that matters for the meaning.
+
+## Language
+
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "number": 1,
@@ -137,24 +144,24 @@
   ]
 }
 
-Если вариантов несколько, для каждого варианта в `reason` кратко объясни,
-какая именно граница неоднозначна и почему возможны обе интерпретации.
+If there are several options, in the `reason` of each option briefly explain
+which boundary exactly is ambiguous and why both interpretations are possible.
 
-Не объясняй очевидные границы.
+Do not explain obvious boundaries.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь каждый вариант:
+Before answering, check each option:
 
-- каждый fragment дословно присутствует в исходном тексте;
-- порядок исходного текста сохранён;
-- содержательный текст не потерян;
-- фрагменты не перекрываются;
-- внутри fragment нет очевидного перехода к другой законченной мысли;
-- fragment не раздроблен так, что его часть потеряла самостоятельный смысл;
-- дополнительные варианты отражают реальную неоднозначность, а не созданы
-  ради разнообразия.
+- every fragment is present verbatim in the source text;
+- the order of the source text is kept;
+- no meaningful text is lost;
+- fragments do not overlap;
+- inside a fragment there is no obvious transition to another complete thought;
+- no fragment is broken up so much that a part of it has lost its own meaning;
+- additional options reflect real ambiguity and are not created
+  for the sake of variety.
 
-## Исходный текст
+## Source text
 
 {{input}}

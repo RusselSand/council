@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, DesignScan, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
+  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
   RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure,
 } from '../api'
@@ -24,7 +24,7 @@ const SETTINGS: Settings = {
     { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude', available: true },
     { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini', available: false },
   ],
-  min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true,
+  min_participants: 2, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true, notes: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -105,7 +105,7 @@ const FOUND: IdeaDiscovery = {
 /** Идея группы A — из текста: F1. */
 const TEXT_IDEA: StreamIdea = { text: 'Хочу воркер.', by: 'text', evidence: [1] }
 const QUESTIONS_SEEKING: QuestionDiscovery = {
-  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', questions: [], error: null,
+  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', questions: [], error: null,
   steps: [
     { name: 'question_discovery', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'question_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
@@ -119,9 +119,9 @@ const QUESTIONS_FOUND: QuestionDiscovery = {
   ],
   questions: [
     { id: 'Q1', text: 'Где хранить состояние?', source: 'inferred', source_question_id: null, proposal_ids: [2],
-      reason: 'F2 отвечает на незаписанный вопрос' },
+      reason: 'F2 отвечает на незаписанный вопрос', note: null, revisits: null },
     { id: 'Q2', text: 'Как понять, что воркер не теряет результат?', source: 'discovered', source_question_id: null,
-      proposal_ids: [], reason: 'без меры идею не проверить' },
+      proposal_ids: [], reason: 'без меры идею не проверить', note: null, revisits: null },
   ],
 }
 /** Шаги «Репозиторий» и «Дизайн» пропущены: так у потока с утверждённой идеей, если тест не скажет иначе. */
@@ -136,12 +136,14 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
   ...COUNCIL, status: 'review', slicing: DONE, structure,
   streams: [
     { group: 'A', discovery: null, idea: ideas.A ?? null, scan: null, repository: ideas.A ? SKIPPED : null,
-      design_scan: null, design: ideas.A ? SKIPPED : null,
+      design_scan: null, design: ideas.A ? SKIPPED : null, decisions_search: null, project_decisions: null,
+      notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
       issues: null,
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
-      design_scan: null, design: ideas.B ? SKIPPED : null,
+      design_scan: null, design: ideas.B ? SKIPPED : null, decisions_search: null, project_decisions: null,
+      notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
       issues: null,
       ...more.B },
@@ -195,7 +197,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|design(?:\/scan)?|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -260,7 +262,7 @@ describe('HomePage', () => {
   })
 
   it('показывает «Нет проектов» только после успешного пустого ответа', async () => {
-    fetchMock.mockReturnValue(json([]))
+    fetchMock.mockImplementation((url: string) => (url === '/api/councils' ? json([]) : server()(url)))
     renderAt('/')
     expect(await screen.findByText(ru['home.empty'])).toBeTruthy()
   })
@@ -475,10 +477,10 @@ describe('Поток: группа и идея', () => {
     expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
     const segments = within(now).getAllByRole('listitem')
     expect(segments.map(segment => segment.className)).toEqual([
-      'segment running', ...Array(7).fill('segment idle')])
+      'segment running', ...Array(8).fill('segment idle')])
     expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
     expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
-      ` (${ru['light.running']})`, ...Array(7).fill(` (${ru['light.idle']})`)])
+      ` (${ru['light.running']})`, ...Array(8).fill(` (${ru['light.idle']})`)])
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
@@ -558,7 +560,8 @@ describe('Поток: группа и идея', () => {
 
   it('вопросы: происхождение, причина, предложения; убрать, вернуть, свой — и отбор уходит на сервер', async () => {
     const chosen = { questions: QUESTIONS_FOUND, scope: [QUESTIONS_FOUND.questions[0],
-      { id: 'Q3', text: 'Кто платит за хостинг?', source: 'added' as const, source_question_id: null, proposal_ids: [], reason: null }] }
+      { id: 'Q3', text: 'Кто платит за хостинг?', source: 'added' as const, source_question_id: null, proposal_ids: [], reason: null, note: null,
+        revisits: null }] }
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }),
                () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: chosen })))
     const list = await screen.findByRole('list', { name: ru['questions.found'] })
@@ -775,7 +778,7 @@ describe('Поток: репозиторий', () => {
           evidence: [{ path: 'worker/state.py', lines: '10-30', symbol: 'save' }], relevance: 'там же надо хранить итог' },
         { id: 'R2', statement: 'Повторы не дедуплицируются', status: 'inferred', evidence: [], relevance: '' },
       ],
-      flows: [{ name: 'Ход воркера', entry_point: 'worker/main.py',
+      flows: [{ name: 'Ход воркера', entry_point: 'worker/main.py', entry_file: 'worker/main.py',
                 steps: [{ description: 'берёт задачу из очереди', finding_ids: ['R1'] }] }],
       coverage: [{ area: 'Хранение', status: 'covered', evidence_ids: ['R1'], reason: '' },
                  { area: 'Очередь', status: 'not_investigated', evidence_ids: [], reason: 'вне репозитория' }],
@@ -1202,6 +1205,209 @@ describe('Поток: решения и итоги', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['outcomes.toIssues'] }))
     expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([])
+  })
+
+  const openWith = (council: () => Council, stream: () => Promise<Response>, notes: string | null = '/notes') => {
+    fetchMock.mockImplementation(server({ council, stream, settings: () => ({ ...SETTINGS, notes }) }))
+    renderAt('/councils/demo-1/streams/A')
+  }
+  const SEARCH: DecisionsSearch = {
+    state: 'done', run: 'ps1', idea: TEXT_IDEA.text, repository: 'skipped', design: 'skipped', catalog: 5, traced: 1, fingerprint: 'f1',
+    error: null, steps: [{ name: 'project_decisions_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
+                         { name: 'project_decisions_judge', state: 'skipped', runs: [] }],
+    decisions: [
+      { adr_id: 'ADR-0001', idea: 'Воркер переживает сбой.', question: 'Где хранить состояние?',
+        decision: 'Состояние лежит в файлах, потому что так проще.', status: 'active', superseded_by: null,
+        found_in_code: [{ issue: 'ISS-0003', outcome: 'OUT-0001', commit: 'a1b2c3d', file: 'worker/state.py' }],
+        relevance: 'applicable', reason: 'та же память воркера' },
+      { adr_id: 'ADR-0007', idea: 'Отчёты приходят вовремя.', question: 'Кто шлёт отчёты?', decision: 'Отчёты шлёт бот.',
+        status: 'under_review', superseded_by: null, found_in_code: [], relevance: 'uncertain', reason: 'возможно' },
+    ],
+  }
+
+  it('решения проекта: совет отобрал прошлые, человек отмечает — и вопросы ищутся с ними', async () => {
+    const atBlock = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: SEARCH } })
+    openWith(() => atBlock, () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+      A: { decisions_search: SEARCH, project_decisions: [SEARCH.decisions[0]], questions: QUESTIONS_SEEKING } })))
+    expect(await screen.findByRole('heading', { name: ru['project.title'] })).toBeTruthy()
+    expect(screen.getByText(ru['questions.afterDecisions'])).toBeTruthy()
+    expect(screen.getByText('В каталоге решений: 5, со следом в коде: 1')).toBeTruthy()
+    expect(screen.getByText('след в коде: ISS-0003 · worker/state.py · a1b2c3d')).toBeTruthy()
+    expect(screen.getByText(ru['project.status.under_review'])).toBeTruthy()
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    expect(boxes.map(box => box.checked)).toEqual([true, false])        // «неясно» — не отмечено
+    fireEvent.click(boxes[1])
+    fireEvent.click(boxes[1])
+    fireEvent.click(screen.getByRole('button', { name: ru['project.approve'] }))
+    expect(await screen.findByText('Учитываются: ADR-0001')).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'project-decisions', body: {
+      run: 'g1', revision: 0, search_run: 'ps1', keep: ['ADR-0001'], idea: TEXT_IDEA.text } }])
+  })
+
+  it('отбор упал — «без прошлых решений» уходит с его номером: другой вкладке его не отменить', async () => {
+    const failed: DecisionsSearch = { ...SEARCH, state: 'failed', run: 'ps2', decisions: [],
+                                      error: 'Решения проекта в каталоге заметок поменялись' }
+    openWith(() => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: failed } }),
+             () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+               A: { decisions_search: failed, project_decisions: [], questions: QUESTIONS_SEEKING } })))
+    fireEvent.click(await screen.findByRole('button', { name: ru['project.skip'] }))
+    expect(await screen.findByText(ru['project.none'])).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'project-decisions', body: {
+      run: 'g1', revision: 0, search_run: 'ps2', keep: [], idea: TEXT_IDEA.text } }])
+  })
+
+  it('повтор поиска вопросов, а решения в каталоге поменялись, — отбор снят, видна причина', async () => {
+    const failed: QuestionDiscovery = { ...QUESTIONS_SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const message = 'Решения проекта в каталоге заметок поменялись после отбора (ADR-0001): отберите их заново'
+    let current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+      A: { decisions_search: SEARCH, project_decisions: [SEARCH.decisions[0]], questions: failed } })
+    openWith(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+        A: { decisions_search: { ...SEARCH, state: 'failed', run: 'ps2', error: message } } })
+      return json({ detail: message }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText(ru['questions.afterDecisions'])).toBeTruthy()
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: ru['project.skip'] })).toBeTruthy()
+  })
+
+  it('повтор поиска вариантов, а отмеченное решение переписали, — поток снова у отбора решений', async () => {
+    const failed: ProposalDiscovery = { state: 'failed', run: 'p1', scope: [], steps: [], options: [],
+                                        error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const message = 'Решения проекта в каталоге заметок поменялись после отбора (ADR-0001): отберите их заново'
+    let current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: {
+      decisions_search: SEARCH, project_decisions: [SEARCH.decisions[0]], questions: QUESTIONS_FOUND,
+      scope: QUESTIONS_FOUND.questions, proposals: failed } })
+    openWith(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+        A: { decisions_search: { ...SEARCH, state: 'failed', run: 'ps2', error: message } } })
+      return json({ detail: message }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText(ru['questions.afterDecisions'])).toBeTruthy()
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+  })
+
+  it('отбор решений идёт — опрос его ждёт; готов — рекомендованные уже отмечены', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const running: DecisionsSearch = { ...SEARCH, state: 'running', decisions: [] }
+      const replies = [confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: running } }),
+                       confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { decisions_search: SEARCH } })]
+      let polls = 0
+      openWith(() => replies[Math.min(polls++, 1)], () => json(atStart()))
+      expect(await screen.findByText(ru['project.searching'], { exact: false })).toBeTruthy()
+      vi.advanceTimersByTime(POLL_MS)
+      await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(2))
+      const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+      expect(boxes.map(box => box.checked)).toEqual([true, false])        // «неясно» — не отмечено
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('вопрос из текста — со своей формулировкой для заметки, пересмотр — с номером решения', async () => {
+    const questions: QuestionDiscovery = { ...QUESTIONS_FOUND, questions: [
+      { ...QUESTIONS_FOUND.questions[0], note: 'Где лежит состояние воркера?', revisits: 'ADR-0001' }] }
+    openWith(() => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions } }), () => json(atStart()))
+    expect(await screen.findByText('в заметке: Где лежит состояние воркера?')).toBeTruthy()
+    expect(screen.getByText('пересматривает ADR-0001')).toBeTruthy()
+  })
+  const atStart = () => confirmed()
+
+  const DRAFT: NotesDraft = {
+    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', steps: [], error: null,
+    notes: [
+      { key: 'idea', id: 'IDEA-0002', type: 'idea', text: 'Хочу воркер.', generated: 'Хочу воркер.', links: [],
+        action: 'create', current: null },
+      { key: 'q:F1', id: 'OQ-0004', type: 'open_question', text: 'Где хранить состояние?',
+        generated: 'Где хранить состояние?', links: ['IDEA-0002'], action: 'update', current: 'Где хранить?' },
+      { key: 'a:F1:F2', id: 'ADR-0005', type: 'adr', text: 'Файлы, потому что проще.', generated: 'Файлы, потому что проще.',
+        links: ['PRO-0006'], action: 'edited', current: 'Файлы, потому что проще. Дописали руками.' },
+    ],
+    vanished: [{ id: 'ADR-0003', type: 'adr', text: 'Старое решение.', linked_from: [] },
+               { id: 'ADR-0004', type: 'adr', text: 'Ещё старое.', linked_from: ['OQ-0009'] }],
+    numbers: [{ key: 'i:сохранять', id: 'ISS-0012', issue_id: 'I1', title: 'Сохранять состояние в файлы', outcome_ids: ['O1'] }],
+    skipped: ['O2 «Мера» не выгружается: у него нет решений этой идеи'],
+  }
+
+  it('документация: черновик заметок — правка текста, удаление исчезнувшего, запись', async () => {
+    const replies = [deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT }),
+                     deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT,
+                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } })]
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }),
+             () => json(replies[streamCalls.length - 1]))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
+    expect(screen.getByText('Каталог заметок: /notes')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['notes.build'] }))
+    expect(await screen.findByText('O2 «Мера» не выгружается: у него нет решений этой идеи')).toBeTruthy()
+    expect(screen.getByText(ru['notes.editedNote'])).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: 'Текст заметки ADR-0005' })).toBeNull()   // руками — не трогаем
+    fireEvent.change(screen.getByRole('textbox', { name: 'Текст заметки IDEA-0002' }), { target: { value: 'Воркер не теряет результат.' } })
+    const [free, linked] = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    expect(linked.disabled).toBe(true)
+    expect(screen.getByText('не удалить: на неё ссылаются OQ-0009')).toBeTruthy()
+    fireEvent.click(free)
+    fireEvent.click(screen.getByRole('button', { name: ru['notes.write'] }))
+    expect(await screen.findByText('Выгружено заметок: 0.')).toBeTruthy()
+    expect(streamCalls).toEqual([
+      { group: 'A', action: 'notes/draft', body: { run: 'g1', revision: 0 } },
+      { group: 'A', action: 'notes', body: { run: 'g1', revision: 0, draft: 'n1',
+                                             edits: { idea: 'Воркер не теряет результат.' }, delete: ['ADR-0003'] } }])
+    expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('документация без каталога заметок — подсказка, собрать нельзя', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(atStart()), null)
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.noRoot'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
+    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', numbers: DRAFT.numbers, notes: [
+      { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
+        links: [], digest: 'd1', kept: false },
+      { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
+        links: [], digest: 'd2', kept: true }] }
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT, notes }),
+             () => json(atStart()))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText('Выгружено заметок: 1.')).toBeTruthy()
+    const idea = screen.getByRole('textbox', { name: 'Текст заметки IDEA-0002' }) as HTMLTextAreaElement
+    expect(idea.value).toBe('Воркер не теряет результат.')
+    expect(idea.readOnly).toBe(true)
+  })
+
+  it('черновик заметок не собрался — причина видна, собрать можно снова', async () => {
+    const detail = 'Каталог заметок /notes: в adrs/ADR-0001.md нет frontmatter'
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json({ detail }, 422))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
+    expect((await screen.findByRole('alert')).textContent).toBe(detail)
+    expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
+             () => json(atStart()))
+    const issue = await card('Сохранять состояние в файлы')
+    expect(within(issue).getByText('ISS-0012')).toBeTruthy()
+    expect(within(issue).getByText(ru['issues.commit'].replace('{{id}}', 'ISS-0012'))).toBeTruthy()
+  })
+
+  it('выгрузка в прежний каталог (COUNCIL_NOTES сменили) — не выгрузка: номеров у задач нет', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
+             () => json(atStart()), '/other')
+    const issue = await card('Сохранять состояние в файлы')
+    expect(within(issue).queryByText('ISS-0012')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.elsewhere'].replace('{{root}}', '/notes'))).toBeTruthy()
+    expect(screen.getAllByText(ru['chain.notesElsewhere']).length).toBeGreaterThan(0)
   })
 
   it('нарезка упала — причина видна, её запускают снова', async () => {

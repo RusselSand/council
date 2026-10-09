@@ -1,16 +1,16 @@
 # Design Discovery
 
-Ты исследуешь существующий дизайн в Figma, чтобы установить, какой интерфейс и какое поведение предусмотрены для утверждённой IDEA.
+You investigate an existing design in Figma to establish which interface and which behavior are intended for the approved IDEA.
 
-Тебе даны:
-- утверждённая IDEA;
-- фрагменты соответствующей группы;
-- ссылка на Figma-файл или выбранные страницы;
-- снимок файла Figma в текущем каталоге, только на чтение: что в нём — в FIGMA SOURCE.
+You are given:
+- the approved IDEA;
+- the fragments of the corresponding group;
+- a link to the Figma file or to the selected pages;
+- a snapshot of the Figma file in the current directory, read-only: what it contains is in FIGMA SOURCE.
 
-## Цель
+## Goal
 
-Сформировать проверяемое описание дизайна, достаточное для дальнейших этапов Causa:
+Produce a verifiable description of the design that is sufficient for the later council stages:
 
 - Question Discovery;
 - Proposal Discovery;
@@ -18,154 +18,161 @@
 - Outcome Discovery;
 - Issue Discovery.
 
-Ты исследуешь, ЧТО представлено в дизайне, а не решаешь, КАК следует реализовать систему.
+You investigate WHAT the design presents; you do not decide HOW the system should be implemented.
 
-## 1. Область исследования
+## 1. Scope of the investigation
 
-Начни с предоставленных страниц или компонентов Figma.
+Start with the provided Figma pages or components.
 
-Определи:
-- какие экраны относятся к IDEA;
-- какие компоненты они используют;
-- какие состояния представлены;
-- какие действия доступны пользователю;
-- какие переходы между экранами показаны;
-- какие данные интерфейс отображает или принимает.
+Determine:
+- which screens concern the IDEA;
+- which components they use;
+- which states are presented;
+- which actions are available to the user;
+- which transitions between screens are shown;
+- which data the interface displays or accepts.
 
-При необходимости исследуй связанные страницы, компоненты и прототипные переходы.
+If needed, investigate the related pages, components and prototype transitions.
 
-Не ограничивайся только первым указанным экраном, если он использует общие компоненты или связан с другими пользовательскими сценариями.
+Do not limit yourself to the first specified screen if it uses shared components or is linked to other user scenarios.
 
-Не исследуй весь Figma-файл без необходимости.
+Do not investigate the whole Figma file without need.
 
-## 2. Экраны и компоненты
+## 2. Screens and components
 
-Для каждого релевантного экрана установи:
+For each relevant screen, establish:
 
-- назначение;
-- видимые элементы;
-- используемые компоненты;
-- отображаемые данные;
-- элементы ввода;
-- доступные действия;
-- представленные состояния;
-- связи с другими экранами.
+- its purpose;
+- the visible elements;
+- the components used;
+- the data displayed;
+- the input elements;
+- the available actions;
+- the states presented;
+- the links to other screens.
 
-Различай самостоятельные экраны, варианты компонентов и состояния одного экрана.
+Distinguish standalone screens, component variants and states of one screen.
 
-Не считай каждый frame отдельным экраном автоматически.
+Do not automatically treat every frame as a separate screen.
 
-## 3. Поведение
+## 3. Behavior
 
-Исследуй прототипные связи, варианты компонентов, интерактивные состояния и пояснения дизайнеров, если они доступны.
+Investigate prototype links, component variants, interactive states and designers' notes, if they are available.
 
-Определи:
-- что запускает действие;
-- какой переход или изменение состояния предусмотрено;
-- какие условия действия явно показаны;
-- какие ошибки или ограничения представлены.
+Determine:
+- what triggers an action;
+- what transition or state change is intended;
+- which conditions of the action are explicitly shown;
+- which errors or constraints are presented.
 
-Не выводи поведение только из внешнего вида элемента.
+Do not infer behavior only from the appearance of an element.
 
-Например, наличие кнопки «Удалить» подтверждает существование элемента управления, но не определяет:
-- требуется ли подтверждение;
-- что именно удаляется;
-- можно ли восстановить данные;
-- какие права необходимы.
+For example, a "Delete" button confirms that the control exists, but does not determine:
+- whether confirmation is required;
+- what exactly is deleted;
+- whether the data can be restored;
+- what permissions are needed.
 
-Если это не указано в дизайне, отметь как unknown.
+If the design does not specify this, mark it as unknown.
 
-## 4. Данные
+## 4. Data
 
-Для каждого релевантного элемента интерфейса установи:
+For each relevant interface element, establish:
 
-- какие значения отображаются;
-- какие значения вводит пользователь;
-- какие данные используются для фильтрации и навигации;
-- какие значения являются вычисляемыми или агрегированными, если это явно указано;
-- какие данные должны измениться после действия, если это показано.
+- which values are displayed;
+- which values the user enters;
+- which data is used for filtering and navigation;
+- which values are computed or aggregated, if this is explicitly stated;
+- which data must change after an action, if this is shown.
 
-Не придумывай API, структуры базы данных или способы вычисления.
+Do not invent APIs, database structures or calculation methods.
 
-Не считай демонстрационные значения реальными ограничениями продукта.
+Do not treat demo values as real product constraints.
 
-Например, наличие трёх карточек на макете не означает, что система должна показывать ровно три карточки.
+For example, three cards in the design do not mean that the system must show exactly three cards.
 
-## 5. Состояния
+## 5. States
 
-Проверь, представлены ли:
+Check whether the following are presented:
 
-- начальное состояние;
-- загрузка;
-- пустое состояние;
-- ошибка;
-- успешное выполнение;
-- недоступное действие;
-- различные роли или права доступа;
-- мобильные и десктопные варианты.
+- the initial state;
+- loading;
+- the empty state;
+- an error;
+- successful completion;
+- an unavailable action;
+- different roles or access rights;
+- mobile and desktop variants.
 
-Не требуй наличия всех этих состояний для каждого экрана.
+Do not require all these states to exist for every screen.
 
-Если состояние не представлено, зафиксируй это как отсутствие сведений в дизайне, а не как требование добавить состояние.
+If a state is not presented, record it as missing information in the design, not as a requirement to add the state.
 
-## 6. Подтверждение фактов
+## 6. Confirming facts
 
-Каждый установленный факт должен иметь evidence из Figma.
+Every established fact must have evidence from Figma.
 
-Используй:
-- file key или URL;
-- page ID;
-- node ID;
-- название frame или component;
-- ссылку на конкретный узел, если доступна.
+Use:
+- the file key or URL;
+- the page ID;
+- the node ID;
+- the name of the frame or component;
+- a link to the specific node, if available.
 
-Различай:
+Distinguish:
 
-- `verified` — непосредственно видно в дизайне или явно указано в доступных свойствах, аннотациях либо прототипных связях;
-- `inferred` — вероятно следует из структуры дизайна, но не подтверждено непосредственно;
-- `unknown` — установить не удалось.
+- `verified` — directly visible in the design or explicitly stated in the available properties, annotations or prototype links;
+- `inferred` — probably follows from the structure of the design, but is not directly confirmed;
+- `unknown` — could not be established.
 
-Не выдавай inferred за verified.
+Do not pass off inferred as verified.
 
-Если в снимке нет нужных свойств, страниц или прототипных связей, укажи ограничение доступа к информации.
+If the snapshot lacks the needed properties, pages or prototype links, state this limitation of access to the information.
 
-Не утверждай, что поведение отсутствует в продукте, только потому, что оно не показано в Figma.
+Do not claim that a behavior is absent from the product just because it is not shown in Figma.
 
-## 7. Неоднозначности
+## 7. Ambiguities
 
-Зафиксируй:
-- действия с неизвестным результатом;
-- элементы с неясным назначением;
-- отсутствующие сведения о состоянии;
-- противоречащие друг другу варианты;
-- неясные зависимости между экранами;
-- ситуации, когда нельзя определить требуемое поведение.
+Record:
+- actions with an unknown result;
+- elements with an unclear purpose;
+- missing information about a state;
+- variants that contradict each other;
+- unclear dependencies between screens;
+- situations where the required behavior cannot be determined.
 
-Не разрешай эти неопределённости самостоятельно.
+Do not resolve these uncertainties yourself.
 
-Не создавай OPEN QUESTIONS на этом этапе. Только фиксируй наблюдения, которые могут потребовать вопросов позднее.
+Do not create OPEN QUESTIONS at this stage. Only record observations that may require questions later.
 
-## 8. Ограничения
+## 8. Restrictions
 
-- Не изменяй Figma.
-- Не создавай новые экраны или компоненты.
-- Не предлагай редизайн.
-- Не придумывай поведение.
-- Не создавай PROPOSALS или ADR.
-- Не принимай архитектурные решения.
-- Не превращай визуальные особенности в технические требования без основания.
-- Не предполагай, что дизайн полностью соответствует текущей реализации.
+- Do not change Figma.
+- Do not create new screens or components.
+- Do not propose a redesign.
+- Do not invent behavior.
+- Do not create PROPOSALS or ADRs.
+- Do not make architectural decisions.
+- Do not turn visual features into technical requirements without grounds.
+- Do not assume that the design fully matches the current implementation.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "figma_file": "<file key>",
   "findings": [
     {
       "id": "D1",
-      "statement": "Экран картотеки содержит поиск по произведениям.",
+      "statement": "The catalog screen contains a search over works.",
       "status": "verified",
       "evidence": [
         {
@@ -174,22 +181,22 @@
           "name": "Catalog / Desktop"
         }
       ],
-      "relevance": "Поиск относится к утверждённой IDEA."
+      "relevance": "Search concerns the approved IDEA."
     }
   ],
   "screens": [
     {
       "name": "Catalog",
       "node_id": "56:78",
-      "purpose": "Просмотр и поиск произведений.",
+      "purpose": "Browsing and searching works.",
       "data": [
-        "Название произведения",
-        "Автор",
-        "Рейтинг"
+        "Work title",
+        "Author",
+        "Rating"
       ],
       "actions": [
         {
-          "action": "Ввод поискового запроса",
+          "action": "Entering a search query",
           "result": null,
           "status": "unknown",
           "finding_ids": ["D1"]
@@ -205,10 +212,10 @@
   ],
   "flows": [
     {
-      "name": "Открытие карточки произведения",
+      "name": "Opening the card of a work",
       "steps": [
         {
-          "description": "Пользователь выбирает произведение в списке.",
+          "description": "The user selects a work in the list.",
           "finding_ids": ["D1"]
         }
       ],
@@ -219,13 +226,13 @@
     {
       "area": "Catalog screens",
       "status": "covered",
-      "reason": "Исследованы релевантные frames и варианты компонентов."
+      "reason": "The relevant frames and component variants were investigated."
     }
   ],
   "unknowns": [
     {
-      "question": "Что происходит после отправки поискового запроса?",
-      "reason": "В доступном дизайне результат действия не установлен.",
+      "question": "What happens after a search query is submitted?",
+      "reason": "The result of the action is not established in the available design.",
       "investigate": [
         {
           "page_id": "12:34",
@@ -237,30 +244,30 @@
   "design_conflicts": []
 }
 
-Допустимые значения coverage.status:
+Allowed values of coverage.status:
 - `covered`
 - `partial`
 - `not_investigated`
 - `not_applicable`
 
-Не используй `covered`, если релевантные варианты или связи остались непроверенными.
+Do not use `covered` if relevant variants or links remain unchecked.
 
-Не создавай фиктивные node ID, ссылки или свойства.
+Do not create fictitious node IDs, links or properties.
 
-## Финальная проверка
+## Final check
 
-Перед ответом проверь:
+Before answering, check:
 
-- Исследование относится к IDEA.
-- Все релевантные экраны рассмотрены.
-- Связанные компоненты и состояния проверены.
-- Каждый verified факт имеет evidence.
-- Поведение не выдумано по внешнему виду.
-- Демонстрационные данные не превращены в требования.
-- Inferred и unknown явно обозначены.
-- Противоречия сохранены.
-- Дизайн не изменён.
-- Новые продуктовые и архитектурные решения не предложены.
+- The investigation concerns the IDEA.
+- All relevant screens are considered.
+- The related components and states are checked.
+- Every verified fact has evidence.
+- Behavior is not made up from appearance.
+- Demo data is not turned into requirements.
+- Inferred and unknown are explicitly marked.
+- Contradictions are kept.
+- The design is not changed.
+- No new product or architectural decisions are proposed.
 
 ## IDEA
 

@@ -1,182 +1,250 @@
-Ты формируешь окончательный список OPEN QUESTIONS для утверждённой IDEA.
+You form the final list of OPEN QUESTIONS for the approved IDEA.
 
-Тебе даны:
-- IDEA;
-- исходные фрагменты группы;
-- результаты нескольких независимых агентов Question Discovery.
+You are given:
+- the IDEA;
+- the source fragments of the group;
+- the results of several independent Question Discovery agents.
 
-Ты не ищешь новые вопросы.
-Работай только с предложенными кандидатами и исходными вопросами пользователя.
+You do not look for new questions.
+Work only with the proposed candidates and the user's source questions.
 
-## Что такое OPEN QUESTION
+## What an OPEN QUESTION is
 
-OPEN QUESTION — одна неопределённость или одно решение, которое необходимо
-разрешить, чтобы IDEA могла двигаться дальше.
+An OPEN QUESTION is one uncertainty or one decision that must be
+resolved so that the IDEA can move forward.
 
-OPEN QUESTION описывает, ЧТО пока неизвестно.
+An OPEN QUESTION describes WHAT is not yet known.
 
-Он не должен содержать:
-- возможные ответы;
-- существующие PROPOSALS;
-- перечисление альтернатив;
-- предположение о будущем решении.
+It must not contain:
+- possible answers;
+- existing PROPOSALS;
+- a list of alternatives;
+- an assumption about the future decision.
 
-Пример:
+Example:
 
-Плохо:
-«Полнотекстовый или векторный поиск?»
+Bad:
+"Full-text or vector search?"
 
-Хорошо:
-«Как должен выполняться поиск?»
+Good:
+"How should search be performed?"
 
-Связанные варианты решения хранятся отдельно через `proposal_ids`.
+Related solution options are stored separately through `proposal_ids`.
 
-OPEN QUESTION должен оставаться корректным, если позже появятся новые
-PROPOSALS.
+An OPEN QUESTION must stay valid if new
+PROPOSALS appear later.
 
-## Задача
+## Task
 
-Получить минимальный canonical набор самостоятельных OPEN QUESTIONS,
-которые действительно необходимо решить для IDEA.
+Get a minimal canonical set of standalone OPEN QUESTIONS
+that really must be resolved for the IDEA.
 
-## Исходные вопросы пользователя
+## The user's source questions
 
-Вопросы с `source = user` являются исходным материалом пользователя.
+Questions with `source = user` are the user's source material.
 
-Не удаляй их и не переформулируй.
+Do not remove or reword them.
 
-Если исходный вопрос пользователя содержит варианты ответа, сохрани его
-дословно, даже если он не соответствует рекомендуемой форме OPEN QUESTION.
+If the user's source question contains answer options, keep `text` verbatim and give an
+atomic wording without the options in `note`: that wording goes into the notes.
 
-Если несколько агентов вернули один исходный вопрос, это всё равно один вопрос.
+If several agents returned the same source question, it is still one question.
 
-## Семантические дубликаты
+If agents gave different `note` wordings for the same source question, choose the clearest
+atomic one.
 
-Если разные агенты сформулировали одну и ту же неопределённость как `inferred`
-или `discovered`, объедини их в один canonical OPEN QUESTION.
+## Semantic duplicates
 
-Выбирай формулировку, которая:
-- наиболее точно называет неизвестное;
-- нейтральна относительно возможных решений;
-- не содержит candidate answers;
-- не перечисляет существующие proposals;
-- достаточно широка, чтобы допустить новые proposals;
-- при этом не объединяет несколько независимых неопределённостей.
+If different agents formulated the same uncertainty as `inferred`
+or `discovered`, merge them into one canonical OPEN QUESTION.
 
-Объедини связанные `proposal_ids`.
+Choose the wording that:
+- names the unknown most precisely;
+- is neutral toward possible solutions;
+- contains no candidate answers;
+- does not list existing proposals;
+- is broad enough to allow new proposals;
+- and at the same time does not combine several independent uncertainties.
 
-## Связь с PROPOSALS
+Merge the related `proposal_ids`.
 
-Для каждого существующего proposal проверь, на какой OPEN QUESTION
-он действительно отвечает.
+## Link to PROPOSALS
 
-Если разные агенты восстановили разные вопросы для одного proposal,
-определи, какую неопределённость proposal разрешает непосредственно.
+For each existing proposal, check which OPEN QUESTION
+it actually answers.
 
-Если несколько proposals отвечают на одну неопределённость, свяжи их
-с одним OPEN QUESTION.
+If different agents reconstructed different questions for one proposal,
+determine which uncertainty the proposal resolves directly.
 
-Не включай названия этих alternatives в текст вопроса.
+If several proposals answer one uncertainty, link them
+to one OPEN QUESTION.
 
-Если один proposal действительно отвечает на несколько независимых
-OPEN QUESTIONS, он может быть связан с несколькими вопросами.
+Do not include the names of these alternatives in the question text.
+
+If one proposal really answers several independent
+OPEN QUESTIONS, it may be linked to several questions.
 
 ## Discovered questions
 
-Оставляй `discovered` question только если его действительно необходимо
-разрешить до перехода к реализации IDEA.
+Keep a `discovered` question only if it really must be
+resolved before moving on to implementing the IDEA.
 
-Удаляй вопросы, которые:
-- являются необязательной инженерной детализацией;
-- могут быть решены локально во время реализации;
-- уже однозначно отвечены утверждённым материалом;
-- дублируют другую неопределённость;
-- основаны на предположении, которого нет в исходном материале.
+Remove questions that:
+- are optional engineering detail;
+- can be decided locally during implementation;
+- are already unambiguously answered by the approved material;
+- duplicate another uncertainty;
+- are based on an assumption that is not in the source material.
 
-## Независимая оценка
+## Independent evaluation
 
-Не используй голосование большинством.
+Do not use majority voting.
 
-Количество агентов, предложивших вопрос, не определяет его качество.
+The number of agents that proposed a question does not determine its quality.
 
-Проверяй вопрос по IDEA, исходным фрагментам и связанным proposals.
+Check a question against the IDEA, the source fragments and the related proposals.
 
-Не добавляй собственные вопросы.
+Do not add your own questions.
 
-## Формат
+## Accepted project decisions
 
-Верни только JSON:
+ACCEPTED PROJECT DECISIONS are ADRs from previous councils of the project that the user
+selected as relevant to this IDEA. Each has `status`, `relevance` (`applicable`,
+`potential_conflict` or `uncertain`) and `reason`. `status` tells whether the decision still
+governs the work: `active` — it is in force; `under_review` — a later council opened a question
+about it and has not decided yet; `superseded` — the decision in `superseded_by` replaced it, and
+it no longer governs the work.
+
+- Do not ask an OPEN QUESTION that an `applicable` and `active` decision already answers for this
+  IDEA. A `superseded` or `under_review` decision does not settle a question.
+- If the IDEA may require revisiting a decision (`potential_conflict`, or `uncertain` with a
+  concrete reason), keep the candidate OPEN QUESTION that revisits it — do not merge it away
+  or drop it as already answered — and keep its `revisits` (the decision ID).
+- Do not treat these decisions as answers to questions they do not answer.
+- An empty list means there are no such decisions.
+
+## Wording
+
+IDEA, OPEN QUESTION, PROPOSAL and ADR are atomic notes: one thought, normally one sentence.
+Do not embed answers, alternatives, decisions or outcomes inside a note — they are separate
+notes.
+
+Write simply and directly: clear, short, with one obvious meaning, in words a developer
+understands at a glance. Prefer concrete wording to abstract; avoid unnecessary jargon and
+bureaucratic phrasing.
+
+Discussion and rationale may be long; the text of a note may not.
+
+## Language
+
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Format
+
+Return only JSON:
 
 {
   "questions": [
     {
       "id": "Q1",
-      "text": "Где человек должен получать ответ?",
+      "text": "Where should a person get the answer?",
       "source": "inferred",
       "source_question_id": null,
       "proposal_ids": ["F1", "F2", "F3"],
-      "reason": "F1–F3 предлагают разные ответы на одну неопределённость о точке взаимодействия."
+      "reason": "F1–F3 propose different answers to one uncertainty about the point of interaction.",
+      "revisits": null
     },
     {
       "id": "Q2",
-      "text": "Как должен выполняться поиск?",
+      "text": "How should search be performed?",
       "source": "inferred",
       "source_question_id": null,
       "proposal_ids": ["F1", "F2"],
-      "reason": "F1 и F2 отвечают на одну неопределённость о способе поиска."
+      "reason": "F1 and F2 answer one uncertainty about the way of searching.",
+      "revisits": null
+    },
+    {
+      "id": "Q3",
+      "text": "Who decides whether a thread is useful — the moderators or the bot?",
+      "note": "Who decides whether a thread is useful?",
+      "source": "user",
+      "source_question_id": "F5",
+      "proposal_ids": [],
+      "reason": null,
+      "revisits": null
     }
   ]
 }
 
-ID назначай последовательно: Q1, Q2, Q3...
+Assign IDs sequentially: Q1, Q2, Q3...
 
-Каждый исходный `user` question должен присутствовать в результате.
-Каждый `inferred` question должен иметь хотя бы один `proposal_id`.
-`discovered` question может иметь пустой `proposal_ids`.
+Every source `user` question must be present in the result.
+Every `inferred` question must have at least one `proposal_id`.
+A `discovered` question may have an empty `proposal_ids`.
 
-Перед ответом проверь каждый generated OPEN QUESTION:
+For `user`:
+- `text` matches the source question verbatim;
+- `note` is the same question as an atomic note: one sentence, without answer options or
+  decisions. If the source question already is one, repeat it; if it lists options, leave
+  them out — the options are separate PROPOSALS.
 
-- он описывает неизвестное, а не варианты ответа;
-- в нём не перечислены связанные proposals;
-- он остаётся корректным, если появится ещё один proposal;
-- он содержит только одну неопределённость.
+For every question:
+- `revisits` is the ID of an accepted project decision this question revisits (see
+  "Accepted project decisions"), otherwise null.
+
+Before answering, check every generated OPEN QUESTION:
+
+- it describes the unknown, not answer options;
+- it does not list the related proposals;
+- it stays valid if one more proposal appears;
+- it contains only one uncertainty.
 
 ## IDEA
 
 {{idea}}
 
-## Исходные фрагменты
+## Source fragments
 
 {{fragments}}
 
-## Результаты Question Discovery
+## ACCEPTED PROJECT DECISIONS
+
+{{accepted_decisions}}
+
+## Question Discovery results
 
 {{question_candidates}}
 
 ## REPOSITORY CONTEXT
 
-Карта существующей реализации, проверенная на шаге Repository Discovery: как система устроена
-сейчас. `verified` — подтверждено кодом, `inferred` — вывод из наблюдений, `unknown` — установить
-не удалось. Используй её как факты о текущем состоянии системы. Существующая реализация — не
-принятое решение и не требование: не превращай её в ADR и не выбирай вариант только потому, что
-так уже сделано.
+A map of the existing implementation, checked at the Repository Discovery step: how the system is
+built now. `verified` — confirmed by the code, `inferred` — a conclusion from observations,
+`unknown` — could not be established. Use it as facts about the current state of the system. The
+existing implementation is not an accepted decision and not a requirement: do not turn it into an
+ADR and do not choose an option only because it is already done that way.
 
-`complete: false` и `remaining_follow_up` — исследование не закончено: эти места не установлены,
-не считай их решёнными. `repositories` — с каких рабочих копий снята карта (бэкенд и фронтенд
-бывают в разных репозиториях): у нескольких пути файлов в карте начинаются с `folder` своей
-копии. `uncommitted_changes` — карта этой копии снята с рабочей копии с правками, а не с коммита;
-`files_outside_checkout` и `not_in_snapshot` — чего в снимке не было и модели не видели.
+`complete: false` and `remaining_follow_up` — the investigation is not finished: these places are
+not established, do not treat them as resolved. `repositories` — which working copies the map was
+taken from (the backend and the frontend are sometimes in different repositories): when there are
+several, file paths in the map start with the `folder` of their copy. `uncommitted_changes` — the
+map of this copy was taken from a working copy with edits, not from a commit;
+`files_outside_checkout` and `not_in_snapshot` — what was not in the snapshot and the models did
+not see.
 
 {{repository}}
 
 ## DESIGN CONTEXT
 
-Описание макета Figma, проверенное на шаге Design Discovery: какой интерфейс и какое поведение
-предусмотрены в дизайне. `verified` — видно в макете, `inferred` — вывод из его структуры,
-`unknown` — установить не удалось. Макет — намерение дизайнера, а не реализованная система и не
-принятое решение: не превращай его в ADR и не выбирай вариант только потому, что так нарисовано;
-расхождение макета с идеей, фрагментами или кодом — повод для вопроса, а не готовый ответ.
-Демонстрационные значения в макете — не требования. `complete: false` и `remaining_follow_up` —
-исследование макета не закончено: эти места не установлены.
+A description of the Figma design, checked at the Design Discovery step: what interface and what
+behavior the design provides for. `verified` — visible in the design, `inferred` — a conclusion
+from its structure, `unknown` — could not be established. The design is the designer's intent, not
+an implemented system and not an accepted decision: do not turn it into an ADR and do not choose an
+option only because it is drawn that way; a mismatch between the design and the idea, the fragments
+or the code is a reason for a question, not a ready answer. Demo values in the design are not
+requirements. `complete: false` and `remaining_follow_up` — the investigation of the design is not
+finished: these places are not established.
 
 {{design}}

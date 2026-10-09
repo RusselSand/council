@@ -23,8 +23,9 @@ GIVEN = {
     "design_discovery": {"idea", "fragments", "figma_source", "investigation_requests"},
     "design_judge": {"idea", "fragments", "figma_source", "discovery_results",
                      "previous_findings"},
-    "question_discovery": {"idea", "fragments", "repository", "design"},
-    "question_judge": {"idea", "fragments", "question_candidates", "repository", "design"},
+    "question_discovery": {"idea", "fragments", "repository", "design", "accepted_decisions"},
+    "question_judge": {"idea", "fragments", "question_candidates", "repository", "design",
+                       "accepted_decisions"},
     "proposal_discovery": {"idea", "question", "existing_proposals", "constraints_and_risks",
                            "accepted_decisions", "repository", "design"},
     "proposal_judge": {"idea", "question", "existing_proposals", "constraints_and_risks",
@@ -88,3 +89,12 @@ def test_every_step_after_the_design_step_gets_the_design(name):
     """Описание макета передаётся дальше: каждый следующий шаг его видит."""
     values = {key: f"<{key}>" for key in GIVEN[name]}
     assert "<design>" in render(name, **values)
+
+
+def test_every_prompt_writes_for_the_user_in_the_working_language(monkeypatch):
+    """Промпты на английском, а всё, что модель пишет человеку, — на языке работы: его
+    подставляет сам render."""
+    monkeypatch.setattr(prompts, "language", lambda: "Basque")
+    for name, given in GIVEN.items():
+        text = render(name, **{key: f"<{key}>" for key in given})
+        assert "These instructions are in English" in text and "Basque" in text, name

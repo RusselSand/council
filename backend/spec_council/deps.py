@@ -69,6 +69,12 @@ def get_repositories() -> Path | None:
     return Settings.load().path_of("COUNCIL_REPOS")
 
 
+def get_notes_root() -> Path | None:
+    """Каталог заметок проекта: COUNCIL_NOTES из окружения или .env (относительный — от
+    каталога .env). В докере это смонтированный на запись /notes. Без него поток не выгрузить."""
+    return Settings.load().path_of("COUNCIL_NOTES")
+
+
 def get_figma() -> Fetcher | None:
     """Figma для скана макета: персональный токен FIGMA_TOKEN из окружения или .env, с правом
     file_content:read. Без него макет не сканировать."""
@@ -87,6 +93,7 @@ ConfigDep = Annotated[AppConfig, Depends(get_config)]
 AgentsDep = Annotated[AgentRunner, Depends(get_agents)]
 RepositoriesDep = Annotated[Path | None, Depends(get_repositories)]
 FigmaDep = Annotated[Fetcher | None, Depends(get_figma)]
+NotesDep = Annotated[Path | None, Depends(get_notes_root)]
 
 Launcher = Callable[[Callable[[], object]], None]
 

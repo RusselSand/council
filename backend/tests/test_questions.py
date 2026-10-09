@@ -116,3 +116,42 @@ def test_questions_from_the_text_are_never_lost_and_are_numbered_in_order():
     assert [(q.id, q.text, q.source, q.source_question_id) for q in questions] == [
         ("Q1", "Как искать?", "inferred", None),
         ("Q2", "Кто решает, что тред полезный?", "user", 4)]
+
+
+# --- формулировка заметки и пересмотр решений проекта
+
+DECIDED = frozenset({"ADR-0007", "ADR-0012"})
+
+
+def test_a_user_question_keeps_its_text_and_gets_an_atomic_note():
+    """Вопрос пользователя дословен, а для заметки — своя формулировка: без вариантов внутри."""
+    [user] = question_list({"questions": [
+        {**ask(question="F4", source="user", proposals=()), "text": "что угодно",
+         "note": "  Кто решает,   полезен ли тред? "}]}, GROUP)
+    assert (user.text, user.note) == ("Кто решает, что тред полезный?",
+                                      "Кто решает, полезен ли тред?")
+    [blank] = question_list({"questions": [
+        {**ask(question="F4", source="user", proposals=()), "note": "  "}]}, GROUP)
+    assert blank.note is None                                 # нет — и не беда: вопрос остаётся
+    [asked] = question_list({"questions": [{**ask(), "note": "лишнее"}]}, GROUP)
+    assert asked.note is None                                 # у своего вопроса note не нужен
+
+
+def test_a_question_revisits_only_a_decision_selected_for_the_stream():
+    found = question_list({"questions": [
+        {**ask("Откуда брать платежи?", "discovered", proposals=()), "revisits": "ADR-7"},
+        {**ask("Где хранить чеки?", "discovered", proposals=()), "revisits": "ADR-0099"},
+        {**ask("Как считать налог?", "discovered", proposals=()), "revisits": None}]},
+        GROUP, DECIDED)
+    assert [c.revisits for c in found] == ["ADR-0007", None, None]
+    [question] = numbered(found[:1])
+    assert question.revisits == "ADR-0007"
+
+
+def test_merged_questions_keep_the_note_and_the_revisited_decision():
+    first = Candidate("Кто решает, что тред полезный?", "user", 4, (), None)
+    second = Candidate("Кто решает, что тред полезный?", "user", 4, (1,), None,
+                       "Кто решает, полезен ли тред?", "ADR-0012")
+    [both] = merged([first, second])
+    assert (both.note, both.revisits, both.proposal_ids) == (
+        "Кто решает, полезен ли тред?", "ADR-0012", (1,))

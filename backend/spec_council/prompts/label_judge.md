@@ -1,109 +1,116 @@
-Ты выбираешь окончательную смысловую разметку уже готовых фрагментов текста.
+You choose the final semantic labeling of text fragments that are already prepared.
 
-Тебе даны:
-- окончательные фрагменты с неизменяемыми ID;
-- варианты разметки, независимо предложенные другими моделями.
+You are given:
+- the final fragments with immutable IDs;
+- labeling options proposed independently by other models.
 
-Для каждого фрагмента выбери ровно один итоговый тип.
+For each fragment, choose exactly one final type.
 
-## Типы
+## Types
 
-### idea — идея
+### idea
 
-Главная цель, намерение или желаемый результат автора.
+The author's main goal, intention or desired result.
 
-Описывает, что автор хочет получить или сделать, а не конкретный способ
-достижения результата.
+It describes what the author wants to get or do, not a specific way
+to achieve the result.
 
-### question — вопрос
+### question
 
-Вопрос автора или явно сформулированная неопределённость, требующая ответа
-или решения.
+The author's question or an explicitly stated uncertainty that needs an answer
+or a decision.
 
-### proposal — предложение
+### proposal
 
-Предлагаемый способ реализации, устройства или поведения решения.
+A proposed way the solution is implemented, structured or behaves.
 
-Описывает, как автор предлагает чего-либо добиться.
+It describes how the author proposes to achieve something.
 
-### constraint — ограничение
+### constraint
 
-Уже существующее условие или граница, которую решение должно учитывать
-и которую в рамках обсуждаемой задачи нельзя просто выбрать иначе.
+An already existing condition or limit that the solution must take into account
+and that, within the task under discussion, cannot simply be chosen differently.
 
-Ограничение сужает пространство возможных решений, но само не является
-предлагаемым способом решения.
+A constraint narrows the space of possible solutions, but is not itself
+a proposed way of solving the problem.
 
-### risk — риск
+### risk
 
-Возможная нежелательная ситуация, потеря или последствие, которое важно
-предотвратить или учитывать.
+A possible undesirable situation, loss or consequence that is important
+to prevent or take into account.
 
-## Как сравнивать варианты
+## How to compare the options
 
-Для каждого фрагмента самостоятельно определи его функцию в мысли автора.
+For each fragment, determine its function in the author's thought yourself.
 
-Особенно различай:
+Distinguish especially:
 
 - `idea` vs `proposal`:
-  цель против способа её достижения;
+  a goal versus the way to achieve it;
 
 - `proposal` vs `constraint`:
-  выбранный способ против уже заданного условия;
+  a chosen way versus an already given condition;
 
 - `constraint` vs `risk`:
-  существующая граница против возможного нежелательного события или последствия;
+  an existing limit versus a possible undesirable event or consequence;
 
-- `question` vs остальные:
-  открытый вопрос против утверждения автора.
+- `question` vs the rest:
+  an open question versus a statement by the author.
 
-Количество разметчиков, выбравших тип, не является доказательством.
-Не используй голосование большинством.
+The number of labelers who chose a type is not evidence.
+Do not use majority voting.
 
-Объяснения разметчиков — аргументы, а не факты.
-Проверяй их самостоятельно по тексту и контексту.
+The labelers' explanations are arguments, not facts.
+Check them yourself against the text and the context.
 
-## Ограничения
+## Restrictions
 
-1. Не изменяй текст или границы фрагментов.
-2. Не добавляй и не удаляй фрагменты.
-3. Используй только:
+1. Do not change the text or the boundaries of the fragments.
+2. Do not add or remove fragments.
+3. Use only:
    `idea`, `question`, `proposal`, `constraint`, `risk`.
-4. Для каждого ID выбери ровно один тип.
-5. Не оценивай правильность или качество тезиса.
-6. Не проектируй решение.
-7. Не добавляй смысл, которого нет в исходном тексте.
-8. Не пытайся найти компромисс между разметчиками — выбери наиболее
-   обоснованный тип.
+4. Choose exactly one type for each ID.
+5. Do not assess the correctness or quality of a statement.
+6. Do not design a solution.
+7. Do not add meaning that is not in the source text.
+8. Do not try to find a compromise between the labelers — choose the
+   best-justified type.
 
-## Формат ответа
+## Language
 
-Верни только JSON:
+These instructions are in English, but write every free-text value of your answer —
+statements, reasons, titles, descriptions, questions, proposals and the like — in
+{{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
+the input. JSON keys, IDs and enum values stay exactly as specified below.
+
+## Response format
+
+Return only JSON:
 
 {
   "labels": [
     {
       "id": 1,
       "label": "proposal",
-      "reason": "Фрагмент предлагает конкретный способ реализации."
+      "reason": "The fragment proposes a specific way of implementation."
     },
     {
       "id": 2,
       "label": "constraint",
-      "reason": "Фрагмент описывает уже существующее условие, ограничивающее решение."
+      "reason": "The fragment describes an already existing condition that limits the solution."
     }
   ]
 }
 
-Верни ровно одну запись для каждого ID.
+Return exactly one record for each ID.
 
-`reason` должен кратко объяснять выбор типа.
-Особенно важно объяснить причину, если разметчики расходились.
+`reason` must briefly explain the choice of the type.
+It is especially important to explain the reason if the labelers diverged.
 
-## Фрагменты
+## Fragments
 
 {{fragments}}
 
-## Варианты разметки
+## Labeling options
 
 {{label_options}}

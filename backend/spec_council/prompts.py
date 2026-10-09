@@ -2,12 +2,34 @@
 
 Текст правится в .md, код только подставляет данные. Подстановка в один проход: если
 в тексте человека встретится «{{fragments}}», это останется текстом.
+
+Промпты — на английском: инструкции так короче в токенах. Всё, что модель пишет для человека,
+— на языке работы совета, {{language}}: его подставляет сам render (COUNCIL_LANGUAGE, по
+умолчанию русский).
 """
 
 import re
+from functools import cache
 from importlib.resources import files
 
+from agent_workers import Settings
+
 PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
+LANGUAGE = "Russian"
+
+
+@cache
+def language() -> str:
+    """Язык работы совета: COUNCIL_LANGUAGE из окружения или .env — как его поймёт модель
+    («Russian», «English», «русский»). Читается один раз: поменяли — перезапустите сервер."""
+    return Settings.load().get("COUNCIL_LANGUAGE").strip() or LANGUAGE
+
+
+@cache
+def notes_language() -> str:
+    """Язык заметок проекта: COUNCIL_NOTES_LANGUAGE, по умолчанию — язык работы. Другой — при
+    выгрузке заметки переводит судья."""
+    return Settings.load().get("COUNCIL_NOTES_LANGUAGE").strip() or language()
 
 
 class PromptError(RuntimeError):
@@ -15,6 +37,7 @@ class PromptError(RuntimeError):
 
 
 def render(name: str, **values: str) -> str:
+    values.setdefault("language", language())
     template = (files(__package__) / "prompts" / f"{name}.md").read_text(encoding="utf-8")
     if not template.strip():
         raise PromptError(f"Промпт {name}.md пуст")
