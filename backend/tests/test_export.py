@@ -419,9 +419,21 @@ def test_a_revisited_decision_gone_from_the_catalog_stops_the_draft(root):
 
 @pytest.mark.parametrize("language", sorted(LANGUAGES))
 def test_criteria_with_issue_numbers_are_not_the_issue_list(language):
-    text = outcome_text("Поиск", "Ищется.", ["ISS-0042: регресс не вернулся"], [],
-                        LANGUAGES[language])
+    words = LANGUAGES[language]
+    text = outcome_text("Поиск", "Ищется.", ["ISS-0042: регресс не вернулся"], [], words)
     assert declared_issues(text) == []
+    # И на языке, подписи которого совет не знает: критерий — не строка задачи.
+    foreign = text.replace(f"{words['criteria']}:", "Criterios de aceptación:")
+    assert declared_issues(foreign) == [] and "- ISS-0042 — регресс не вернулся" in foreign
+
+
+def test_a_translation_does_not_turn_a_criterion_into_an_issue_line():
+    source = outcome_text("Поиск", "Ищется.", ["ISS-0042: регресс не вернулся"], [],
+                          LANGUAGES["russian"])
+    turned = {"notes": [{"key": "o", "text": "Búsqueda\n\nSe busca.\n\nCriterios de aceptación:\n"
+                                             "- ISS-0042: la regresión no vuelve"}]}
+    with pytest.raises(BadAnswer, match="строки задач"):
+        translations(turned, {"o": source})
 
 
 def test_a_translation_keeps_exactly_the_numbers_of_the_source():

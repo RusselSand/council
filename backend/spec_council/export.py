@@ -49,6 +49,8 @@ ISSUE = re.compile(r"ISS-(\d+)")
 # для split он пробел.
 SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
+# Критерий, что начинается как строка задачи: «ISS-0042: …».
+ISSUE_START = re.compile(r"\s*(ISS-\d+)\s*:")
 
 
 def words_for(language: str) -> dict[str, str]:
@@ -154,10 +156,18 @@ def outcome_text(title: str, behavior: str, criteria: Sequence[str],
                  issues: Sequence[IssueNumber], words: Mapping[str, str]) -> str:
     lines = [title.strip(), "", behavior.strip()]
     if criteria:
-        lines += ["", f"{words['criteria']}:", *(f"- {item}" for item in criteria)]
+        lines += ["", f"{words['criteria']}:", *(f"- {criterion(item)}" for item in criteria)]
     if issues:
         lines += ["", f"{words['issues']}:", *(f"- {issue.id}: {issue.title}" for issue in issues)]
     return "\n".join(lines)
+
+
+def criterion(item: str) -> str:
+    """Критерий готовности строкой списка — никогда не строкой задачи. «- ISS-0042: …» под
+    критериями итога без задач — последним блоком — прочли бы задачей итога, а подпись
+    критериев на языке заметок узнать нельзя: двоеточие после номера — тире. Перевод строк
+    задач не добавит: их сверяет translations."""
+    return ISSUE_START.sub(r"\1 —", item, count=1) if ISSUE_START.match(item) else item
 
 
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
