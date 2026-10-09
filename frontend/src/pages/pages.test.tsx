@@ -756,8 +756,9 @@ describe('Поток: репозиторий', () => {
     renderAt('/councils/demo-1/streams/A')
   }
   const SCANNED: RepositoryScan = {
-    state: 'done', run: 'sc1', idea: TEXT_IDEA.text, path: 'project', commit_sha: 'abcdef1234567890', dirty: true,
-    files: 12, outside: 3, omitted: ['vendor/lib/ — подмодуль не скачан'], omitted_count: 1, rounds: 3, complete: false, error: null,
+    state: 'done', run: 'sc1', idea: TEXT_IDEA.text, rounds: 3, complete: false, error: null,
+    repositories: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abcdef1234567890', dirty: true,
+                     files: 12, outside: 3, omitted: ['vendor/lib/ — подмодуль не скачан'], omitted_count: 1 }],
     steps: [{ name: 'repository_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'repository_judge', state: 'done', runs: [run('fable', 'done')] }],
     result: {
@@ -804,10 +805,43 @@ describe('Поток: репозиторий', () => {
     fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
     expect(await screen.findByText('ИИ исследует репозиторий, проход 1 из 3.', { exact: false })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'repository/scan',
-                                   body: { run: 'g1', revision: 0, path: 'D:\\PROJECTS\\worker', idea: TEXT_IDEA.text } }])
+                                   body: { run: 'g1', revision: 0, paths: ['D:\\PROJECTS\\worker'], idea: TEXT_IDEA.text } }])
     expect(screen.getByText(ru['repository.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
+  })
+
+  it('бэкенд и фронтенд — в разных репозиториях: пути добавляют и убирают, сканируют вместе', async () => {
+    openStream(() => atStep(), () => json(atStep()))
+    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
+    fireEvent.change(path(), { target: { value: 'back' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.addPath'] }))
+    const second = () => screen.getByRole('textbox', { name: 'Рабочая копия 2' }) as HTMLInputElement
+    const scan = () => screen.getByRole('button', { name: ru['repository.scan'] }) as HTMLButtonElement
+    expect(scan().disabled).toBe(true)                                     // второй путь ещё пуст
+    fireEvent.change(second(), { target: { value: 'web/front' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.addPath'] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать рабочую копию 3' }))
+    expect(screen.queryByRole('textbox', { name: 'Рабочая копия 3' })).toBeNull()
+    fireEvent.click(scan())
+    await waitFor(() => expect(streamCalls).toHaveLength(1))
+    expect(streamCalls[0].body).toMatchObject({ paths: ['back', 'web/front'] })
+    // Убрали один — остался один, и поле снова просто «Рабочая копия».
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать рабочую копию 1' }))
+    expect(path().value).toBe('web/front')
+  })
+
+  it('скан нескольких репозиториев: у каждого свой коммит и папка в карте', async () => {
+    const two: RepositoryScan = { ...SCANNED, repositories: [
+      { ...SCANNED.repositories[0], name: 'back', path: 'back', outside: 0, omitted: [], omitted_count: 0 },
+      { name: 'front', path: 'web/front', root: '/repos/web/front', commit_sha: '', dirty: false, files: 4,
+        outside: 0, omitted: [], omitted_count: 0 }] }
+    openStream(() => atStep({ scan: two }), () => json(atStep()))
+    expect(await screen.findByText('back · коммит abcdef12 · файлов: 12 · в карте — back/')).toBeTruthy()
+    expect(screen.getByText('web/front · коммит — · файлов: 4 · в карте — front/')).toBeTruthy()
+    expect(screen.getByText(`back: ${ru['repository.dirty']}`)).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: 'Рабочая копия 1' }) as HTMLInputElement).value).toBe('back')
+    expect((screen.getByRole('textbox', { name: 'Рабочая копия 2' }) as HTMLInputElement).value).toBe('web/front')
   })
 
   it('карта скана видна по разделам; утверждённая — к вопросам', async () => {
@@ -816,7 +850,8 @@ describe('Поток: репозиторий', () => {
                                     { A: { scan: SCANNED, repository: { by: 'scan', scan_run: 'sc1' }, questions: QUESTIONS_SEEKING } })))
     expect(await screen.findByText('Состояние пишется в state.json')).toBeTruthy()
     expect(path().value).toBe('project')
-    expect(screen.getByText('project · коммит abcdef12 · файлов: 12 · проходов: 3')).toBeTruthy()
+    expect(screen.getByText('project · коммит abcdef12 · файлов: 12')).toBeTruthy()
+    expect(screen.getByText('Проходов: 3')).toBeTruthy()
     expect(screen.getByText(ru['repository.dirty'])).toBeTruthy()
     expect(screen.getByText(ru['repository.outside'].replace('{{count}}', '3'))).toBeTruthy()
     expect(screen.getByText(ru['repository.omitted'].replace('{{count}}', '1').replace('{{items}}', 'vendor/lib/ — подмодуль не скачан'))).toBeTruthy()
@@ -1060,7 +1095,9 @@ describe('Поток: решения и итоги', () => {
   })
 
   const CUT: IssueDiscovery = {
-    state: 'done', run: 'i1', outcomes: 'o1', code: true, commit_sha: 'abcdef1234567890', dirty: false, error: null,
+    state: 'done', run: 'i1', outcomes: 'o1', code: true, error: null,
+    sources: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abcdef1234567890', dirty: false,
+                files: 12, outside: 0, omitted: [], omitted_count: 0 }],
     steps: [{ name: 'issue_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'issue_judge', state: 'skipped', runs: [] }],
     issues: [
@@ -1114,6 +1151,15 @@ describe('Поток: решения и итоги', () => {
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
     expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
+  })
+
+  it('задачи по коду нескольких репозиториев — видно коммит каждого', async () => {
+    const two: IssueDiscovery = { ...CUT, sources: [
+      { ...CUT.sources[0], name: 'back', path: 'back' },
+      { ...CUT.sources[0], name: 'front', path: 'web/front', commit_sha: '1234567890abcdef', dirty: true }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: two }))
+    expect(await screen.findByText(
+      'По коду: back — коммит abcdef12; web/front — коммит 12345678 с незакоммиченными правками.')).toBeTruthy()
   })
 
   it('решение вне итогов видно и на задачах — поток не готов', async () => {

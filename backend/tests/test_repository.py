@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from spec_council import repository
-from spec_council.models import FollowUp
+from spec_council.models import FollowUp, ScannedRepository
 from spec_council.repository import (
     Context,
     Inventory,
@@ -21,8 +21,12 @@ from spec_council.repository import (
     judged_map,
     located,
     map_of,
+    merged,
     sha_prompt,
     snapshot,
+    snapshot_all,
+    sources_of,
+    sources_prompt,
     working_copy,
 )
 from spec_council.slicing import BadAnswer
@@ -246,9 +250,19 @@ def test_the_judge_finishes_or_sends_concrete_follow_ups():
         judged_map({"status": "partial", "findings": []}, CONTEXT)
 
 
+def scanned_as(**fields):
+    """Одна рабочая копия скана с коммитом abc."""
+    return [ScannedRepository(path="project", commit_sha="abc", **fields)]
+
+
+def told_of(result, **fields):
+    """Что следующие шаги знают об этой рабочей копии."""
+    return json.loads(context_prompt(result, scanned_as(**fields)))["repositories"][0]
+
+
 def test_the_next_steps_get_the_map_or_an_honest_no_scan():
     assert "не исследовался" in context_prompt(None)
-    text = context_prompt(map_of({"findings": [finding()]}, CONTEXT), "abc")
+    text = context_prompt(map_of({"findings": [finding()]}, CONTEXT), scanned_as())
     assert '"commit_sha": "abc"' in text
     assert "get_context" in text
 
@@ -535,10 +549,10 @@ def test_the_next_steps_know_a_scan_that_ran_out_of_rounds_left_work(repo):
     result = map_of({"findings": []}, CONTEXT)
     left = [FollowUp(objective="Проверить очередь", reason="не дочитали",
                      targets=["infra/queue.yml"], related_finding_ids=[])]
-    told = json.loads(context_prompt(result, "abc", complete=False, follow_up=left))
+    told = json.loads(context_prompt(result, scanned_as(), complete=False, follow_up=left))
     assert told["complete"] is False
     assert told["remaining_follow_up"][0]["objective"] == "Проверить очередь"
-    done = json.loads(context_prompt(result, "abc"))
+    done = json.loads(context_prompt(result, scanned_as()))
     assert done["complete"] is True
     assert done["remaining_follow_up"] == []
 
@@ -709,9 +723,9 @@ def test_a_file_that_grows_past_the_limit_while_copying_stops_the_snapshot(repo,
 def test_the_next_steps_know_the_map_is_of_a_working_copy_with_uncommitted_changes():
     """Коммит — не вся правда о грязной копии: следующие шаги не должны приписать ему её правки."""
     result = map_of({"findings": [finding()]}, CONTEXT)
-    dirty = json.loads(context_prompt(result, "abc", dirty=True))
+    dirty = told_of(result, dirty=True)
     assert (dirty["commit_sha"], dirty["uncommitted_changes"]) == ("abc", True)
-    assert json.loads(context_prompt(result, "abc"))["uncommitted_changes"] is False
+    assert told_of(result)["uncommitted_changes"] is False
 
 
 def test_a_new_file_swapped_inside_a_submodule_while_copying_is_caught(with_submodule, tmp_path,
@@ -782,7 +796,7 @@ def test_a_submodule_not_checked_out_is_told_not_hidden(with_submodule):
     assert found.omitted == ("vendor/lib/ — подмодуль не скачан",)
     assert "нет в снимке: vendor/lib/ — подмодуль не скачан" in inventory_prompt(found)
     result = map_of({"findings": []}, CONTEXT)
-    told = json.loads(context_prompt(result, "abc", omitted=found.omitted))
+    told = told_of(result, omitted=list(found.omitted))
     assert told["not_in_snapshot"] == ["vendor/lib/ — подмодуль не скачан"]
     assert told["not_in_snapshot_count"] == 1
 
@@ -851,7 +865,7 @@ def test_many_submodules_not_checked_out_are_told_within_a_budget():
     omitted = tuple(f"vendor/lib{n}/ — подмодуль не скачан" for n in range(1000))
     found = Inventory(Path("."), "", False, (), omitted=omitted)
     assert "и ещё 980" in inventory_prompt(found)
-    told = json.loads(context_prompt(map_of({"findings": []}, CONTEXT), "abc", omitted=omitted))
+    told = told_of(map_of({"findings": []}, CONTEXT), omitted=list(omitted))
     assert len(told["not_in_snapshot"]) == 20
     assert told["not_in_snapshot_count"] == 1000
 
@@ -894,8 +908,118 @@ def test_files_left_out_by_a_sparse_checkout_are_told_not_hidden(repo):
     assert found.outside == 1
     assert "вне sparse checkout: 1" in inventory_prompt(found)
     result = map_of({"findings": []}, CONTEXT)
-    assert json.loads(context_prompt(result, "abc", outside=1))["files_outside_checkout"] == 1
-    assert json.loads(context_prompt(result, "abc"))["files_outside_checkout"] == 0
+    assert told_of(result, outside=1)["files_outside_checkout"] == 1
+    assert told_of(result)["files_outside_checkout"] == 0
+
+
+# --- несколько рабочих копий
+
+
+def other_repo(tmp_path, name, files):
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    for file, text in files.items():
+        (root / file).parent.mkdir(parents=True, exist_ok=True)
+        (root / file).write_text(text, encoding="utf-8")
+    git(root, "init", "-q")
+    git(root, "add", ".")
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    return root
+
+
+def test_several_working_copies_lie_each_in_its_folder_of_one_snapshot(repo, tmp_path):
+    """Бэкенд и фронтенд в разных репозиториях: оба в одном снимке, каждый в папке по имени
+    своего каталога; в промпте — где какой, пути — с папкой."""
+    front = other_repo(tmp_path, "web", {"src/App.tsx": "export {}\n"})
+    sources = sources_of([("project", inventory(repo)), ("web", inventory(front))])
+    assert [(s.name, s.path) for s in sources] == [("project", "project"), ("web", "web")]
+    into = tmp_path / "snap"
+    into.mkdir()
+    fingerprint, copied = snapshot_all(sources, into)
+    assert copied == {"project/.gitignore", "project/api/deps.py", "web/src/App.tsx"}
+    assert (into / "web" / "src" / "App.tsx").read_text(encoding="utf-8") == "export {}\n"
+    assert not (into / "project" / ".git").exists()
+    assert merged(sources).files == ("project/.gitignore", "project/api/deps.py",
+                                     "web/src/App.tsx")
+    text = sources_prompt(sources)
+    assert "project/ — project" in text and "web/ — web" in text
+    assert "web/src/App.tsx" in text
+    # Тот же код в другом месте — тот же отпечаток; другой код — другой.
+    again = tmp_path / "again"
+    again.mkdir()
+    assert snapshot_all(sources, again)[0] == fingerprint
+    (front / "src" / "App.tsx").write_text("export default 1\n", encoding="utf-8")
+    other = tmp_path / "other"
+    other.mkdir()
+    changed = sources_of([("project", inventory(repo)), ("web", inventory(front))])
+    assert snapshot_all(changed, other)[0] != fingerprint
+
+
+def test_one_working_copy_keeps_its_paths_and_its_fingerprint(repo, tmp_path):
+    """Одна рабочая копия — как раньше: без папки, и отпечаток тот же — оплаченные ответы
+    годятся."""
+    [source] = sources_of([("project", inventory(repo))])
+    assert source.name == ""
+    into = tmp_path / "snap"
+    into.mkdir()
+    fingerprint, copied = snapshot_all([source], into)
+    assert copied == {".gitignore", "api/deps.py"}
+    assert fingerprint == copy(inventory(repo), tmp_path, "plain")[1]
+
+
+def test_working_copies_named_alike_get_folders_of_their_own(repo, tmp_path):
+    """Каталоги с одним именем (и с именами, что различаются лишь регистром) — разные папки:
+    на нечувствительной к регистру системе Project и project — одна."""
+    twin = other_repo(tmp_path / "other", "project", {"main.py": "x = 1\n"})
+    upper = other_repo(tmp_path / "third", "Project", {"app.py": "y = 2\n"})
+    sources = sources_of([("project", inventory(repo)), ("other/project", inventory(twin)),
+                          ("third/Project", inventory(upper))])
+    assert [s.name for s in sources] == ["project", "project-2", "Project-3"]
+
+
+def test_the_same_working_copy_twice_is_refused(repo):
+    with pytest.raises(RepositoryError, match="дважды"):
+        sources_of([("project", inventory(repo)), ("project/api", inventory(repo / "api"))])
+
+
+def test_a_working_copy_whose_files_the_other_already_has_is_refused(with_submodule):
+    """Подмодуль — уже файлы своего родителя: дважды в снимок он не ляжет."""
+    inner = inventory(with_submodule / "vendor" / "lib")
+    with pytest.raises(RepositoryError, match="внутри"):
+        sources_of([("project", inventory(with_submodule)), ("project/vendor/lib", inner)])
+
+
+def test_an_ignored_repository_inside_another_is_its_own_working_copy(repo):
+    """Репозиторий внутри другого, который тот игнорирует: его файлов в том скане нет — это
+    отдельная рабочая копия."""
+    (repo / ".gitignore").write_text("*.log\nweb/\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ignore")
+    inner = other_repo(repo, "web", {"src/App.tsx": "export {}\n"})
+    sources = sources_of([("project", inventory(repo)), ("project/web", inventory(inner))])
+    assert [s.name for s in sources] == ["project", "web"]
+
+
+def test_the_snapshot_limit_holds_for_all_working_copies_together(repo, tmp_path, monkeypatch):
+    """Предел снимка — на все рабочие копии вместе: по отдельности каждая влезает, а вместе
+    — нет."""
+    front = other_repo(tmp_path, "web", {"src/App.tsx": "x" * 30})
+    sources = sources_of([("project", inventory(repo)), ("web", inventory(front))])
+    monkeypatch.setattr(repository, "SNAPSHOT_MAX", 40)
+    into = tmp_path / "snap"
+    into.mkdir()
+    with pytest.raises(RepositoryError, match="слишком"):
+        snapshot_all(sources, into)
+
+
+def test_the_next_steps_know_each_working_copy_and_its_folder():
+    result = map_of({"findings": []}, CONTEXT)
+    told = json.loads(context_prompt(result, [
+        ScannedRepository(name="back", path="back", commit_sha="abc"),
+        ScannedRepository(name="front", path="web/front", commit_sha="def", dirty=True)]))
+    assert [(r["folder"], r["path"], r["commit_sha"], r["uncommitted_changes"])
+            for r in told["repositories"]] == [("back", "back", "abc", False),
+                                               ("front", "web/front", "def", True)]
 
 
 def test_an_untracked_working_copy_inside_is_scanned_too(repo, tmp_path):

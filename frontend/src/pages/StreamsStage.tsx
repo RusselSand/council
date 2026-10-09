@@ -2,10 +2,10 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issueReady, outcomeReady, startOrFollow, streamOf, structureIsStale,
-  type Council, type Group, type IdeaDiscovery, type Issue, type IssueGap, type LabeledFragment, type Model,
-  type OpenQuestion, type Outcome,
-  type QuestionAnalysis, type QuestionOptions, type RepositoryScan, type Settings, type Stream, type Structure,
+  api, ApiError, councilPath, groupsConfirmed, issueReady, outcomeReady, REPOSITORIES_MAX, startOrFollow, streamOf,
+  structureIsStale, type Council, type Group, type IdeaDiscovery, type Issue, type IssueGap, type LabeledFragment,
+  type Model, type OpenQuestion, type Outcome, type QuestionAnalysis, type QuestionOptions, type RepositoryScan,
+  type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
@@ -562,7 +562,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 }>) {
   const { t } = useTranslation()
   const scan = stream.scan
-  const [path, setPath] = useState(scan?.path ?? '')
+  const [paths, setPaths] = useState(() => scan?.repositories.length ? scan.repositories.map(r => pathField(r.path)) : [pathField()])
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = scan?.state === 'running'
@@ -578,7 +578,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
     event.preventDefault()
     void retry.go(async () => {
       try {
-        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, path, idea.text), council,
+        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, paths.map(f => f.path), idea.text), council,
                                    c => streamOf(c, group.id)?.scan)
       } catch (e) {
         // Идею поменяли в другой вкладке — показываем нынешнюю: скан пойдёт уже к ней.
@@ -598,6 +598,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
   }, onApproved)
   const taken = stream.repository
   const ready = scan?.state === 'done' && scan.result !== null
+  const placeholder = repositories ? t('repository.pathRoot', { root: repositories }) : t('repository.pathAbsolute')
 
   return (
     <>
@@ -610,10 +611,29 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
       <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
       <section className="card panel" aria-label={t('repository.title')}>
         <form className="repo-scan" onSubmit={start}>
-          <input className="text-field" aria-label={t('repository.path')} value={path}
-                 readOnly={busy || sought} onChange={e => setPath(e.target.value)}
-                 placeholder={repositories ? t('repository.pathRoot', { root: repositories }) : t('repository.pathAbsolute')} />
-          <button type="submit" className="btn-secondary" disabled={busy || sought || below || stale || path.trim() === ''}>
+          <div className="repo-paths">
+            {paths.map((field, n) => (
+              <div className="repo-path" key={field.key}>
+                <input className="text-field" value={field.path} readOnly={busy || sought} placeholder={placeholder}
+                       aria-label={paths.length > 1 ? t('repository.pathN', { n: n + 1 }) : t('repository.path')}
+                       onChange={e => {
+                         const value = e.target.value
+                         setPaths(current => current.map(f => f.key === field.key ? { ...f, path: value } : f))
+                       }} />
+                {paths.length > 1 && (
+                  <button type="button" className="btn-link" disabled={busy || sought}
+                          aria-label={t('repository.removePath', { n: n + 1 })}
+                          onClick={() => setPaths(current => current.filter(f => f.key !== field.key))}>×</button>
+                )}
+              </div>
+            ))}
+            {paths.length < REPOSITORIES_MAX && (
+              <button type="button" className="btn-link repo-add" disabled={busy || sought}
+                      onClick={() => setPaths(current => [...current, pathField()])}>{t('repository.addPath')}</button>
+            )}
+          </div>
+          <button type="submit" className="btn-secondary"
+                  disabled={busy || sought || below || stale || paths.some(f => f.path.trim() === '')}>
             {t('repository.scan')}
           </button>
         </form>
@@ -650,21 +670,48 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 const FINDING_PILL = { verified: 'pill ready', inferred: 'pill open', unknown: 'pill' } as const
 const COVERAGE_PILL = { covered: 'pill ready', partial: 'pill open', not_investigated: 'pill blocked', not_applicable: 'pill' } as const
 
+/** Поле пути на шаге «Репозиторий»; key — чтобы React не путал поля, когда одно из них убирают. */
+interface PathField { key: number; path: string }
+let pathKeys = 0
+const pathField = (path = ''): PathField => ({ key: pathKeys++, path })
+
+/** Коммит коротко; нет коммитов — прочерк. */
+const shortSha = (sha: string) => sha.slice(0, 8) || '—'
+
+/**
+ * Рабочая копия скана: путь, коммит, сколько файлов и чего модели не видели. У нескольких — и её папка в
+ * карте (пути находок начинаются с неё), а замечания — с её путём.
+ */
+function ScannedSource({ source, several }: Readonly<{ source: ScannedRepository; several: boolean }>) {
+  const { t } = useTranslation()
+  const of = several ? `${source.path}: ` : ''
+  return (
+    <>
+      <p className="repo-summary">
+        {t('repository.summary', { path: source.path, sha: shortSha(source.commit_sha), files: source.files })}
+        {several && ` · ${t('repository.folder', { folder: source.name })}`}
+      </p>
+      {source.dirty && <p className="fragment-note">{of}{t('repository.dirty')}</p>}
+      {source.outside > 0 && <p className="fragment-note">{of}{t('repository.outside', { count: source.outside })}</p>}
+      {source.omitted_count > 0 && <p className="fragment-note">{of}{t('repository.omitted', {
+        count: source.omitted_count,
+        items: source.omitted.join('; ') + (source.omitted_count > source.omitted.length ? '; …' : '') })}</p>}
+    </>
+  )
+}
+
 /** Карта скана: находки с подтверждениями, как идёт выполнение, покрытие, неизвестное и расхождения. */
 function RepositoryMapView({ scan }: Readonly<{ scan: RepositoryScan }>) {
   const { t } = useTranslation()
   const result = scan.result
   if (!result) return null
+  const several = scan.repositories.length > 1
   return (
     <>
-      <p className="repo-summary">
-        {t('repository.summary', {
-          path: scan.path, sha: scan.commit_sha.slice(0, 8) || '—', files: scan.files, rounds: scan.rounds })}
-      </p>
-      {scan.dirty && <p className="fragment-note">{t('repository.dirty')}</p>}
-      {scan.outside > 0 && <p className="fragment-note">{t('repository.outside', { count: scan.outside })}</p>}
-      {scan.omitted_count > 0 && <p className="fragment-note">{t('repository.omitted', {
-        count: scan.omitted_count, items: scan.omitted.join('; ') + (scan.omitted_count > scan.omitted.length ? '; …' : '') })}</p>}
+      {scan.repositories.map(source => (
+        <ScannedSource key={source.name || source.path} source={source} several={several} />
+      ))}
+      <p className="repo-summary">{t('repository.rounds', { rounds: scan.rounds })}</p>
       {scan.state === 'done' && scan.complete && <p className="check ok">{t('repository.complete')}</p>}
       {scan.state === 'done' && !scan.complete && (
         <div className="check problem">
@@ -1452,9 +1499,14 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
   const cut = () => void retry.go(() => startOrFollow(
     () => api.seekIssues(council.id, group.id), council, c => streamOf(c, group.id)?.issues))
   if (!run) return null
-  const sha = run.commit_sha.slice(0, 8) || '—'
+  const [first] = run.sources
   let code = t('issues.noCode')
-  if (run.code) code = t(run.dirty ? 'issues.codeDirty' : 'issues.code', { sha })
+  if (run.code && run.sources.length > 1) {
+    code = t('issues.codeSeveral', { list: run.sources.map(source => t(source.dirty ? 'issues.sourceDirty' : 'issues.source', {
+      path: source.path, sha: shortSha(source.commit_sha) })).join('; ') })
+  } else if (run.code) {
+    code = t(first?.dirty ? 'issues.codeDirty' : 'issues.code', { sha: shortSha(first?.commit_sha ?? '') })
+  }
 
   return (
     <>

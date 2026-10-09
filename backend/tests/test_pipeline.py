@@ -32,7 +32,7 @@ from spec_council.pipeline import (
     RepositoryRun,
     SlicingRun,
 )
-from spec_council.repository import Inventory, RepositoryError
+from spec_council.repository import Inventory, RepositoryError, Source
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
         "Главное — не потерять результат.")
@@ -803,6 +803,12 @@ def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
 
 FOUND_REPO = Inventory(root=Path("/repos/project"), commit_sha="abc123", dirty=False,
                        files=("api/deps.py", "api/routes.py"))
+PROJECT = [Source("", "project", FOUND_REPO)]
+# Бэкенд и фронтенд — в разных репозиториях: каждый в своей папке снимка.
+TWO_REPOS = [Source("back", "back", FOUND_REPO),
+             Source("front", "web/front", Inventory(root=Path("/repos/web/front"),
+                                                    commit_sha="def456", dirty=True,
+                                                    files=("src/App.tsx",)))]
 FACT = {"id": "R1", "statement": "Контекст запроса — из зависимостей.", "status": "verified",
         "evidence": [{"path": "api/deps.py", "symbol": "get_context"}], "relevance": "вход"}
 CHECK_PROXY = {"objective": "Проверить авторизацию в прокси", "targets": ["Caddyfile"]}
@@ -810,12 +816,13 @@ CHECK_PROXY = {"objective": "Проверить авторизацию в про
 
 def copy_as(fingerprint):
     """Снимок без файлов: каталог настоящий, а отпечаток и состав — какие скажут."""
-    return lambda found, into: (fingerprint, frozenset(found.files))
+    return lambda sources, into: (fingerprint, frozenset(
+        source.prefix + name for source in sources for name in source.found.files))
 
 
-def scan(replies, copy=None):
+def scan(replies, copy=None, sources=PROJECT):
     runner, reports = FakeRunner(replies), []
-    result = RepositoryRun("c1", FIND, "project", FOUND_REPO, GROUP_FRAGMENTS, ["sol", "fable"],
+    result = RepositoryRun("c1", FIND, sources, GROUP_FRAGMENTS, ["sol", "fable"],
                            "fable", runner, reports.append,
                            copy=copy or copy_as("снимок-1")).run()
     return result, runner, reports
@@ -839,7 +846,8 @@ def test_a_scan_reads_the_working_copy_and_follows_up_on_the_judges_gaps():
     assert result.state == "done"
     assert (result.rounds, result.complete, result.follow_up) == (2, True, [])
     assert [f.id for f in result.result.findings] == ["R1"]
-    assert (result.commit_sha, result.files, result.path) == ("abc123", 2, "project")
+    assert [(r.name, r.path, r.root, r.commit_sha, r.files) for r in result.repositories] == [
+        ("", "project", str(FOUND_REPO.root), "abc123", 2)]
     # Второй проход участников — по заданиям судьи; судья видит прежнюю карту.
     assert "Проверить авторизацию в прокси" in section(
         runner.asked["repository_discovery", "sol"], "ADDITIONAL INVESTIGATION REQUESTS")
@@ -891,6 +899,31 @@ def question_it_with(replies):
     return result, runner
 
 
+def test_several_repositories_are_scanned_together_each_in_its_folder():
+    """Бэкенд и фронтенд в разных репозиториях: модели видят оба, файлы — с папкой копии, и
+    подтверждением годится файл любой из них."""
+    front = {"id": "R2", "statement": "Экран — React.", "status": "verified",
+             "evidence": [{"path": "front/src/App.tsx"}]}
+    back = {**FACT, "evidence": [{"path": "back/api/deps.py"}]}
+    found = {"findings": [back, front]}
+    result, runner, _ = scan({("repository_discovery", "sol"): found,
+                              ("repository_discovery", "fable"): found,
+                              ("repository_judge", "fable"): {"status": "complete",
+                                                              "findings": [back, front]}},
+                             sources=TWO_REPOS)
+    assert result.state == "done"
+    assert [(r.name, r.path, r.commit_sha, r.dirty, r.files) for r in result.repositories] == [
+        ("back", "back", "abc123", False, 2), ("front", "web/front", "def456", True, 1)]
+    assert [(f.status, [e.path for e in f.evidence]) for f in result.result.findings] == [
+        ("verified", ["back/api/deps.py"]), ("verified", ["front/src/App.tsx"])]
+    prompt = runner.asked["repository_discovery", "sol"]
+    inventory = section(prompt, "REPOSITORY INVENTORY")
+    assert "back/ — back" in inventory and "front/ — web/front" in inventory
+    assert "back/api/routes.py" in inventory and "front/src/App.tsx" in inventory
+    commits = section(prompt, "COMMIT SHA")
+    assert "back: abc123" in commits and "front: def456" in commits
+
+
 def test_another_snapshot_is_a_new_call_not_a_free_retry():
     """Промпт тот же (коммит, inventory), а код в снимке другой — оплаченный ответ к прежнему
     коду не годится; тот же код — тот же ключ."""
@@ -930,12 +963,12 @@ def task(id_, title, outcomes=("O1",), **extra):
             **extra}
 
 
-def cut(replies, found=FOUND_REPO, copy=None, outcomes=APPROVED):
+def cut(replies, sources=PROJECT, copy=None, outcomes=APPROVED):
     runner, reports = FakeRunner(replies), []
     stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
                     decisions=DECIDED, proposals=FOUND, outcomes=outcomes)
     result = IssueRun("c1", stream, GROUP_FRAGMENTS,
-                      ["sol", "fable"], "fable", runner, reports.append, found=found,
+                      ["sol", "fable"], "fable", runner, reports.append, sources=sources,
                       repository="КАРТА РЕПОЗИТОРИЯ", copy=copy or copy_as("снимок-1")).run()
     return result, runner
 
@@ -954,7 +987,8 @@ def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
         ("I2", "Выдача ответа", ["I1"], ["G1"])]
     assert [(g.id, g.question) for g in result.gaps] == [("G1", "Сколько хранить историю?")]
     assert result.uncovered_outcome_ids == ["O2"]                  # считает код, не модель
-    assert (result.outcomes, result.code, result.commit_sha) == ("o1", True, "abc123")
+    assert (result.outcomes, result.code) == ("o1", True)
+    assert [(s.name, s.commit_sha) for s in result.sources] == [("", "abc123")]
     prompt = runner.asked["issue_discovery", "sol"]
     assert '"id": "O2"' in section(prompt, "OUTCOMES")
     # Открытый вопрос, держащий итог, виден текстом и с вариантами, а не одним номером.
@@ -975,10 +1009,10 @@ def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
 def test_without_a_scan_the_issues_are_cut_without_code_and_the_same_sets_need_no_judge():
     same = {"issues": [task("I1", "Поиск")]}
     result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         found=None)
+                         sources=[])
     assert result.state == "done"
     assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
-    assert (result.code, result.commit_sha) == (False, "")
+    assert (result.code, result.sources) == (False, [])
     assert set(runner.workspaces.values()) == {None}
     assert "abc123" not in section(runner.asked["issue_discovery", "sol"], "REPOSITORY CONTEXT")
 
@@ -990,7 +1024,17 @@ def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
     result, _ = cut({}, copy=broken)
     assert result.state == "failed"
     assert "менялась" in result.error
-    assert (result.code, result.commit_sha) == (False, "")      # снимка нет — кода не читали
+    assert (result.code, result.sources) == (False, [])         # снимка нет — кода не читали
+
+
+def test_issues_read_every_scanned_repository():
+    same = {"issues": [task("I1", "Поиск")]}
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         sources=TWO_REPOS)
+    assert [(s.name, s.commit_sha, s.dirty) for s in result.sources] == [
+        ("back", "abc123", False), ("front", "def456", True)]
+    context = section(runner.asked["issue_discovery", "sol"], "REPOSITORY CONTEXT")
+    assert "back: abc123" in context and "front: def456" in context
 
 
 def test_an_issue_inherits_what_blocks_its_outcomes():
@@ -1002,7 +1046,7 @@ def test_an_issue_inherits_what_blocks_its_outcomes():
     same = {"issues": [task("I1", "Индекс"), task("I2", "Хранение", outcomes=("O2",))],
             "gaps": [{"question": "Сколько хранить историю?", "reason": "свой"}]}
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    found=None, outcomes=outcomes)
+                    sources=[], outcomes=outcomes)
     assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
     assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
         ("G1", "Сколько хранить историю?", ["O1"])]
@@ -1014,7 +1058,7 @@ def test_a_gap_found_for_an_outcome_holds_every_issue_of_it():
             "gaps": [{"question": "Сколько хранить историю?", "reason": "",
                       "outcome_ids": ["O1"]}]}
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    found=None)
+                    sources=[])
     assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"])]
 
 
@@ -1024,7 +1068,7 @@ def test_an_issue_inherits_the_decisions_and_limits_of_its_outcomes():
     bare = task("I1", "Индекс", adr_ids=[], constraint_ids=[])
     same = {"issues": [bare]}
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    found=None)
+                    sources=[])
     [issue] = result.issues
     assert (issue.adr_ids, issue.constraint_ids) == (["ADR-1"], [5])
 
@@ -1037,7 +1081,7 @@ def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
         APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={"gaps": [gap]})]})
     same = {"issues": [task("I1", "Индекс")]}
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    found=None, outcomes=outcomes)
+                    sources=[], outcomes=outcomes)
     assert result.uncovered_outcome_ids == ["O2"]
     assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
         ("G1", "Сколько хранить историю?", ["O2"])]
@@ -1050,7 +1094,7 @@ def test_answers_that_differ_only_in_what_the_outcomes_give_need_no_judge():
     full = {"issues": [task("I1", "Индекс")]}
     bare = {"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}
     result, _ = cut({("issue_discovery", "sol"): full, ("issue_discovery", "fable"): bare},
-                    found=None)
+                    sources=[])
     assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
 
 
@@ -1058,5 +1102,5 @@ def test_an_issue_carries_the_acceptance_criteria_of_its_outcomes():
     """Критерии готовности итога доходят до агента вместе с задачей, а не на усмотрение модели."""
     same = {"issues": [task("I1", "Индекс")]}
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    found=None)
+                    sources=[])
     assert result.issues[0].acceptance_criteria == ["Находит по слову."]

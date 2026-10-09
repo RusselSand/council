@@ -12,8 +12,10 @@ from spec_council.deps import data_folder
 from spec_council.models import (
     CouncilStatus,
     Group,
+    IssueDiscovery,
     LabeledFragment,
     ModelRun,
+    RepositoryScan,
     Slicing,
     Stream,
     StreamIdea,
@@ -28,7 +30,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import Inventory
+from spec_council.repository import Inventory, Source
 from spec_council.store import INTERRUPTED, FileStore
 
 
@@ -65,7 +67,7 @@ def test_runs_that_were_going_on_come_back_failed_and_can_be_started_again(tmp_p
                              ModelRun(model="fable", state="done")]
     found = Inventory(root=tmp_path, commit_sha="abc", dirty=False, files=())
     streams = [Stream(group="A", discovery=start_idea(["sol"], "sol"),
-                      scan=start_scan(["sol"], "sol", "Идея", "project", found)),
+                      scan=start_scan(["sol"], "sol", "Идея", [Source("", "project", found)])),
                Stream(group="B", questions=start_questions(["sol"], "sol", "Идея"),
                       proposals=start_proposals(["sol"], "sol", []),
                       analysis=start_analysis(["sol"], "sol", []),
@@ -194,6 +196,26 @@ def test_streams_saved_before_the_repository_step_passed_it_by_skipping(tmp_path
     first, second = after.streams
     assert (first.repository.by, first.questions.repository) == ("skipped", "skipped")
     assert second.repository is None                    # вопросов не было — шаг впереди
+
+
+def test_a_scan_and_a_cut_saved_with_one_repository_read_as_a_list_of_one():
+    """Совет, сохранённый, пока рабочая копия у скана была одна: её поля — первая в списке, и
+    нарезка помнит её коммит и правки; без кода — пустой список."""
+    scan = RepositoryScan.model_validate({
+        "state": "done", "run": "r1", "idea": "Идея", "path": "project", "root": "/repos/project",
+        "commit_sha": "abc", "dirty": True, "files": 2, "outside": 1,
+        "omitted": ["vendor/ — подмодуль не скачан"], "omitted_count": 1, "rounds": 1,
+        "steps": []})
+    assert (scan.run, scan.idea, scan.rounds) == ("r1", "Идея", 1)
+    assert [r.model_dump() for r in scan.repositories] == [{
+        "name": "", "path": "project", "root": "/repos/project", "commit_sha": "abc",
+        "dirty": True, "files": 2, "outside": 1, "omitted": ["vendor/ — подмодуль не скачан"],
+        "omitted_count": 1}]
+    old = {"state": "done", "run": "i1", "outcomes": "o1", "steps": []}
+    cut = IssueDiscovery.model_validate({**old, "code": True, "commit_sha": "abc", "dirty": True})
+    assert [(s.commit_sha, s.dirty) for s in cut.sources] == [("abc", True)]
+    blind = IssueDiscovery.model_validate({**old, "code": False, "commit_sha": "", "dirty": False})
+    assert blind.sources == []
 
 
 def test_councils_are_read_under_the_models_of_today(tmp_path):

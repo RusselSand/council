@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class CouncilStatus(StrEnum):
@@ -274,22 +274,23 @@ class RepositoryMap(BaseModel):
     documentation_conflicts: list[str] = []
 
 
-class RepositoryScan(BaseModel):
-    """Скан репозитория под идею потока: inventory при запуске, участники исследуют, судья
-    проверяет и, если пробелы существенны, отправляет их доисследовать — до двух раз. Ход по
-    шагам и итог."""
+# Поля рабочей копии, как их хранил скан, пока она была у него одна.
+SOURCE_FIELDS = ("path", "root", "commit_sha", "dirty", "files", "outside", "omitted",
+                 "omitted_count")
 
-    state: Literal["running", "done", "failed"]
-    run: str = ""
-    # К какой идее и какому репозиторию: путь, как его ввёл человек, корень рабочей копии, к
-    # которому он тогда привёл (каталог репозиториев могут и поменять), и её коммит.
-    idea: str = ""
+
+class ScannedRepository(BaseModel):
+    """Рабочая копия скана: путь, как его ввёл человек, корень, к которому он тогда привёл
+    (каталог репозиториев могут и поменять), её коммит и что о ней известно."""
+
+    # Папка в снимке: у нескольких рабочих копий пути их файлов — «name/…», у одной — без неё.
+    name: str = ""
     path: str = ""
     root: str = ""
     commit_sha: str = ""
-    # В рабочей копии есть незакоммиченные правки: модели читают её, а не коммит.
+    # Есть незакоммиченные правки: модели читают рабочую копию, а не коммит.
     dirty: bool = False
-    # Сколько файлов в inventory и сколько проходов участников и судьи понадобилось.
+    # Сколько файлов в inventory.
     files: int = 0
     # Сколько файлов коммита вне sparse checkout: их нет ни на диске, ни в снимке.
     outside: int = 0
@@ -298,6 +299,19 @@ class RepositoryScan(BaseModel):
     # omitted_count — сколько всего.
     omitted: list[str] = []
     omitted_count: int = 0
+
+
+class RepositoryScan(BaseModel):
+    """Скан репозиториев под идею потока: inventory каждой рабочей копии при запуске,
+    участники исследуют их вместе, судья проверяет и, если пробелы существенны, отправляет их
+    доисследовать — до двух раз. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К какой идее и каким рабочим копиям.
+    idea: str = ""
+    repositories: list[ScannedRepository] = []
+    # Сколько проходов участников и судьи понадобилось.
     rounds: int = 0
     steps: list[Step]
     # complete — судья счёл исследование достаточным; иначе остались задания follow_up.
@@ -305,6 +319,17 @@ class RepositoryScan(BaseModel):
     result: RepositoryMap | None = None
     follow_up: list[FollowUp] = []
     error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def one_repository(cls, data: object) -> object:
+        """Скан, сохранённый, пока рабочая копия была у него одна: её поля — первая в
+        repositories."""
+        if isinstance(data, dict) and "repositories" not in data and "path" in data:
+            source = {key: data[key] for key in SOURCE_FIELDS if key in data}
+            rest = {key: value for key, value in data.items() if key not in SOURCE_FIELDS}
+            return {**rest, "repositories": [source]}
+        return data
 
 
 # Шаг «Репозиторий» пропущен: так его помнят вопросы.
@@ -534,16 +559,28 @@ class IssueDiscovery(BaseModel):
     run: str = ""
     # К каким итогам нарезали (OutcomeDiscovery.run): собрали другие — нарезают заново.
     outcomes: str = ""
-    # С какого кода нарезали: code — читали ли его вообще (без скана — нет), коммит и правки.
+    # С какого кода нарезали: code — читали ли его вообще (без скана — нет), и каждая рабочая
+    # копия — имя в снимке, путь, коммит и правки.
     code: bool = False
-    commit_sha: str = ""
-    dirty: bool = False
+    sources: list[ScannedRepository] = []
     steps: list[Step]
     issues: list[Issue] = []
     gaps: list[IssueGap] = []
     # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
     uncovered_outcome_ids: list[str] = []
     error: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def one_source(cls, data: object) -> object:
+        """Нарезка, сохранённая, пока рабочая копия была одна: её коммит и правки — первая в
+        sources."""
+        if isinstance(data, dict) and "sources" not in data and "commit_sha" in data:
+            rest = {key: value for key, value in data.items()
+                    if key not in ("commit_sha", "dirty")}
+            sources = [{"commit_sha": data["commit_sha"], "dirty": data.get("dirty", False)}]
+            return {**rest, "sources": sources if data.get("code") else []}
+        return data
 
 
 class Stream(BaseModel):
@@ -650,12 +687,17 @@ class ApproveIdea(GroupsEdit):
     text: str | None = None
 
 
-class ScanRepository(GroupsEdit):
-    """Человек запускает скан репозитория потока: путь к рабочей копии — абсолютный или от
-    каталога репозиториев (COUNCIL_REPOS). idea — идея, которую человек видел: её поменяли в
-    другой вкладке — 409, а не скан под идею, которой он не видел."""
+# Сколько рабочих копий можно сканировать разом: у каждой свои вызовы git.
+REPOSITORIES_MAX = 10
 
-    path: str
+
+class ScanRepository(GroupsEdit):
+    """Человек запускает скан репозиториев потока: пути к рабочим копиям — абсолютные или от
+    каталога репозиториев (COUNCIL_REPOS); бэкенд и фронтенд в разных репозиториях — два пути.
+    idea — идея, которую человек видел: её поменяли в другой вкладке — 409, а не скан под
+    идею, которой он не видел."""
+
+    paths: list[str] = Field(min_length=1, max_length=REPOSITORIES_MAX)
     idea: str
 
 

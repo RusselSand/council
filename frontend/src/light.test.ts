@@ -37,7 +37,7 @@ const task = (more: Partial<Issue> = {}): Issue => ({
   scope: ['Сделать.'], outcome_ids: ['O1'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: [],
   blocked_by: [], acceptance_criteria: [], ...more })
 const cut = (state: IssueDiscovery['state'], issues: Issue[] = []): IssueDiscovery =>
-  ({ state, run: 'i1', outcomes: 'o1', code: false, commit_sha: '', dirty: false, steps: [], issues, gaps: [],
+  ({ state, run: 'i1', outcomes: 'o1', code: false, sources: [], steps: [], issues, gaps: [],
      uncovered_outcome_ids: [], error: null })
 /**
  * Поток: approved — идея утверждена; questions — поиск вопросов; chosen — вопросы отобраны;
@@ -134,7 +134,8 @@ describe('светофор', () => {
 
   it('репозиторий: сканирует ИИ, скан упал, ждёт вас; пройденный — дальше вопросы', () => {
     const scanned = (state: RepositoryScan['state']): RepositoryScan => ({
-      state, run: 's1', idea: 'Идея', path: 'project', commit_sha: 'abc', dirty: false, files: 1, outside: 0, omitted: [], omitted_count: 0, rounds: 1,
+      state, run: 's1', idea: 'Идея', rounds: 1,
+      repositories: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abc', dirty: false, files: 1, outside: 0, omitted: [], omitted_count: 0 }],
       steps: [], complete: true, result: null, follow_up: [], error: null })
     const on = (scan: RepositoryScan | null) => ({ ...stream(null, true), scan, repository: null })
     expect([on(scanned('running')), on(scanned('failed')), on(scanned('done')), on(null)].map(streamLight))

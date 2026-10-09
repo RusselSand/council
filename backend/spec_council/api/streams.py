@@ -45,6 +45,7 @@ from ..models import (
     QuestionDiscovery,
     RepositoryScan,
     RepositoryStep,
+    ScannedRepository,
     ScanRepository,
     Stream,
     StreamIdea,
@@ -71,7 +72,16 @@ from ..pipeline import (
     start_scan,
 )
 from ..questions import QUESTION_MAX, same_question
-from ..repository import Inventory, RepositoryError, context_prompt, working_copy
+from ..repository import (
+    Inventory,
+    RepositoryError,
+    Source,
+    context_prompt,
+    fits,
+    merged,
+    sources_of,
+    working_copy,
+)
 from .councils import (
     CANNOT_START,
     MISSING,
@@ -242,7 +252,8 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     with council_lock:
         plan()
     try:
-        found = working_copy(edit.path, repositories)
+        sources = sources_of([(path, working_copy(path, repositories)) for path in edit.paths])
+        fits(merged(sources))
     except RepositoryError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -251,9 +262,9 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
         runs: list[CouncilRun] = []
         if missing:
             scan = unconnected(start_scan(council.participants, council.judge, stream.idea.text,
-                                          edit.path, found), missing)
+                                          sources), missing)
         else:
-            runs = [RepositoryRun(council.id, stream.idea.text, edit.path, found,
+            runs = [RepositoryRun(council.id, stream.idea.text, sources,
                                   fragments_of(council, group_of(council, group)),
                                   council.participants, council.judge, agents,
                                   reporter(store, council.id, scanning(group)))]
@@ -340,9 +351,7 @@ def repository_map(stream: Stream) -> str:
     step, scan = stream.repository, stream.scan
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return context_prompt(None)
-    return context_prompt(scan.result, scan.commit_sha, dirty=scan.dirty,
-                          outside=scan.outside, omitted=scan.omitted,
-                          omitted_count=scan.omitted_count, complete=scan.complete,
+    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
                           follow_up=scan.follow_up)
 
 
@@ -723,7 +732,7 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
         # Те же итоги (повтор, ответ потерялся): ничего не меняется, и код не читаем — его
         # может уже и не быть.
         return council
-    found = code_of(stream_in(council, group), repositories)
+    sources = code_of(stream_in(council, group), repositories)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
@@ -734,7 +743,7 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
             issues = unconnected(start_issues(council.participants, council.judge,
                                               edit.outcomes_run), missing)
         else:
-            runs = [issue_run(council, group, stream, found, agents, store)]
+            runs = [issue_run(council, group, stream, sources, agents, store)]
             issues = runs[0].state.model_copy(deep=True)
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update={"issues": issues}))}), runs
@@ -767,11 +776,11 @@ def start_issue_discovery(council_id: str, group: str, store: StoreDep, config: 
     if council is None:
         raise HTTPException(404, MISSING)
     ready(council)
-    found = code_of(stream_in(council, group), repositories)
+    sources = code_of(stream_in(council, group), repositories)
 
     def build(council: Council, report: Callable) -> IssueRun:
         stream = stream_in(council, group)
-        return issue_run(council, group, stream, found, agents, store, report=report)
+        return issue_run(council, group, stream, sources, agents, store, report=report)
 
     return start_run(council_id, store, config, agents, launch, cutting(group), ready, None,
                      build)
@@ -797,33 +806,40 @@ def cuts_anew(stream: Stream, outcomes_run: str) -> bool:
     return stream.issues is None or stream.issues.outcomes != outcomes_run
 
 
-def code_of(stream: Stream, repositories: Path | None) -> Inventory | None:
-    """Код для нарезки: рабочая копия утверждённого скана — заново, какая она сейчас. Шаг
-    пройден без скана — кода нет. Не прочитать — 422: нарезка без кода, которого ждали, молча
-    разошлась бы с картой."""
+def code_of(stream: Stream, repositories: Path | None) -> list[Source]:
+    """Код для нарезки: рабочие копии утверждённого скана — заново, какие они сейчас, под теми
+    же папками снимка, что и в карте. Шаг пройден без скана — кода нет. Какую-то не прочитать —
+    422: нарезка без кода, которого ждали, молча разошлась бы с картой."""
     step, scan = stream.repository, stream.scan
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return None
-    try:
-        found = working_copy(scan.path, repositories)
-    except RepositoryError as exc:
-        raise HTTPException(422, f"Рабочую копию {scan.path} не прочитать: {exc}") from None
-    # Тот же путь от другого каталога репозиториев — уже другая рабочая копия: читать её под
-    # картой прежней нельзя. Скан, что корня не помнит (сделан раньше), этого не проверит.
-    if not scan.root:
+        return []
+    # Скан, что корня не помнит (сделан раньше), не проверит, та ли это рабочая копия.
+    if not scan.repositories or not all(source.root for source in scan.repositories):
         raise HTTPException(422, "Скан сделан, когда совет ещё не запоминал, какую рабочую копию "
                                  "читал, — просканируйте репозиторий заново")
-    if os.path.normcase(str(found.root)) != os.path.normcase(scan.root):
-        raise HTTPException(422, f"По пути {scan.path} теперь другая рабочая копия: сканировали "
-                                 f"{scan.root}, а сейчас это {found.root} — просканируйте заново")
+    return [Source(source.name, source.path, again(source, repositories))
+            for source in scan.repositories]
+
+
+def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
+    """Рабочая копия скана, какая она сейчас. Тот же путь от другого каталога репозиториев —
+    уже другая рабочая копия: читать её под картой прежней нельзя."""
+    try:
+        found = working_copy(source.path, repositories)
+    except RepositoryError as exc:
+        raise HTTPException(422, f"Рабочую копию {source.path} не прочитать: {exc}") from None
+    if os.path.normcase(str(found.root)) != os.path.normcase(source.root):
+        raise HTTPException(422, f"По пути {source.path} теперь другая рабочая копия: "
+                                 f"сканировали {source.root}, а сейчас это {found.root} — "
+                                 "просканируйте заново")
     return found
 
 
-def issue_run(council: Council, group: str, stream: Stream, found: Inventory | None,
+def issue_run(council: Council, group: str, stream: Stream, sources: list[Source],
               runner: Runner, store: Store, report: Callable | None = None) -> IssueRun:
     return IssueRun(council.id, stream, fragments_of(council, group_of(council, group)),
                     council.participants, council.judge, runner,
-                    report or reporter(store, council.id, cutting(group)), found=found,
+                    report or reporter(store, council.id, cutting(group)), sources=sources,
                     repository=repository_map(stream))
 
 
