@@ -373,6 +373,20 @@ def test_an_empty_text_is_not_written(root):
         export(root, edits={"idea": "   "})
 
 
+def test_an_edit_must_keep_the_numbers_and_the_issue_lines(root):
+    notes, _, _, _ = draft(root)
+    outcome = next(note for note in notes if "\n- ISS-" in note.text)
+    idea = notes[0]
+    catalog = Catalog.load(root)
+    wrong = [(outcome, outcome.text.split("\n\n" + WORDS["issues"])[0], "потеряны номера ISS-"),
+             (outcome, outcome.text.replace("\n- ISS-", "\nСм. ISS-"), "строки задач не те"),
+             (idea, idea.text + " Как в ADR-0042.", "лишние номера ADR-0042")]
+    for note, text, problem in wrong:
+        with pytest.raises(NotesError, match=f"В правке заметки {note.id} {problem}"):
+            written(notes, [], {note.key: text}, [], root, None, catalog)
+    assert sorted(Catalog.load(root).notes) == sorted(note.id for note in PAST)   # не тронут
+
+
 def test_an_empty_text_anywhere_leaves_the_catalog_as_it_was(root):
     notes, _, _, _ = draft(root)
     last = notes[-1]

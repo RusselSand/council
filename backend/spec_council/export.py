@@ -386,9 +386,10 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено, —
     и исчезнувшие, что человек оставил в каталоге: они всё ещё потока.
 
-    Сначала пустой текст и временные файлы, потом подмена и удаление одним шагом с откатом
-    (committed), потом keep — запись о выгрузке. Отказ на любом шаге, и в keep тоже, вернёт
-    каталог как был: файлы и запись о них не разойдутся. Заметка из каталога — там, где лежит."""
+    Сначала номера в правках и пустой текст, потом временные файлы, подмена и удаление одним
+    шагом с откатом (committed), потом keep — запись о выгрузке. Отказ на любом шаге, и в keep
+    тоже, вернёт каталог как был: файлы и запись о них не разойдутся. Заметка из каталога —
+    там, где лежит."""
 
     def where(note_id: str, kind: str) -> Path:
         return path_of(root, catalog.notes.get(note_id) or Note(note_id, kind, ""))
@@ -400,6 +401,7 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     empty = [plan.id for plan in notes if texts.get(plan.key) == ""]
     if empty:
         raise NotesError(f"У заметки {empty[0]} пустой текст")
+    numbered_edits(notes, edits, texts)
     changed = [plan for plan in notes if plan.action != "edited"
                and (plan.action != "same" or texts[plan.key] != plan.text.strip())]
     staged: list[tuple[Path, Path]] = []
@@ -489,17 +491,35 @@ def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
     if missing:
         raise BadAnswer(f"нет перевода заметок: {', '.join(missing[:5])}")
     for key, text in found.items():
-        source, translated = set(NUMBER.findall(sources[key])), set(NUMBER.findall(text))
-        if source - translated:
-            raise BadAnswer(f"в переводе {key} потеряны номера "
-                            f"{', '.join(sorted(source - translated))}")
-        if translated - source:
-            raise BadAnswer(f"в переводе {key} лишние номера "
-                            f"{', '.join(sorted(translated - source))}")
-        if declared_issues(sources[key]) != declared_issues(text):
-            raise BadAnswer(f"в переводе {key} строки задач не те: каждая — «- ISS-…: название», "
-                            "как в исходном тексте")
+        problem = numbering_problem(sources[key], text)
+        if problem is not None:
+            raise BadAnswer(f"в переводе {key} {problem}")
     return found
+
+
+def numbered_edits(notes: Sequence[NotePlan], edits: Mapping[str, str],
+                   texts: Mapping[str, str]) -> None:
+    """Правка человека — с теми же номерами, что и перевод: номер задачи с экрана уже ушёл в
+    коммиты, и без строки задачи в итоге у них не было бы следа."""
+    for plan in notes:
+        if plan.key in edits and plan.key in texts:
+            problem = numbering_problem(plan.text, texts[plan.key])
+            if problem is not None:
+                raise NotesError(f"В правке заметки {plan.id} {problem}")
+
+
+def numbering_problem(source: str, text: str) -> str | None:
+    """Чем текст расходится с исходным в номерах: потерян или лишний номер заметки или задачи,
+    не те строки задач итога. Номера держат граф и след в коде: ISS-… в итоге — задача, по нему
+    считают след и раздают новые номера. Те же — None."""
+    was, now = set(NUMBER.findall(source)), set(NUMBER.findall(text))
+    if was - now:
+        return f"потеряны номера {', '.join(sorted(was - now))}"
+    if now - was:
+        return f"лишние номера {', '.join(sorted(now - was))}"
+    if declared_issues(source) != declared_issues(text):
+        return "строки задач не те: каждая — «- ISS-…: название», как в исходном тексте"
+    return None
 
 
 def staged_file(path: Path, text: str) -> Path:

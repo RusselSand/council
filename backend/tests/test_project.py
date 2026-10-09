@@ -38,6 +38,7 @@ from tests.test_streams import (
     IDEA_C,
     Agents,
     approve,
+    choose,
     client,
     confirm,
     grouped,
@@ -431,6 +432,40 @@ def test_a_retry_of_the_questions_offers_decisions_that_appeared_meanwhile(agent
     assert (stream.decisions_search.state, stream.questions) == ("failed", None)
     assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
                        ).status_code == 202
+
+
+def test_a_selected_decision_rewritten_before_the_options_sends_back_to_the_selection(
+        agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    assert picks(council_id, ["ADR-0001"]).status_code == 200
+    # Новое решение в каталоге работу ниже не сбрасывает: вопросы к ней уже нашли.
+    newer = Note("ADR-0003", "adr", "Счета шлёт бот по расписанию.", ("PRO-0002",))
+    path_of(root, newer).write_text(rendered(newer), encoding="utf-8")
+    agents.online = set()
+    assert choose(council_id, "C", ["Q1"]).status_code == 200        # варианты — упали
+    agents.online = {"sol", "fable"}
+    # А отмеченное переписали: варианты с ним не ищут — ни повтором, ни новым отбором.
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    retry = client.post(f"/api/councils/{council_id}/streams/C/proposals/discovery")
+    assert retry.status_code == 409 and "ADR-0001" in retry.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.project_decisions, stream.questions,
+            stream.scope, stream.proposals) == ("failed", None, None, None, None)
+
+
+def test_a_new_scope_with_a_rewritten_decision_is_refused_too(agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    assert picks(council_id, ["ADR-0001"]).status_code == 200
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    assert choose(council_id, "C", ["Q1"]).status_code == 409
+    stream = streams_of(council_id)["C"]
+    assert (stream.project_decisions, stream.scope) == (None, None)
 
 
 def test_without_models_the_selection_fails_and_the_questions_go_without_it(agents):

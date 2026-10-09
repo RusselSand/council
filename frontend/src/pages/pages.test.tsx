@@ -1272,6 +1272,23 @@ describe('Поток: решения и итоги', () => {
     expect(screen.getByRole('button', { name: ru['project.skip'] })).toBeTruthy()
   })
 
+  it('повтор поиска вариантов, а отмеченное решение переписали, — поток снова у отбора решений', async () => {
+    const failed: ProposalDiscovery = { state: 'failed', run: 'p1', scope: [], steps: [], options: [],
+                                        error: 'Нет подключения к моделям: GPT-5.6 Sol' }
+    const message = 'Решения проекта в каталоге заметок поменялись после отбора (ADR-0001): отберите их заново'
+    let current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: {
+      decisions_search: SEARCH, project_decisions: [SEARCH.decisions[0]], questions: QUESTIONS_FOUND,
+      scope: QUESTIONS_FOUND.questions, proposals: failed } })
+    openWith(() => current, () => {
+      current = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, {
+        A: { decisions_search: { ...SEARCH, state: 'failed', run: 'ps2', error: message } } })
+      return json({ detail: message }, 409)
+    })
+    fireEvent.click(await screen.findByRole('button', { name: ru['run.retry'] }))
+    expect(await screen.findByText(ru['questions.afterDecisions'])).toBeTruthy()
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+  })
+
   it('отбор решений идёт — опрос его ждёт; готов — рекомендованные уже отмечены', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     try {

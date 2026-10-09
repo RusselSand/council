@@ -585,6 +585,46 @@ def unselected(council: Council, stream: Stream, message: str) -> Stream:
                                      "decisions_search": failed})
 
 
+def changed_choice(notes: Path | None, stream: Stream) -> str | None:
+    """Почему отметка решений проекта не годится ходу ниже вопросов: отмеченные в каталоге
+    поправили, заменили или убрали. Новые решения в каталоге работу ниже не сбрасывают: вопросы
+    к ней уже нашли. Годится — None."""
+    chosen = stream.project_decisions or []
+    stale = changed_in(catalog_at(notes), own_ids(stream, notes), chosen)
+    if not stale:
+        return None
+    return (f"Решения проекта в каталоге заметок поменялись после отбора ({', '.join(stale)}): "
+            "отберите их заново")
+
+
+def refused(message: str | None) -> None:
+    if message is not None:
+        raise HTTPException(409, message)
+
+
+def expired(store: Store, council: Council, stream: Stream, message: str | None) -> None:
+    """Под замком: отметка решений проекта устарела (message) — отбор упал, отметка и всё ниже
+    сняты (unselected), и 409. Пока ход ниже вопросов идёт — 423: его отчёт вернул бы снятое."""
+    if message is None:
+        return
+    if below_running(stream, "questions"):
+        raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
+    store.update_council(council.id, {"streams": replaced(
+        council, unselected(council, stream, message))})
+    raise HTTPException(409, message)
+
+
+def expired_before(store: Store, council_id: str, group: str, slot: Slot,
+                   why: Callable[[Council], str | None]) -> None:
+    """Перед повтором хода, которому нужна отметка решений проекта: сверка под замком, как и
+    запуск (выгрузка другого потока ждёт этот замок). why — проверки входа и что не так с
+    отметкой. Ход уже идёт — пусть отвечает запуск."""
+    with council_lock:
+        council = store.get_council(council_id)
+        if council is not None and not running(slot.get(council)):
+            expired(store, council, stream_in(council, group), why(council))
+
+
 def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
     """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
     Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
@@ -625,14 +665,7 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
         chosen = selection_for(stream, edit)
         # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
         # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
-        message = outdated_selection(notes, stream, chosen)
-        if message is not None:
-            # Ход ниже снятой отметки воскресил бы её работу своим отчётом — сначала дождаться.
-            if below_running(stream, "questions"):
-                raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
-            store.update_council(council_id, {"streams": replaced(
-                council, unselected(council, stream, message))})
-            raise HTTPException(409, message)
+        expired(store, council, stream, outdated_selection(notes, stream, chosen))
         anew = asks_anew(stream, stream.repository, stream.design, chosen)
         if anew and below_running(stream, "questions"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
@@ -810,9 +843,7 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
         return stream
 
     def ready(council: Council) -> None:
-        message = stale_choice(notes, checked(council))
-        if message is not None:
-            raise HTTPException(409, message)
+        refused(stale_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> QuestionRun:
         stream = stream_in(council, group)
@@ -824,17 +855,8 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                            design=step_key(stream.design), design_map=design_map(stream),
                            accepted=stream.project_decisions or ())
 
-    # Сверка с каталогом — под замком, как и запуск: устаревший отбор записан упавшим, отметка
-    # и всё ниже неё сняты — человек отбирает заново. Выгрузка другого потока ждёт этот замок.
-    with council_lock:
-        council = store.get_council(council_id)
-        if council is not None and not running(asking(group).get(council)):
-            stream = checked(council)
-            message = stale_choice(notes, stream)
-            if message is not None:
-                store.update_council(council_id, {"streams": replaced(
-                    council, unselected(council, stream, message))})
-                raise HTTPException(409, message)
+    expired_before(store, council_id, group, asking(group),
+                   lambda council: stale_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, asking(group), ready, None,
                      build)
 
@@ -846,12 +868,14 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                         423: {"description": "Совет ещё ищет варианты или проверяет выбор "
                                              "к прежнему отбору"}})
 def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreDep,
-                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                  notes: NotesDep) -> Council:
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных и свои, — и
     совет сразу ищет к ним новые варианты ответа. Ответы он здесь не выбирает. Утвердить
     заново — поменять отбор: варианты к прежнему и выбор по ним ищутся заново; тот же отбор
     их не трогает. Если поиск вопросов упал, можно утвердить и одни свои вопросы. Отбор — к
-    тому поиску, что был на экране: нашли заново — 409, экран покажет новые вопросы."""
+    тому поиску, что был на экране: нашли заново — 409, экран покажет новые вопросы.
+    Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -860,6 +884,8 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
         if anew and below_running(stream, "proposals"):
             raise HTTPException(
                 423, "Совет ещё работает с прежним отбором — дождитесь его")
+        if anew:
+            expired(store, council, stream, changed_choice(notes, stream))
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -902,10 +928,12 @@ def proposes_anew(stream: Stream, scope: list[OpenQuestion]) -> bool:
 @router.post("/{council_id}/streams/{group}/proposals/discovery", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_proposal_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                             agents: AgentsDep, launch: LauncherDep) -> Council:
+                             agents: AgentsDep, launch: LauncherDep,
+                             notes: NotesDep) -> Council:
     """Ищет варианты к отобранным вопросам заново: после сбоя или если при утверждении отбора
-    не было подключения к моделям. Повтор не платит второй раз за уже данные ответы."""
-    def ready(council: Council) -> None:
+    не было подключения к моделям. Повтор не платит второй раз за уже данные ответы.
+    Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают заново."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.scope is None:
             raise HTTPException(409, "Сначала утвердите вопросы потока")
@@ -913,6 +941,10 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
             raise HTTPException(409, "Выбор по вопросам уже утверждён")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> ProposalRun:
         stream = stream_in(council, group)
@@ -922,6 +954,8 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
                            repository=repository_map(stream), design=design_map(stream),
                            accepted=stream.project_decisions or ())
 
+    expired_before(store, council_id, group, proposing(group),
+                   lambda council: changed_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, proposing(group), ready, None,
                      build)
 
@@ -933,20 +967,24 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
                         423: {"description": "Совет ещё проверяет прежний выбор или собирает "
                                              "итоги по нему"}})
 def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: StoreDep,
-                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                    notes: NotesDep) -> Council:
     """Человек утверждает выбор: по каждому отобранному вопросу — вариант из текста группы
     (Fn) или найденный советом (Pn), либо None — пока не решает, вопрос уходит как unresolved.
     И совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что есть.
     Утвердить заново — поменять выбор: проверка прежнего и решения по ней уже ни к чему; тот
     же выбор их не трогает. Выбор — к тому поиску вариантов, что был на экране: нашли заново —
     409. Если поиск упал, выбирать можно из того, что есть: предложений группы и уже
-    найденного."""
+    найденного. Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают
+    заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         anew = analyzes_anew(stream, choices_for(stream, edit))
         if anew and below_running(stream, "analysis"):
             raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
+        if anew:
+            expired(store, council, stream, changed_choice(notes, stream))
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -1026,10 +1064,12 @@ def offered_for(question: OpenQuestion, search: ProposalDiscovery | None) -> set
 @router.post("/{council_id}/streams/{group}/analysis", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_decision_analysis(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                            agents: AgentsDep, launch: LauncherDep) -> Council:
+                            agents: AgentsDep, launch: LauncherDep,
+                            notes: NotesDep) -> Council:
     """Проверяет выбор заново: после сбоя или если при утверждении выбора не было подключения
-    к моделям. Повтор не платит второй раз за уже данные ответы."""
-    def ready(council: Council) -> None:
+    к моделям. Повтор не платит второй раз за уже данные ответы. Отмеченные решения проекта в
+    каталоге с тех пор поменялись — 409, их отбирают заново."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.choices is None:
             raise HTTPException(409, "Сначала утвердите выбор по вопросам")
@@ -1037,6 +1077,10 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
             raise HTTPException(409, "Решения уже зафиксированы")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes, checked(council)))
 
     def build(council: Council, report: Callable) -> DecisionRun:
         stream = stream_in(council, group)
@@ -1046,6 +1090,8 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
                            repository=repository_map(stream), design=design_map(stream),
                            accepted=stream.project_decisions or ())
 
+    expired_before(store, council_id, group, checking(group),
+                   lambda council: changed_choice(notes, checked(council)))
     return start_run(council_id, store, config, agents, launch, checking(group), ready, None,
                      build)
 
