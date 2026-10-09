@@ -35,6 +35,7 @@ from .models import (
 )
 from .notes import Catalog, Note, NotesError, issues_in, path_of, rendered
 from .questions import same_question
+from .slicing import BadAnswer
 
 # Связки в тексте заметок — на языке работы; перевод, если нужен, — потом, целиком.
 WORDS = {
@@ -43,6 +44,7 @@ WORDS = {
 }
 ALIASES = {"русский": "russian", "ru": "russian", "en": "english", "английский": "english"}
 ISSUE = re.compile(r"ISS-(\d+)")
+NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 
 
 def words_for(language: str) -> dict[str, str]:
@@ -296,6 +298,31 @@ def deletable(vanished: Sequence[VanishedNote], delete: Sequence[str]) -> dict[s
             raise NotesError(f"{note_id} не удалить: на неё ссылаются "
                              f"{', '.join(gone[note_id].linked_from)}")
     return gone
+
+
+def untranslated(notes: Sequence[NotePlan]) -> dict[str, str]:
+    """Что переводить на язык документации: текст, который совет написал заново. Прежний
+    текст (совет написал бы то же) уже переведён в прошлый раз и, может быть, поправлен."""
+    return {note.key: note.text for note in notes
+            if note.text == note.generated and note.action != "edited"}
+
+
+def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
+    """Перевод заметок из ответа: каждая — и с теми же номерами заметок и задач внутри."""
+    items = data.get("notes")
+    if not isinstance(items, list):
+        raise BadAnswer("нет списка notes")
+    found = {item["key"]: item["text"].strip() for item in items
+             if isinstance(item, dict) and item.get("key") in sources
+             and isinstance(item.get("text"), str) and item["text"].strip()}
+    missing = [key for key in sources if key not in found]
+    if missing:
+        raise BadAnswer(f"нет перевода заметок: {', '.join(missing[:5])}")
+    for key, text in found.items():
+        lost = set(NUMBER.findall(sources[key])) - set(NUMBER.findall(text))
+        if lost:
+            raise BadAnswer(f"в переводе {key} потеряны номера {', '.join(sorted(lost))}")
+    return found
 
 
 def write_file(path: Path, text: str) -> None:

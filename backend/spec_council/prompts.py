@@ -25,6 +25,13 @@ def language() -> str:
     return Settings.load().get("COUNCIL_LANGUAGE").strip() or LANGUAGE
 
 
+@cache
+def notes_language() -> str:
+    """Язык заметок проекта: COUNCIL_NOTES_LANGUAGE, по умолчанию — язык работы. Другой — при
+    выгрузке заметки переводит судья."""
+    return Settings.load().get("COUNCIL_NOTES_LANGUAGE").strip() or language()
+
+
 class PromptError(RuntimeError):
     """Шаблон пуст или ждёт подстановку, которой код не даёт."""
 

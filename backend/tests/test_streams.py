@@ -91,6 +91,11 @@ class Agents:
         if workspace is not None:     # что модель видела бы в каталоге в момент хода
             self.seen = sorted(p.relative_to(workspace).as_posix()
                                for p in workspace.rglob("*") if p.is_file())
+        if "-project_decisions_" in key:
+            # Отбирают первое решение каталога — участники сходятся.
+            ids = re.findall(r'"adr_id": "(ADR-\d+)"', section(prompt, "PROJECT ADR CATALOG"))
+            return json.dumps({"decisions": [{"adr_id": adr, "relevance": "applicable",
+                                              "reason": "та же область"} for adr in ids[:1]]})
         if "-design_" in key:
             return json.dumps({"status": "complete", "findings": [{
                 "id": "D1", "statement": SCREEN, "status": "verified",

@@ -32,6 +32,9 @@ class StepName(StrEnum):
     repository_judge = "repository_judge"          # судья проверяет их находки и покрытие
     design_discovery = "design_discovery"  # участники исследуют макет Figma под идею
     design_judge = "design_judge"          # судья проверяет их описание макета и покрытие
+    # участники отбирают прошлые решения проекта, относящиеся к идее; судья сводит отбор
+    project_decisions_discovery = "project_decisions_discovery"
+    project_decisions_judge = "project_decisions_judge"
     question_discovery = "question_discovery"  # участники ищут открытые вопросы к идее
     question_judge = "question_judge"          # судья сводит их в один канонический список
     proposal_discovery = "proposal_discovery"  # участники ищут новые варианты ответа на вопрос
@@ -504,6 +507,25 @@ class ProjectDecision(BaseModel):
     reason: str = ""
 
 
+class DecisionsSearch(BaseModel):
+    """Отбор прошлых решений проекта для потока — в начале шага «Вопросы», когда в каталоге
+    заметок есть решения: участники по отдельности отбирают относящиеся к идее (с учётом их
+    следа в коде), судья сводит отбор, человек отмечает нужные. К какой идее, карте и
+    описанию макета — как у поиска вопросов. Ход по шагам и итог."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    idea: str = ""
+    repository: str = ""
+    design: str = ""
+    # Сколько решений в каталоге и сколько из них со следом в коде.
+    catalog: int = 0
+    traced: int = 0
+    steps: list[Step]
+    decisions: list[ProjectDecision] = []
+    error: str | None = None
+
+
 class OpenQuestion(BaseModel):
     """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
     нет: предложения из текста связаны с ним через proposal_ids."""
@@ -536,6 +558,8 @@ class QuestionDiscovery(BaseModel):
     # шаг иначе — ищут заново.
     repository: str = ""
     design: str = ""
+    # С какими принятыми решениями проекта: номера, которые человек отобрал для потока.
+    decisions: list[str] = []
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -852,6 +876,9 @@ class Stream(BaseModel):
     repository: RepositoryStep | None = None
     design_scan: DesignScan | None = None
     design: DesignStep | None = None
+    # Отбор прошлых решений проекта и что человек из него взял (None — блок не пройден).
+    decisions_search: DecisionsSearch | None = None
+    project_decisions: list[ProjectDecision] | None = None
     questions: QuestionDiscovery | None = None
     # Вопросы, которые человек оставил и добавил: их и решает поток дальше.
     scope: list[OpenQuestion] | None = None
@@ -869,8 +896,8 @@ class Stream(BaseModel):
 
 # Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
 # вариантов, проверка выбора, сборка итогов, нарезка на задачи.
-STREAM_RUNS = ("discovery", "scan", "design_scan", "questions", "proposals", "analysis",
-               "outcomes", "issues", "notes_draft")
+STREAM_RUNS = ("discovery", "scan", "design_scan", "decisions_search", "questions",
+               "proposals", "analysis", "outcomes", "issues", "notes_draft")
 
 
 class Council(BaseModel):
@@ -984,6 +1011,16 @@ class ApproveDesign(GroupsEdit):
     — пропускает шаг. И совет сразу ищет вопросы. idea — идея, которую человек видел."""
 
     scan_run: str | None = None
+    idea: str
+
+
+class SelectDecisions(GroupsEdit):
+    """Человек отмечает, какие прошлые решения проекта учитывать в потоке: keep — номера из
+    отбора search_run (пусто — ни одного), и совет сразу ищет вопросы. idea — идея, которую
+    человек видел."""
+
+    search_run: str | None = None
+    keep: list[str] = []
     idea: str
 
 

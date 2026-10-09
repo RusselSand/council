@@ -14,6 +14,10 @@ x-paths: &paths
   COUNCIL_REPOS: /repos
   # Токен Figma для скана макета (шаг «Дизайн»): только file_content:read, см. README.
   FIGMA_TOKEN: ${FIGMA_TOKEN:-}
+  # Язык работы совета и язык заметок проекта (пусто — русский и он же), см. README.
+  COUNCIL_LANGUAGE: ${COUNCIL_LANGUAGE:-}
+  COUNCIL_NOTES_LANGUAGE: ${COUNCIL_NOTES_LANGUAGE:-}
+  COUNCIL_NOTES: /notes
   HOME: /tmp
   # Пределы хода моделей (agent-workers), если заданы в .env. Без значения здесь: не задан —
   # переменной в контейнере нет, и действует умолчание; пустая строка сняла бы предел.
@@ -59,6 +63,12 @@ services:
         source: ${COUNCIL_REPOS:-./.repos}
         target: /repos
         read_only: true
+        bind: { create_host_path: true }
+      # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
+      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне.
+      - type: bind
+        source: ${COUNCIL_NOTES:-./.notes}
+        target: /notes
         bind: { create_host_path: true }
     environment:
       <<: *paths
@@ -117,6 +127,12 @@ services:
         source: ${COUNCIL_REPOS:-./.repos}
         target: /repos
         read_only: true
+        bind: { create_host_path: true }
+      # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
+      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне.
+      - type: bind
+        source: ${COUNCIL_NOTES:-./.notes}
+        target: /notes
         bind: { create_host_path: true }
     environment: *paths
 

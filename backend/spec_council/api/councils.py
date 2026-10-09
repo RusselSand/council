@@ -15,10 +15,12 @@ from ..models import (
     CouncilPatch,
     CouncilStatus,
     DecisionAnalysis,
+    DecisionsSearch,
     DesignScan,
     IdeaDiscovery,
     IssueDiscovery,
     Label,
+    NotesDraft,
     OutcomeDiscovery,
     ProposalDiscovery,
     QuestionDiscovery,
@@ -50,8 +52,8 @@ council_lock = Lock()
 PROBE_ATTEMPTS = 3
 
 RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
-            | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis | OutcomeDiscovery
-            | IssueDiscovery)
+            | DecisionsSearch | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis
+            | OutcomeDiscovery | IssueDiscovery | NotesDraft)
 
 
 @dataclass(frozen=True)
