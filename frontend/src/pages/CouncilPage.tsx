@@ -174,7 +174,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       <nav className="stage-bar" aria-label={t('council.stages')}>
         {/* Номер этапа — в цвете светофора; словами то же — для скринридера. */}
         {STAGES.map((s, i) => {
-          const light = council === null ? 'idle' : stageLight(council, s)
+          const light = state.kind !== 'ok' ? 'idle' : stageLight(state.data[0], s, state.data[1].notes)
           return (
             <NavLink key={s} to={councilPath(id, s)} className="tab">
               {({ isActive }) => (

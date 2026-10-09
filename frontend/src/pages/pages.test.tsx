@@ -262,7 +262,7 @@ describe('HomePage', () => {
   })
 
   it('показывает «Нет проектов» только после успешного пустого ответа', async () => {
-    fetchMock.mockReturnValue(json([]))
+    fetchMock.mockImplementation((url: string) => (url === '/api/councils' ? json([]) : server()(url)))
     renderAt('/')
     expect(await screen.findByText(ru['home.empty'])).toBeTruthy()
   })
@@ -1380,6 +1380,17 @@ describe('Поток: решения и итоги', () => {
     const issue = await card('Сохранять состояние в файлы')
     expect(within(issue).getByText('ISS-0012')).toBeTruthy()
     expect(within(issue).getByText(ru['issues.commit'].replace('{{id}}', 'ISS-0012'))).toBeTruthy()
+  })
+
+  it('выгрузка в прежний каталог (COUNCIL_NOTES сменили) — не выгрузка: номеров у задач нет', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
+             () => json(atStart()), '/other')
+    const issue = await card('Сохранять состояние в файлы')
+    expect(within(issue).queryByText('ISS-0012')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.elsewhere'].replace('{{root}}', '/notes'))).toBeTruthy()
+    expect(screen.getAllByText(ru['chain.notesElsewhere']).length).toBeGreaterThan(0)
   })
 
   it('нарезка упала — причина видна, её запускают снова', async () => {
