@@ -1406,14 +1406,14 @@ class DecisionsRun(CouncilRun[DecisionsSearch]):
     def __init__(self, council_id: str, stream: Stream, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
                  report: Callable[[DecisionsSearch], None], *, catalog: Catalog,
-                 scan: RepositoryScan | None) -> None:
+                 scan: RepositoryScan | None, own: Sequence[str] = ()) -> None:
         super().__init__(council_id, participants, judge, runner, report, start_decisions(
             participants, judge, stream.idea.text, repository_of(stream), design_of(stream)))
         self.idea = stream.idea.text
         self.fragments = fragments
         self.catalog = catalog
         self.scan = scan
-        self.own = [note.id for note in stream.notes.notes] if stream.notes else []
+        self.own = list(own)
 
     def work(self) -> dict[str, Any]:
         files = evidence_files(self.scan) if self.scan and self.scan.result else []

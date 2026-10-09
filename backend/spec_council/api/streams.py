@@ -31,6 +31,7 @@ from ..deps import (
     StoreDep,
 )
 from ..design import context_prompt as design_context
+from ..export import export_in
 from ..figma import FigmaError, links_of
 from ..ideas import IDEA_MAX
 from ..models import (
@@ -486,7 +487,8 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
                     council.participants, council.judge, stream.idea.text,
                     step_key(stream.repository), step_key(step)), missing)
             else:
-                runs = [decisions_run(council, group, ready, agents, store, catalog)]
+                runs = [decisions_run(council, group, ready, agents, store, catalog,
+                                      own_ids(ready, notes))]
                 search = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DESIGN, "decisions_search": search}
         elif catalog is None:
@@ -517,13 +519,19 @@ def catalog_at(notes: Path | None) -> Catalog | None:
         return None
 
 
-def changed_in(catalog: Catalog | None, stream: Stream,
+def own_ids(stream: Stream, notes: Path | None) -> list[str]:
+    """Заметки, которые выгрузил сам поток в этот каталог: его решения ему не «прошлые».
+    Выгрузка в другой каталог (COUNCIL_NOTES сменили) здесь ничего не значит."""
+    record = export_in(stream.notes, notes)
+    return [note.id for note in record.notes] if record else []
+
+
+def changed_in(catalog: Catalog | None, own: list[str],
                chosen: list[ProjectDecision]) -> list[str]:
     """Отмеченные решения, которые в каталоге уже не те, что видели в отборе: убраны, правлены,
     заменены другим. След в коде не сверяется — его ищет git, а не каталог."""
     if not chosen:
         return []
-    own = [note.id for note in stream.notes.notes] if stream.notes else []
     now = {record.adr_id: record for record in records(catalog, {}, own)} if catalog else {}
 
     def seen(record: ProjectDecision) -> tuple:
@@ -533,23 +541,22 @@ def changed_in(catalog: Catalog | None, stream: Stream,
     return [d.adr_id for d in chosen if d.adr_id not in now or seen(now[d.adr_id]) != seen(d)]
 
 
-def searched_another(catalog: Catalog | None, stream: Stream) -> bool:
+def searched_another(catalog: Catalog | None, own: list[str],
+                     search: DecisionsSearch | None) -> bool:
     """Каталог решений не тот, что видели модели в отборе: решение добавили, поправили,
     заменили или убрали — и пусть даже его никто не отмечал."""
-    search = stream.decisions_search
     if search is None or search.state != "done" or not search.fingerprint:
         return False
-    own = [note.id for note in stream.notes.notes] if stream.notes else []
     return fingerprint(records(catalog, {}, own) if catalog else []) != search.fingerprint
 
 
-def outdated_selection(catalog: Catalog | None, stream: Stream,
+def outdated_selection(notes: Path | None, stream: Stream,
                        chosen: list[ProjectDecision]) -> str | None:
     """Почему отбор решений проекта устарел: отмеченные в каталоге уже не те, каталог не тот,
     что видели модели, или отмечали к отбору, который с тех пор упал. Не устарел — None."""
-    search = stream.decisions_search
-    stale = changed_in(catalog, stream, chosen)
-    if not (stale or searched_another(catalog, stream)
+    catalog, own, search = catalog_at(notes), own_ids(stream, notes), stream.decisions_search
+    stale = changed_in(catalog, own, chosen)
+    if not (stale or searched_another(catalog, own, search)
             or (chosen and (search is None or search.state != "done"))):
         return None
     what = f" ({', '.join(stale)})" if stale else ""
@@ -562,17 +569,20 @@ def stale_choice(notes: Path | None, stream: Stream) -> str | None:
     if stream.decisions_search is None:
         return (None if project_catalog(notes, stream) is None else
                 "В каталоге заметок появились решения проекта: отберите их для потока")
-    return outdated_selection(catalog_at(notes), stream, stream.project_decisions or [])
+    return outdated_selection(notes, stream, stream.project_decisions or [])
 
 
-def failed_search(council: Council, stream: Stream, message: str) -> DecisionsSearch:
-    """Отбор, который устарел или которого не было, — упавший с причиной и под новым номером:
-    вкладка с прежним не пройдёт мимо отказа и «без решений»."""
+def unselected(council: Council, stream: Stream, message: str) -> Stream:
+    """Поток, чей отбор решений проекта устарел или которого не было: отбор упал с причиной и
+    под новым номером — вкладка с прежним не пройдёт мимо отказа и «без решений»; отметка и
+    всё ниже неё сняты — со старыми решениями дальше не идут, их отбирают заново."""
     search = stream.decisions_search or start_decisions(
         council.participants, council.judge, stream.idea.text, step_key(stream.repository),
         step_key(stream.design))
-    return search.model_copy(update={"state": "failed", "error": message,
-                                     "run": uuid4().hex[:8]})
+    failed = search.model_copy(update={"state": "failed", "error": message,
+                                       "run": uuid4().hex[:8]})
+    return stream.model_copy(update={**BELOW_DECISIONS, "project_decisions": None,
+                                     "decisions_search": failed})
 
 
 def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
@@ -581,7 +591,7 @@ def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
     catalog = catalog_at(notes)
     if catalog is None:
         return None
-    own = {note.id for note in stream.notes.notes} if stream.notes else set()
+    own = set(own_ids(stream, notes))
     adrs = [note for note in catalog.notes.values() if note.type == "adr" and note.id not in own]
     return catalog if adrs else None
 
@@ -615,11 +625,13 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
         chosen = selection_for(stream, edit)
         # Каталог — заново при каждой сверке: последняя идёт под тем же замком, что и правка, а
         # выгрузка другого потока ждёт этот замок — между сверкой и вопросами каталог не поменять.
-        message = outdated_selection(catalog_at(notes), stream, chosen)
+        message = outdated_selection(notes, stream, chosen)
         if message is not None:
-            failed = failed_search(council, stream, message)
+            # Ход ниже снятой отметки воскресил бы её работу своим отчётом — сначала дождаться.
+            if below_running(stream, "questions"):
+                raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
             store.update_council(council_id, {"streams": replaced(
-                council, stream.model_copy(update={"decisions_search": failed}))})
+                council, unselected(council, stream, message))})
             raise HTTPException(409, message)
         anew = asks_anew(stream, stream.repository, stream.design, chosen)
         if anew and below_running(stream, "questions"):
@@ -700,7 +712,8 @@ def start_decisions_search(council_id: str, group: str, store: StoreDep, config:
         stream = stream_in(council, group)
         return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                             council.participants, council.judge, agents, report,
-                            catalog=project_catalog(notes, stream), scan=approved_scan(stream))
+                            catalog=project_catalog(notes, stream), scan=approved_scan(stream),
+                            own=own_ids(stream, notes))
 
     return start_run(council_id, store, config, agents, launch, searching(group), ready, None,
                      build)
@@ -715,11 +728,11 @@ def approved_scan(stream: Stream) -> RepositoryScan | None:
 
 
 def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, store: Store,
-                  catalog: Catalog) -> DecisionsRun:
+                  catalog: Catalog, own: list[str]) -> DecisionsRun:
     return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                         council.participants, council.judge, runner,
                         reporter(store, council.id, searching(group)), catalog=catalog,
-                        scan=approved_scan(stream))
+                        scan=approved_scan(stream), own=own)
 
 
 def design_step(stream: Stream, edit: ApproveDesign) -> DesignStep:
@@ -819,9 +832,8 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
             stream = checked(council)
             message = stale_choice(notes, stream)
             if message is not None:
-                store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
-                    update={**BELOW_DECISIONS, "project_decisions": None,
-                            "decisions_search": failed_search(council, stream, message)}))})
+                store.update_council(council_id, {"streams": replaced(
+                    council, unselected(council, stream, message))})
                 raise HTTPException(409, message)
     return start_run(council_id, store, config, agents, launch, asking(group), ready, None,
                      build)

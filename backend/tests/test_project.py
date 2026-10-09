@@ -6,9 +6,17 @@ import pytest
 
 from spec_council.api import streams
 from spec_council.app import app
-from spec_council.deps import get_agents, get_launcher, get_notes_root, get_repositories
+from spec_council.deps import (
+    get_agents,
+    get_launcher,
+    get_notes_root,
+    get_repositories,
+    get_store,
+)
 from spec_council.models import (
     Evidence,
+    ExportedNote,
+    NotesExport,
     ProjectDecision,
     RepositoryFinding,
     RepositoryFlow,
@@ -335,10 +343,52 @@ def test_a_selected_decision_rewritten_in_the_catalog_finds_the_questions_anew(a
     adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
     path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
     assert picks(council_id, ["ADR-0001"]).status_code == 409        # отбор устарел
+    stream = streams_of(council_id)["C"]
+    assert (stream.project_decisions, stream.questions) == (None, None)   # со старым не идут
     assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
                        ).status_code == 202
     assert picks(council_id, ["ADR-0001"]).status_code == 200        # то же решение, другой текст
     assert streams_of(council_id)["C"].questions.run != first
+
+
+def test_a_stale_selection_waits_for_the_run_below_it(agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    assert picks(council_id, ["ADR-0001"]).status_code == 200
+    store = get_store()
+    store.update_council(council_id, {"streams": [
+        s.model_copy(update={"questions": s.questions.model_copy(update={"state": "running"})})
+        if s.group == "C" else s for s in store.get_council(council_id).streams]})
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    assert picks(council_id, ["ADR-0001"]).status_code == 423
+    stream = streams_of(council_id)["C"]
+    assert stream.decisions_search.state == "done" and stream.project_decisions is not None
+
+
+@pytest.mark.parametrize(("where", "searched"), [("old", 2), ("fixed", None)])
+def test_only_an_export_to_this_catalog_makes_its_decisions_the_streams_own(
+        agents, tmp_path, where, searched):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    skip(council_id, "C")
+    # Поток выгружал ADR-0001 и ADR-0002. В этот каталог — они его, прошлых решений нет; в
+    # другой (COUNCIL_NOTES сменили) — здесь под теми номерами чужие решения, и их отбирают.
+    record = NotesExport(run="n1", issues="i1", language="Russian", root=str(tmp_path / where),
+                         notes=[ExportedNote(key=f"a:{n}", id=f"ADR-000{n}", type="adr",
+                                             generated="…", written="…", digest="")
+                                for n in (1, 2)])
+    store = get_store()
+    store.update_council(council_id, {"streams": [
+        s.model_copy(update={"notes": record}) if s.group == "C" else s
+        for s in store.get_council(council_id).streams]})
+    passes(council_id, "C")
+    search = streams_of(council_id)["C"].decisions_search
+    assert (search.catalog if search else None) == searched
 
 
 def test_a_retry_of_the_questions_after_the_catalog_changed_goes_back_to_the_selection(

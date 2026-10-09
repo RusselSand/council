@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, Store, StoreDep
 from ..export import (
     drafted,
+    export_in,
     graph_problems,
     knows_words,
     previous_of,
@@ -93,8 +94,9 @@ def drafted_for(council: Council, group: str, stream: Stream, root: Path, catalo
     каталога) — 422 с причиной."""
     fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
     try:
-        return drafted(stream, fragments, catalog, root, stream.notes, words_for(language()),
-                       notes_language(), reserved_by_others(store, council.id, group, root))
+        return drafted(stream, fragments, catalog, root, export_in(stream.notes, root),
+                       words_for(language()), notes_language(),
+                       reserved_by_others(store, council.id, group, root))
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -156,8 +158,8 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
         elif missing:
             draft = unconnected(draft, missing)
         else:
-            runs = [NotesRun(council.id, draft, stream.notes, catalog, root, council.judge,
-                             agents, reporter(store, council.id, drafting(group)))]
+            runs = [NotesRun(council.id, draft, export_in(stream.notes, root), catalog, root,
+                             council.judge, agents, reporter(store, council.id, drafting(group)))]
             draft = runs[0].state.model_copy(deep=True)
         return store.update_council(council_id, {"streams": replaced(
             council, stream.model_copy(update={"notes_draft": draft}))}), runs
@@ -189,7 +191,8 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
                 or vanished != draft.vanished):          # и текст: удаляют то, что видели
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
-        before = {note.key: note for note in stream.notes.notes} if stream.notes else {}
+        previous = export_in(stream.notes, root)
+        before = {note.key: note for note in previous.notes} if previous else {}
         planned = [settled(note, previous_of(note, before), catalog, root)
                    for note in draft.notes]
         saved: list[Council | None] = []
@@ -203,7 +206,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
 
         try:
             graph_problems(catalog, planned, vanished, edit.edits, edit.delete)
-            written(planned, vanished, edit.edits, edit.delete, root, stream.notes, catalog, keep)
+            written(planned, vanished, edit.edits, edit.delete, root, previous, catalog, keep)
         except NotesError as exc:
             raise HTTPException(422, str(exc)) from None
         council = saved[0]

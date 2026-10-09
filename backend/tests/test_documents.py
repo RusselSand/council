@@ -177,6 +177,23 @@ def test_numbers_of_another_streams_export_are_not_given_again(agents, notes_dir
     assert (draft.notes[0].id, [n.id for n in draft.numbers]) == ("IDEA-0002", ["ISS-0002"])
 
 
+def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes_dir, tmp_path):
+    council_id = cut_c()
+    drafts(council_id)
+    assert writes(council_id).status_code == 200
+    # COUNCIL_NOTES сменили: в новом каталоге под IDEA-0001 — чужая идея.
+    other = tmp_path / "other"
+    foreign = Note("IDEA-0001", "idea", "Чужая идея.")
+    path = path_of(other, foreign)
+    path.parent.mkdir(parents=True)
+    path.write_text(rendered(foreign), encoding="utf-8")
+    app.dependency_overrides[get_notes_root] = lambda: other
+    drafts(council_id)
+    draft = streams_of(council_id)["C"].notes_draft
+    assert (draft.notes[0].id, draft.notes[0].action, draft.vanished) == ("IDEA-0002", "create",
+                                                                          [])
+
+
 def test_a_failed_save_of_the_export_puts_the_notes_back(agents, notes_dir, monkeypatch):
     council_id = cut_c()
     drafts(council_id)
