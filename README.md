@@ -30,14 +30,21 @@
 приглашает в оба (на GitHub: Settings → Collaborators), и тот принимает приглашения.
 
 Git на машине должен ходить в оба репозитория по HTTPS: зависимость agent-workers uv забирает
-через него. Проверка — если входа ещё нет, git его спросит и запомнит:
+через него. Сначала вход в GitHub:
+- Windows — ничего делать заранее не нужно: Git Credential Manager из Git for Windows сам
+  спросит вход при первом обращении (проверка ниже) и запомнит его;
+- macOS и Linux — через [GitHub CLI](https://cli.github.com/), до проверки: без него git
+  спросит логин и пароль, а пароль GitHub по HTTPS не принимает:
+  ```bash
+  gh auth login
+  gh auth setup-git
+  ```
+
+Проверка — обе команды должны вывести список веток, а не ошибку доступа:
 ```bash
 git ls-remote https://github.com/RusselSand/council.git
 git ls-remote https://github.com/RusselSand/agent-workers.git
 ```
-На Windows вход спросит Git Credential Manager из Git for Windows. На macOS и Linux проще
-всего войти через [GitHub CLI](https://cli.github.com/): `gh auth login`, затем
-`gh auth setup-git`.
 
 ### 3. Клонировать и заполнить `.env`
 ```bash
@@ -79,7 +86,10 @@ npm i -g @anthropic-ai/claude-code@2.1.282
 uv run --project backend python -m agent_workers login --provider codex --home .accounts/sol
 uv run --project backend python -m agent_workers login --provider claude --home .accounts/fable
 ```
-Первый `uv run` ставит зависимости — agent-workers через git из шага 2 — и занимает минуту.
+Задан в `.env` свой каталог учётных записей `COUNCIL_ACCOUNTS` — входите в него:
+`--home <COUNCIL_ACCOUNTS>/<имя>`, иначе сервер вход не найдёт; без докера у модели со своим
+`COUNCIL_<ИМЯ>_HOME` — в этот каталог. Первый `uv run` ставит зависимости — agent-workers через
+git из шага 2 — и занимает минуту.
 Каждая команда открывает браузер: войдите в аккаунт с подпиской (для Codex — «Sign in with
 ChatGPT»). Проверка — та же команда со `status` вместо `login`: покажет вход и расход подписки.
 Подробнее — «Вход в модели».
@@ -188,7 +198,8 @@ uv run --project backend python -m agent_workers status --provider claude --home
 перестаёт быть «не подключена». Docker монтирует каталог учётных записей в контейнер целиком,
 второй раз входить не нужно. Каталог в другом месте — `COUNCIL_ACCOUNTS` в `.env`
 (относительный путь считается от каталога `.env`); без докера у одной модели может быть свой —
-`COUNCIL_<ИМЯ>_HOME`, например `COUNCIL_SOL_HOME`.
+`COUNCIL_<ИМЯ>_HOME`, например `COUNCIL_SOL_HOME`. Тогда и вход — в него: `--home` с тем же
+каталогом, иначе сервер вход не найдёт и модель останется «не подключена».
 На Linux впишите в `.env` свои `id -u` и `id -g` как `COUNCIL_UID` и `COUNCIL_GID`:
 контейнеры пишут в `.accounts`, и под вашим пользователем всё созданное останется вашим.
 Без них контейнеры работают под root — так нужно на Windows и macOS, где Docker Desktop
