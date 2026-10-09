@@ -122,6 +122,15 @@ def test_a_stale_draft_or_a_changed_catalog_is_not_written(agents, notes_dir):
     assert path.read_text(encoding="utf-8") == rendered(other)
 
 
+def test_a_draft_in_the_previous_notes_language_is_not_written(agents, notes_dir, monkeypatch):
+    council_id = cut_c()
+    drafts(council_id)                                             # по-русски
+    monkeypatch.setattr(documents, "notes_language", lambda: "English")   # язык сменили
+    res = writes(council_id)
+    assert res.status_code == 409 and "English" in res.json()["detail"]
+    assert not notes_dir.exists()
+
+
 def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents, notes_dir):
     council_id = cut_c()
     past = Note("OUT-0001", "outcome", "Чужой итог", ("ADR-0099",))

@@ -223,6 +223,10 @@ def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
         raise HTTPException(409, "Черновик ещё не готов или не собрался — соберите заново")
     if stream.issues is None or draft.issues != stream.issues.run:
         raise HTTPException(409, "Задачи нарезали заново — соберите черновик заново")
+    # Язык заметок сменили (COUNCIL_NOTES_LANGUAGE) после сборки: тексты черновика — на прежнем.
+    if draft.language != notes_language():
+        raise HTTPException(409, f"Язык заметок теперь {notes_language()}, а черновик — на "
+                                 f"{draft.language}: соберите его заново")
     return draft
 
 
