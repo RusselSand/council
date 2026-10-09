@@ -97,6 +97,7 @@ from ..pipeline import (
     start_questions,
     start_scan,
 )
+from ..project import records
 from ..questions import QUESTION_MAX, same_question
 from ..repository import (
     Inventory,
@@ -275,7 +276,8 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
         seen_idea(stream, edit)
         if running(stream.scan):
             raise HTTPException(409, "Скан уже идёт")
-        if below_running(stream, "questions"):
+        # Скан макета другой скан репозитория не сбрасывает — ниже него и смотрим.
+        if below_running(stream, "decisions_search"):
             raise HTTPException(423, "Совет ещё работает ниже по цепочке — дождитесь его")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
@@ -406,7 +408,7 @@ def scan_design(council_id: str, group: str, edit: ScanDesign, store: StoreDep,
             raise HTTPException(409, NO_REPOSITORY)
         if running(stream.design_scan):
             raise HTTPException(409, "Скан макета уже идёт")
-        if below_running(stream, "questions"):
+        if below_running(stream, "decisions_search"):
             raise HTTPException(423, "Совет ещё работает ниже по цепочке — дождитесь его")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
@@ -501,16 +503,39 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
 
 
-def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
-    """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
-    Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
+def catalog_at(notes: Path | None) -> Catalog | None:
+    """Каталог заметок как есть. Нет его или не прочитать — None."""
     if notes is None or not notes.exists():
         return None
     try:
-        catalog = Catalog.load(notes)
+        return Catalog.load(notes)
     except NotesError as exc:
         log.warning("Каталог заметок %s не прочитан, решения проекта не отбираются: %s", notes,
                     exc)
+        return None
+
+
+def changed_in(catalog: Catalog | None, stream: Stream,
+               chosen: list[ProjectDecision]) -> list[str]:
+    """Отмеченные решения, которые в каталоге уже не те, что видели в отборе: убраны, правлены,
+    заменены другим. След в коде не сверяется — его ищет git, а не каталог."""
+    if not chosen:
+        return []
+    own = [note.id for note in stream.notes.notes] if stream.notes else []
+    now = {record.adr_id: record for record in records(catalog, {}, own)} if catalog else {}
+
+    def seen(record: ProjectDecision) -> tuple:
+        return (record.idea, record.question, record.decision, record.status,
+                record.superseded_by)
+
+    return [d.adr_id for d in chosen if d.adr_id not in now or seen(now[d.adr_id]) != seen(d)]
+
+
+def project_catalog(notes: Path | None, stream: Stream) -> Catalog | None:
+    """Каталог заметок, если в нём есть прошлые решения проекта (кроме решений самого потока).
+    Каталога нет или его не прочитать — блока решений нет: вопросы ищутся сразу."""
+    catalog = catalog_at(notes)
+    if catalog is None:
         return None
     own = {note.id for note in stream.notes.notes} if stream.notes else set()
     adrs = [note for note in catalog.notes.values() if note.type == "adr" and note.id not in own]
@@ -532,10 +557,28 @@ def searches_anew(stream: Stream) -> bool:
                                              "идёт или идею поменяли"},
                         422: {"description": "Отмечено решение не из отбора"}})
 def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: StoreDep,
-                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                     notes: NotesDep) -> Council:
     """Человек отмечает, какие прошлые решения проекта учитывать в потоке, — и совет сразу ищет
     вопросы: эти решения идут в промпты вопросов, вариантов и решений. Ни одного (или отбор не
-    удался) — вопросы без них. Отметить заново иначе — вопросы и всё ниже заново."""
+    удался) — вопросы без них. Отметить заново иначе — вопросы и всё ниже заново. Отмеченное
+    решение в каталоге с тех пор поменяли, заменили или убрали — 409, и отбор записан упавшим:
+    его запускают заново, и модели увидят решения, какие они сейчас."""
+    loaded = catalog_at(notes)
+    with council_lock:
+        council = current(council_id, store, edit)
+        stream = stream_in(council, group)
+        seen_idea(stream, edit)
+        stale = changed_in(loaded, stream, selection_for(stream, edit))
+        if stale:
+            message = (f"Решения проекта в каталоге заметок поменялись, пока смотрели отбор "
+                       f"({', '.join(stale)}): отберите их заново")
+            failed = stream.decisions_search.model_copy(update={"state": "failed",
+                                                                "error": message})
+            store.update_council(council_id, {"streams": replaced(
+                council, stream.model_copy(update={"decisions_search": failed}))})
+            raise HTTPException(409, message)
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -602,7 +645,11 @@ def start_decisions_search(council_id: str, group: str, store: StoreDep, config:
             raise HTTPException(409, NO_IDEA)
         if stream.design is None:
             raise HTTPException(409, "Сначала пройдите шаг «Дизайн»")
-        if stream.project_decisions is not None:
+        # Отмеченные — и отбор не упал: заново не нужно. Упал (в каталоге поменялись
+        # отмеченные) — отобрать заново можно и поверх прежней отметки.
+        search = stream.decisions_search
+        if stream.project_decisions is not None and (search is None
+                                                     or search.state != "failed"):
             raise HTTPException(409, "Решения проекта уже отмечены")
         if project_catalog(notes, stream) is None:
             raise HTTPException(422, "В каталоге заметок нет прошлых решений проекта")
@@ -948,7 +995,7 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         anew = assembles_anew(stream, decisions_for(stream, edit))
-        if anew and (running(stream.outcomes) or running(stream.issues)):
+        if anew and below_running(stream, "outcomes"):
             raise HTTPException(423, "Совет ещё собирает итоги по прежним решениям или нарезает "
                                      "их на задачи — дождитесь его")
         return council, anew

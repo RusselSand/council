@@ -32,6 +32,7 @@ from spec_council.models import (
 )
 from spec_council.pipeline import (
     start_analysis,
+    start_decisions,
     start_design,
     start_idea,
     start_issues,
@@ -1075,6 +1076,12 @@ def test_nothing_changes_while_the_council_scans_or_works_below(agents, repos):
         s.model_copy(update={"scan": None, "questions": start_questions(["sol"], "sol", IDEA_C)})
         if s.group == "C" else s for s in get_store().get_council(council_id).streams]})
     assert scans(council_id, "C").status_code == 423                   # ниже ищут вопросы
+
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"questions": None, "decisions_search": start_decisions(
+            ["sol"], "sol", IDEA_C, "skipped", "skipped")})
+        if s.group == "C" else s for s in get_store().get_council(council_id).streams]})
+    assert scans(council_id, "C").status_code == 423                   # ниже отбирают решения
 
 
 def test_without_models_the_scan_is_recorded_failed_and_can_be_run_again(agents, repos):

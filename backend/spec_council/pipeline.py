@@ -87,7 +87,7 @@ from .design import as_prompt as design_prompt
 from .design import context_prompt as design_context
 from .design import judged_design
 from .design import map_of as design_map_of
-from .export import settled, translations, untranslated
+from .export import previous_of, settled, translations, untranslated
 from .figma import Fetcher, FigmaError, Link
 from .figma import snapshot as figma_snapshot
 from .grouping import StructureOption, judged_structure, structure_options
@@ -1386,7 +1386,7 @@ class NotesRun(CouncilRun[NotesDraft]):
         else:
             self._skip(StepName.notes_translation)
         notes = [settled(note.model_copy(update={"text": found.get(note.key, note.text)}),
-                         self.previous.get(note.key), self.catalog, self.root)
+                         previous_of(note, self.previous), self.catalog, self.root)
                  for note in self.state.notes]
         return {"notes": notes}
 

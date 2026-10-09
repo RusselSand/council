@@ -8,6 +8,7 @@ import pytest
 from spec_council.api import documents
 from spec_council.app import app
 from spec_council.deps import get_agents, get_launcher, get_notes_root
+from spec_council.models import NotesDraft
 from spec_council.notes import Catalog, Note, path_of, rendered
 from tests.test_streams import (
     TASK,
@@ -15,6 +16,7 @@ from tests.test_streams import (
     approves,
     client,
     confirm,
+    decide,
     decided_c,
     get_store,
     grouped,
@@ -134,6 +136,29 @@ def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents,
     res = writes(council_id)
     assert res.status_code == 409 and "поменялся" in res.json()["detail"]
     assert not (notes_dir / "ideas").exists()
+
+
+def test_a_failed_save_of_the_export_puts_the_notes_back(agents, notes_dir, monkeypatch):
+    council_id = cut_c()
+    drafts(council_id)
+
+    def full(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(get_store(), "update_council", full)
+    with pytest.raises(OSError):
+        writes(council_id)
+    assert [path for path in notes_dir.rglob("*") if path.is_file()] == []
+
+
+def test_decisions_wait_for_the_notes_translation(agents, notes_dir):
+    council_id = cut_c()
+    get_store().update_council(council_id, {"streams": [
+        s.model_copy(update={"notes_draft": NotesDraft(state="running", run="n1",
+                                                       issues=s.issues.run)})
+        if s.group == "C" else s for s in get_store().get_council(council_id).streams]})
+    res = decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)])
+    assert res.status_code == 423
 
 
 def test_a_draft_that_cannot_be_built_says_why(agents, notes_dir):

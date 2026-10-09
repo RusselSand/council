@@ -9,6 +9,7 @@ from spec_council.export import (
     graph_problems,
     numbered_issues,
     translations,
+    untranslated,
     words_for,
     written,
 )
@@ -89,14 +90,15 @@ def root(tmp_path):
     return tmp_path
 
 
-def draft(root, stream=STREAM, previous=None):
-    return drafted(stream, FRAGMENTS, Catalog.load(root), root, previous, WORDS)
+def draft(root, stream=STREAM, previous=None, language="Russian"):
+    return drafted(stream, FRAGMENTS, Catalog.load(root), root, previous, WORDS, language)
 
 
 def export(root, stream=STREAM, previous=None, edits=None, delete=()):
     notes, vanished, numbers, skipped = draft(root, stream, previous)
-    graph_problems(Catalog.load(root), notes, vanished, edits or {}, delete)
-    done = written(notes, vanished, edits or {}, delete, root, previous)
+    catalog = Catalog.load(root)
+    graph_problems(catalog, notes, vanished, edits or {}, delete)
+    done = written(notes, vanished, edits or {}, delete, root, previous, catalog)
     return NotesExport(run="r", issues=stream.issues.run, language="Russian", notes=done,
                        numbers=numbers), notes, vanished, skipped
 
@@ -279,6 +281,47 @@ def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
     assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0009", "I2"), ("ISS-0008", "I1")]
 
 
+def test_a_second_outcome_with_the_same_title_keeps_the_first_ones_numbers(root):
+    first, _, _, _ = export(root)                       # итог «Деплой по merge» один
+    notes, vanished, numbers, _ = draft(root, twins(), previous=first)
+    assert vanished == []
+    assert {n.text.split("\n")[2]: n.id for n in notes if n.type == "outcome"} == {
+        "После merge CI сам выкладывает.": "OUT-0002", "И откат по merge.": "OUT-0003"}
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
+    second, _, _, _ = export(root, twins(), previous=first)
+    notes, vanished, numbers, _ = draft(root, previous=second)   # двойник ушёл
+    assert [n.id for n in notes if n.type == "outcome"] == ["OUT-0002"]
+    assert [v.id for v in vanished] == ["OUT-0003"]
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1")]
+
+
+def test_an_outcome_reworded_under_the_same_title_keeps_its_number(root):
+    first, _, _, _ = export(root)
+    reworded = OUTCOMES.model_copy(update={"outcomes": [OUTCOMES.outcomes[0].model_copy(
+        update={"behavior": "CI выкладывает сборку после merge."}), *OUTCOMES.outcomes[1:]]})
+    notes, vanished, _, _ = draft(root, STREAM.model_copy(update={"outcomes": reworded}),
+                                  previous=first)
+    assert vanished == []
+    assert by_id(notes)["OUT-0002"].action == "update"
+
+
+def test_another_notes_language_translates_the_notes_again(root):
+    first, _, _, _ = export(root, edits={"idea": "Деплой без ручной работы."})
+    notes, _, _, _ = draft(root, previous=first, language="English")
+    idea = by_id(notes)["IDEA-0002"]
+    assert idea.text == idea.generated                  # прежний текст — на прежнем языке
+    assert "idea" in untranslated(notes)
+
+
+def test_a_renamed_note_file_is_deleted_where_it_lies(root):
+    first, _, _, _ = export(root)
+    renamed = root / "adrs" / "old-decision.md"
+    (root / "adrs" / "ADR-0002.md").rename(renamed)
+    export(root, chose_p1(), previous=first, delete=["ADR-0002"])
+    assert not renamed.exists()
+    assert "ADR-0002" not in Catalog.load(root).notes
+
+
 def test_a_reserved_issue_number_taken_by_another_stream_is_not_reused(root):
     held = ISSUES.model_copy(update={"issues": [*ISSUES.issues, Issue(
         id="I2", title="Где хранить секреты", user_story="…", outcome_ids=["O2"])]})
@@ -311,7 +354,7 @@ def test_an_empty_text_anywhere_leaves_the_catalog_as_it_was(root):
     notes, _, _, _ = draft(root)
     last = notes[-1]
     with pytest.raises(NotesError, match=f"У заметки {last.id} пустой текст"):
-        written(notes, [], {last.key: " "}, [], root, None)
+        written(notes, [], {last.key: " "}, [], root, None, Catalog.load(root))
     assert sorted(note.id for note in Catalog.load(root).notes.values()) == sorted(
         note.id for note in PAST)                                      # ничего не записано
 

@@ -2,7 +2,8 @@ import { useEffect, useState, type Dispatch, type FormEvent, type ReactNode, typ
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, outcomeReady, REPOSITORIES_MAX, startOrFollow,
+  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, outcomeReady, REPOSITORIES_MAX, runningFrom,
+  startOrFollow,
   streamOf, structureIsStale, type Council, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
   type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
@@ -437,8 +438,7 @@ function GroupStep({ council, structure, stream, group, models, onChange, onAppr
   const text = group.missing_idea ? squash(draft) : null
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   // Пока ИИ работает ниже по цепочке, идею не поменять: сервер ответит 423.
-  const asking = [stream.scan, stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
-    .some(run => run?.state === 'running')
+  const asking = runningFrom(stream, 'scan')
   const canApprove = !busy && !sought && !asking && text !== '' && !structureIsStale(council)
 
   const submit = () => void approve.go(async () => {
@@ -616,8 +616,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
   const sought = scan?.state === 'running'
   const stale = structureIsStale(council)
   // Пока ИИ работает ниже по цепочке, шаг не поменять: сервер ответит 423.
-  const below = [stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
-    .some(run => run?.state === 'running')
+  const below = runningFrom(stream, 'decisions_search')
   const idea = stream.idea
   if (!idea) return null
   const at = { run: structure.run, revision: structure.revision }
@@ -883,8 +882,7 @@ function DesignStep({ council, structure, stream, group, figma, onChange, approv
   const sought = scan?.state === 'running'
   const stale = structureIsStale(council)
   // Пока ИИ работает ниже по цепочке, шаг не поменять: сервер ответит 423.
-  const below = [stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
-    .some(run => run?.state === 'running')
+  const below = runningFrom(stream, 'decisions_search')
   const idea = stream.idea
   if (!idea) return null
   const at = { run: structure.run, revision: structure.revision }
@@ -1137,8 +1135,7 @@ function ProjectDecisions({ council, structure, stream, group, onChange }: Reado
   const at = { run: structure.run, revision: structure.revision }
   const sought = search.state === 'running'
   // Пока ИИ работает с вопросами или ниже, отбор не поменять: сервер ответит 423.
-  const below = [stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
-    .some(run => run?.state === 'running')
+  const below = runningFrom(stream, 'questions')
   const locked = act.busy || sought || below || structureIsStale(council)
   const unexported = (council.streams ?? [])
     .filter(other => other.group !== stream.group && other.decisions && !exported(other)).map(other => other.group)
@@ -1412,7 +1409,7 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, p
   const chosen = kept.length + added.length
   const locked = busy || sought
   // Пока ИИ работает с утверждённым отбором (ищет варианты, проверяет выбор), отбор не поменять: 423.
-  const offering = [stream.proposals, stream.analysis, stream.outcomes, stream.issues].some(run => run?.state === 'running')
+  const offering = runningFrom(stream, 'proposals')
   const canApprove = !locked && !offering && search !== null && chosen > 0 && !structureIsStale(council)
   const idea = stream.idea
   if (!idea) return null
@@ -1602,7 +1599,7 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const found = new Map(search?.options.map(o => [o.question_id, o]) ?? [])
   const chosen = scope.filter(q => picked.has(q.id)).length
   // Пока ИИ работает с утверждённым выбором (проверяет, собирает итоги), выбор не поменять: 423.
-  const checking = [stream.analysis, stream.outcomes, stream.issues].some(run => run?.state === 'running')
+  const checking = runningFrom(stream, 'analysis')
   const canApprove = !busy && !sought && !checking && !stale && search !== null && chosen === scope.length
   const idea = stream.idea
   if (!idea || !stream.scope) return null
@@ -1775,7 +1772,7 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
   const decided = scope.filter(q => picked.get(q.id))
   const complete = decided.every(q => squash(rationaleOf(q.id, picked.get(q.id) ?? '')) !== '')
   // Пока ИИ собирает итоги по решениям или нарезает их на задачи, их не поменять: сервер ответит 423.
-  const assembling = [stream.outcomes, stream.issues].some(run => run?.state === 'running')
+  const assembling = runningFrom(stream, 'outcomes')
   const canApprove = !busy && !sought && !assembling && !stale && analysis !== null && complete
   useEffect(() => {
     if (focus) document.getElementById(`decision-${focus}-title`)?.scrollIntoView?.({ block: 'center' })

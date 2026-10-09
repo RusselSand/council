@@ -17,8 +17,7 @@
 
 import hashlib
 import re
-from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +45,9 @@ WORDS = {
 }
 ALIASES = {"русский": "russian", "ru": "russian", "en": "english", "английский": "english"}
 ISSUE = re.compile(r"ISS-(\d+)")
+# Между названием итога (задачи) и его сутью в ключе. same_question такого знака не оставит:
+# для split он пробел.
+SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 
 
@@ -65,12 +67,35 @@ def word_language(language: str) -> str:
 
 
 def keyed(bases: Sequence[str], details: Sequence[str], taken: set[str]) -> list[str]:
-    """Ключи частей одного рода. У совпавших формулировок (два итога с одним названием) в ключе
-    и подробность — поведение итога, история задачи: ключ держится за суть, а не за место в
-    списке, и модель, отдавшая их в другом порядке, не поменяет им номера местами."""
-    counts = Counter(bases)
-    return [unique(base if counts[base] == 1 else f"{base}|{detail}", taken)
+    """Ключи итогов и задач: название и суть — поведение итога, история задачи. Ключ держится за
+    суть, а не за место в списке и не за то, есть ли у итога тёзка: модель, отдавшая их в другом
+    порядке, или второй итог с тем же названием не поменяют номера. Поправили только суть —
+    прежнюю заметку найдёт matched."""
+    return [unique(f"{base}{SEP}{detail}", taken)
             for base, detail in zip(bases, details, strict=True)]
+
+
+def title_of(key: str) -> str:
+    return key.split(SEP, 1)[0]
+
+
+def matched(keys: Sequence[str], previous: Iterable[str]) -> dict[str, str]:
+    """Какую часть прошлой выгрузки продолжает каждая нынешняя: с тем же ключом — её. Нет такой
+    у итога или задачи — ту, что с тем же названием, если такое название и среди нынешних без
+    пары, и среди прежних без пары одно: поменялась только суть, а итог тот же."""
+    before = list(previous)
+    known = set(before)
+    found = {key: key for key in keys if key in known}
+    rest = [key for key in before if key not in found]
+    loose = [key for key in keys if key not in found]
+    for key in loose:
+        if SEP not in key:
+            continue
+        now = [other for other in loose if title_of(other) == title_of(key)]
+        then = [other for other in rest if title_of(other) == title_of(key)]
+        if len(now) == 1 and len(then) == 1:
+            found[key] = then[0]
+    return found
 
 
 def unique(key: str, taken: set[str]) -> str:
@@ -237,9 +262,11 @@ def numbered_issues(stream: Stream, catalog: Catalog,
     issues = stream.issues.issues if stream.issues else []
     keys = keyed([f"i:{same_question(issue.title)}" for issue in issues],
                  [same_question(issue.user_story) for issue in issues], set())
+    alias = matched(keys, known)
     for issue, key in zip(issues, keys, strict=True):
-        if key in known and known[key] not in foreign:
-            identifier = known[key]
+        was = alias.get(key)
+        if was is not None and known[was] not in foreign:
+            identifier = known[was]
         else:
             top += 1
             identifier = f"ISS-{top:04d}"
@@ -256,41 +283,52 @@ def digest_of(path: Path) -> str:
 
 
 def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-            root: Path, previous: NotesExport | None,
-            words: Mapping[str, str]) -> tuple[list[NotePlan], list[VanishedNote],
-                                               list[IssueNumber], list[str]]:
+            root: Path, previous: NotesExport | None, words: Mapping[str, str],
+            language: str) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber],
+                                    list[str]]:
     """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие;
-    номера задач; что не выгружается."""
+    номера задач; что не выгружается. language — язык заметок: не тот, что у прошлой выгрузки, —
+    прежние тексты не берутся, их напишет перевод заново (файлы, правленные руками, — нет)."""
     numbers = numbered_issues(stream, catalog, previous)
     parts, skipped = parts_of(stream, fragments, numbers, catalog, words)
     before = {note.key: note for note in previous.notes} if previous else {}
+    alias = matched([part.key for part in parts], before)
+    olds = {key: before[was] for key, was in alias.items()}
+    reuse = previous is not None and previous.language == language
     ids: dict[str, str] = {}
     for part in parts:
-        old = before.get(part.key)
+        old = olds.get(part.key)
         held = catalog.notes.get(old.id) if old else None
         if old and old.type == part.type and (held is None or held.type == part.type):
             ids[part.key] = old.id
     for part in parts:
         if part.key not in ids:
             ids[part.key] = catalog.next_id(part.type, taken=ids.values())
-    notes = [planned(part, ids, before.get(part.key), catalog, root) for part in parts]
+    notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), catalog, root, reuse)
+             for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
+    claimed = set(alias.values())
     vanished = [VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
                              linked_from=sorted(note.id for note in catalog.notes.values()
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
-                if key not in ids and old.id in catalog.notes]
+                if key not in claimed and old.id in catalog.notes]
     return notes, vanished, numbers, skipped
 
 
-def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, catalog: Catalog,
-            root: Path) -> NotePlan:
+def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: str | None,
+            catalog: Catalog, root: Path, reuse: bool) -> NotePlan:
     note_id = ids[part.key]
     links = [ids.get(link, link) for link in part.links]
-    text = old.written if old and old.generated == part.text else part.text
+    text = old.written if old and reuse and old.generated == part.text else part.text
     plan = NotePlan(key=part.key, id=note_id, type=part.type, text=text, generated=part.text,
-                    links=links, action="create")
+                    links=links, action="create", was=was)
     return settled(plan, old, catalog, root)
+
+
+def previous_of(plan: NotePlan, before: Mapping[str, ExportedNote]) -> ExportedNote | None:
+    """Прежняя выгрузка заметки, которую продолжает plan."""
+    return before.get(plan.was) if plan.was else None
 
 
 def settled(plan: NotePlan, old: ExportedNote | None, catalog: Catalog,
@@ -309,13 +347,19 @@ def settled(plan: NotePlan, old: ExportedNote | None, catalog: Catalog,
 
 def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
             edits: Mapping[str, str], delete: Sequence[str], root: Path,
-            previous: NotesExport | None) -> list[ExportedNote]:
+            previous: NotesExport | None, catalog: Catalog,
+            keep: Callable[[list[ExportedNote]], None] | None = None) -> list[ExportedNote]:
     """Записывает подтверждённое: заметки с правками человека (edits — по ключу), удаляет
     отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено, —
     и исчезнувшие, что человек оставил в каталоге: они всё ещё потока.
 
     Сначала пустой текст и временные файлы, потом подмена и удаление одним шагом с откатом
-    (committed): отказ на любом шаге не оставит каталог выгруженным наполовину."""
+    (committed), потом keep — запись о выгрузке. Отказ на любом шаге, и в keep тоже, вернёт
+    каталог как был: файлы и запись о них не разойдутся. Заметка из каталога — там, где лежит."""
+
+    def where(note_id: str, kind: str) -> Path:
+        return path_of(root, catalog.notes.get(note_id) or Note(note_id, kind, ""))
+
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
     texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
@@ -328,26 +372,34 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     staged: list[tuple[Path, Path]] = []
     try:
         for plan in changed:
-            path = path_of(root, Note(plan.id, plan.type, ""))
+            path = where(plan.id, plan.type)
             note = Note(plan.id, plan.type, texts[plan.key], tuple(plan.links))
             staged.append((staged_file(path, rendered(note)), path))
     except NotesError:
         for part, _ in staged:
             part.unlink(missing_ok=True)
         raise
-    committed(staged, [path_of(root, Note(note_id, gone[note_id].type, "")) for note_id in delete])
-    exported: list[ExportedNote] = []
-    for plan in notes:
-        if plan.action == "edited":
-            exported.append(before[plan.key].model_copy(update={"generated": plan.generated}))
-            continue
-        path = path_of(root, Note(plan.id, plan.type, ""))
-        exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
-                                     generated=plan.generated, written=texts[plan.key],
-                                     links=plan.links, digest=digest_of(path)))
-    kept = [old.model_copy(update={"kept": True}) for old in before.values()
-            if old.id in gone and old.id not in delete]
-    return exported + kept
+    commit = committed(staged, [where(note_id, gone[note_id].type) for note_id in delete])
+    try:
+        exported: list[ExportedNote] = []
+        for plan in notes:
+            if plan.action == "edited":
+                exported.append(before[plan.was or plan.key].model_copy(
+                    update={"key": plan.key, "generated": plan.generated}))
+                continue
+            exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
+                                         generated=plan.generated, written=texts[plan.key],
+                                         links=plan.links,
+                                         digest=digest_of(where(plan.id, plan.type))))
+        exported += [old.model_copy(update={"kept": True}) for old in before.values()
+                     if old.id in gone and old.id not in delete]
+        if keep is not None:
+            keep(exported)
+    except BaseException:
+        commit.undo()
+        raise
+    commit.finish()
+    return exported
 
 
 def deletable(vanished: Sequence[VanishedNote], delete: Sequence[str]) -> dict[str, VanishedNote]:
@@ -425,11 +477,29 @@ def staged_file(path: Path, text: str) -> Path:
     return part
 
 
-def committed(staged: Sequence[tuple[Path, Path]], deleted: Sequence[Path]) -> None:
+@dataclass
+class Commit:
+    """Подмена, которая уже сделана, но ещё не окончательна: finish убирает .bak, undo
+    возвращает всё как было."""
+
+    staged: Sequence[tuple[Path, Path]]
+    placed: list[Path]
+    backups: list[tuple[Path, Path]]
+
+    def finish(self) -> None:
+        for _, backup in self.backups:
+            with suppress(OSError):
+                backup.unlink()
+
+    def undo(self) -> None:
+        rolled_back(self.staged, self.placed, self.backups)
+
+
+def committed(staged: Sequence[tuple[Path, Path]], deleted: Sequence[Path]) -> Commit:
     """Подмена заметок временными файлами и удаление — одним шагом, который откатывается:
-    прежние файлы сначала уходят в .bak, временные встают на их место, и только потом .bak
-    убираются. Не вышло на любом шаге — всё назад, каталог как был. Каталог читает только .md:
-    .part и .bak, если их не убрать, в заметки не попадут."""
+    прежние файлы сначала уходят в .bak, временные встают на их место; .bak убирает
+    Commit.finish. Не вышло на любом шаге — всё назад, каталог как был. Каталог читает только
+    .md: .part и .bak, если их не убрать, в заметки не попадут."""
     backups: list[tuple[Path, Path]] = []
     placed: list[Path] = []
     try:
@@ -445,9 +515,7 @@ def committed(staged: Sequence[tuple[Path, Path]], deleted: Sequence[Path]) -> N
     except NotesError:
         rolled_back(staged, placed, backups)
         raise
-    for _, backup in backups:
-        with suppress(OSError):
-            backup.unlink()
+    return Commit(staged, placed, backups)
 
 
 def moved(source: Path, target: Path, note: Path, verb: str) -> None:

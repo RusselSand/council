@@ -113,7 +113,9 @@ def rendered(note: Note) -> str:
 
 
 def path_of(root: Path, note: Note) -> Path:
-    return root / FOLDERS[note.type] / f"{note.id}.md"
+    """Где заметка: прочитанная из каталога — там, откуда прочли (файл могли переименовать),
+    новая — в папке своего типа, под своим номером."""
+    return note.path if note.path is not None else root / FOLDERS[note.type] / f"{note.id}.md"
 
 
 # --- каталог

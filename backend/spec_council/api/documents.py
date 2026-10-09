@@ -17,6 +17,7 @@ from ..export import (
     drafted,
     graph_problems,
     knows_words,
+    previous_of,
     settled,
     untranslated,
     words_for,
@@ -24,6 +25,7 @@ from ..export import (
 )
 from ..models import (
     Council,
+    ExportedNote,
     GroupsEdit,
     IssueNumber,
     NotePlan,
@@ -91,7 +93,8 @@ def drafted_for(council: Council, group: str, stream: Stream, root: Path,
     каталога) — 422 с причиной."""
     fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
     try:
-        return drafted(stream, fragments, catalog, root, stream.notes, words_for(language()))
+        return drafted(stream, fragments, catalog, root, stream.notes, words_for(language()),
+                       notes_language())
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -176,16 +179,23 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         before = {note.key: note for note in stream.notes.notes} if stream.notes else {}
-        planned = [settled(note, before.get(note.key), catalog, root) for note in draft.notes]
+        planned = [settled(note, previous_of(note, before), catalog, root)
+                   for note in draft.notes]
+        saved: list[Council | None] = []
+
+        def keep(exported: list[ExportedNote]) -> None:
+            # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.
+            record = NotesExport(run=draft.run, issues=draft.issues, language=draft.language,
+                                 notes=exported, numbers=draft.numbers)
+            saved.append(store.update_council(council_id, {"streams": replaced(
+                council, stream.model_copy(update={"notes": record}))}))
+
         try:
             graph_problems(catalog, planned, vanished, edit.edits, edit.delete)
-            exported = written(planned, vanished, edit.edits, edit.delete, root, stream.notes)
+            written(planned, vanished, edit.edits, edit.delete, root, stream.notes, catalog, keep)
         except NotesError as exc:
             raise HTTPException(422, str(exc)) from None
-        record = NotesExport(run=draft.run, issues=draft.issues, language=draft.language,
-                             notes=exported, numbers=draft.numbers)
-        council = store.update_council(council_id, {"streams": replaced(
-            council, stream.model_copy(update={"notes": record}))})
+        council = saved[0]
     if council is None:
         raise HTTPException(404, MISSING)
     return council

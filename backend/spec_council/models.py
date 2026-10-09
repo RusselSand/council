@@ -760,6 +760,9 @@ class NotePlan(BaseModel):
     action: Literal["create", "update", "same", "edited"]
     # Что в файле сейчас — у update и edited.
     current: str | None = None
+    # Ключ части прошлой выгрузки, которую заметка продолжает: обычно тот же key, но у итога
+    # с поправленным поведением ключ другой, а заметка — та же.
+    was: str | None = None
 
 
 class VanishedNote(BaseModel):

@@ -235,6 +235,25 @@ def test_a_catalog_that_appears_later_leaves_the_found_questions_alone(agents, t
     assert stream.decisions_search is None and stream.questions.run == first
 
 
+def test_a_decision_changed_in_the_catalog_meanwhile_sends_the_selection_back(agents, tmp_path):
+    root = put(tmp_path / "fixed")
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    # Пока смотрели отбор, ADR-0001 переписали в каталоге.
+    adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
+    path_of(root, adr).write_text(rendered(adr), encoding="utf-8")
+    res = picks(council_id, ["ADR-0001"])
+    assert res.status_code == 409 and "ADR-0001" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert stream.decisions_search.state == "failed" and "ADR-0001" in stream.decisions_search.error
+    assert stream.questions is None and stream.project_decisions is None
+    assert client.post(f"/api/councils/{council_id}/streams/C/project-decisions/search"
+                       ).status_code == 202                            # отбор заново
+    search = streams_of(council_id)["C"].decisions_search
+    assert search.state == "done"
+    assert search.decisions[0].decision == "Ищем в чате, потому что там всё."
+
+
 def test_a_decision_not_from_the_selection_is_refused(agents):
     council_id = at_questions()
     res = picks(council_id, ["ADR-0002"])

@@ -547,12 +547,18 @@ export const groupsConfirmed = (council: Council): boolean =>
   council.streams !== null && council.structure?.state === 'done'
 
 /**
- * Ходы потока: поиск идеи, сканы репозитория и макета, отбор решений проекта, поиск вопросов и вариантов,
- * проверка выбора, сборка итогов, нарезка задач и перевод заметок. Какой идёт — страница опрашивает сервер.
+ * Ходы потока по цепочке, как STREAM_RUNS на сервере: поиск идеи, сканы репозитория и макета, отбор решений
+ * проекта, поиск вопросов и вариантов, проверка выбора, сборка итогов, нарезка задач и перевод заметок.
  */
-export const searchesOf = (stream: Stream) =>
-  [stream.discovery, stream.scan, stream.design_scan, stream.decisions_search, stream.questions, stream.proposals,
-   stream.analysis, stream.outcomes, stream.issues, stream.notes_draft]
+const STREAM_RUNS = ['discovery', 'scan', 'design_scan', 'decisions_search', 'questions', 'proposals', 'analysis',
+  'outcomes', 'issues', 'notes_draft'] as const
+
+/** Ходы потока: какой идёт — страница опрашивает сервер. */
+export const searchesOf = (stream: Stream) => STREAM_RUNS.map(field => stream[field])
+
+/** Совет работает над звеном from или ниже: менять его сервер не даст (423), кнопки — тоже. */
+export const runningFrom = (stream: Stream, from: (typeof STREAM_RUNS)[number]): boolean =>
+  STREAM_RUNS.slice(STREAM_RUNS.indexOf(from)).some(field => stream[field]?.state === 'running')
 
 /** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
 export const seeking = (council: Council): boolean =>
