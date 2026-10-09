@@ -77,6 +77,21 @@ def test_the_next_number_skips_a_file_name_already_taken(tmp_path):
     assert Catalog.load(tmp_path).next_id("adr") == "ADR-0003"
 
 
+def test_an_issue_list_followed_by_a_paragraph_is_still_the_issue_list():
+    body = ("Поиск\n\nЗадачи:\n- ISS-0010: Поправить поиск\n\n"
+            "Заметки реализации: ISS-0042 — не наша, её не трогали.")
+    assert declared_issues(body) == ["ISS-0010"]
+
+
+def test_a_file_name_in_lower_case_still_takes_its_number(tmp_path):
+    # ADR-0001 лежит в adr-0002.md: на Windows и macOS это тот же файл, что ADR-0002.md.
+    (tmp_path / "adrs").mkdir()
+    (tmp_path / "adrs" / "adr-0002.md").write_text(rendered(ADR), encoding="utf-8")
+    catalog = Catalog.load(tmp_path)
+    assert catalog.next_id("adr") == "ADR-0003"
+    assert catalog.occupant("ADR-0002").id == ADR.id
+
+
 def test_an_issue_number_is_read_in_one_spelling():
     assert issues_in("Сделано ISS-7, а ISS-0007 — то же") == ["ISS-0007"]
     assert declared_issues("Поиск\n\nЗадачи:\n- ISS-12: Поиск") == ["ISS-0012"]

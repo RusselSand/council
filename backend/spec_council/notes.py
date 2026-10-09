@@ -211,18 +211,20 @@ class Catalog:
                        if note.id == idea_id or self.roots(note.id) == {idea_id}), key=order)
 
     def occupant(self, note_id: str) -> Note | None:
-        """Другая заметка в файле с именем note_id (ADR-0001.md) — его переименовали: новая
-        заметка с этим номером легла бы туда и затёрла её."""
+        """Другая заметка в файле с именем note_id (ADR-0001.md, adr-0001.md — на Windows и
+        macOS это один файл) — его переименовали: новая заметка с этим номером легла бы туда и
+        затёрла её."""
         return next((note for note in self.notes.values() if note.path is not None
-                     and note.path.stem == note_id and note.id != note_id), None)
+                     and note.path.stem.casefold() == note_id.casefold()
+                     and note.id != note_id), None)
 
     def next_id(self, kind: str, taken: Iterable[str] = ()) -> str:
         """Следующий свободный номер типа — после самого большого в каталоге и в taken. Имя
-        файла тоже занимает номер: в ADR-0002.md могла лечь другая заметка, и новая ADR-0002
-        её бы затёрла."""
+        файла тоже занимает номер, в любом регистре: в ADR-0002.md (или adr-0002.md) могла лечь
+        другая заметка, и новая ADR-0002 её бы затёрла."""
         prefix = PREFIXES[kind]
         pattern = re.compile(rf"{prefix}-(\d+)")
-        names = [note.path.stem for note in self.notes.values() if note.path is not None]
+        names = [note.path.stem.upper() for note in self.notes.values() if note.path is not None]
         numbers = [int(found.group(1)) for note_id in (*self.notes, *taken, *names)
                    if (found := pattern.fullmatch(note_id))]
         return f"{prefix}-{max(numbers, default=0) + 1:04d}"
@@ -282,17 +284,28 @@ def issue_key(issue: str) -> str:
 
 
 def declared_issues(text: str) -> list[str]:
-    """Задачи итога — его список задач: последний блок, строка-подпись («Задачи:», «Issues:» —
-    на любом языке, только не подпись критериев) и под ней только строки «- ISS-…: название».
-    Номер в другом месте, и в критериях готовности тоже, — упоминание, а не задача итога."""
+    """Задачи итога — его список задач: блок со строкой-подписью («Задачи:», «Issues:» — на
+    любом языке, только не подпись критериев) и под ней только строками «- ISS-…: название»;
+    таких несколько — последний (ниже могли дописать абзац руками). Номер в другом месте, и в
+    критериях готовности тоже, — упоминание, а не задача итога: критерий совет так не пишет
+    (export.criterion)."""
     blocks = [block for block in re.split(r"\n\s*\n", text.strip()) if block.strip()]
-    lines = [line.strip() for line in blocks[-1].splitlines()] if blocks else []
+    for block in reversed(blocks):
+        found = issue_list(block)
+        if found is not None:
+            return found
+    return []
+
+
+def issue_list(block: str) -> list[str] | None:
+    """Номера задач блока, если он — список задач. Нет — None."""
+    lines = [line.strip() for line in block.splitlines()]
     if (len(lines) < 2 or not lines[0].endswith(":")
             or lines[0][:-1].strip().casefold() in CRITERIA):
-        return []
+        return None
     found = [ISSUE_LINE.match(line) for line in lines[1:]]
     if not all(found):
-        return []
+        return None
     return list(dict.fromkeys(issue_key(match.group(1)) for match in found if match))
 
 
