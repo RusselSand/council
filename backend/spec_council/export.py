@@ -157,10 +157,15 @@ def question_parts(question: OpenQuestion, options: list[dict[str, str]],
                    decision: Decision | None, catalog: Catalog, words: Mapping[str, str],
                    taken: set[str]) -> tuple[Part, list[Part], Part | None]:
     """Вопрос, его варианты и решение, если оно принято. Вопрос, который пересматривает
-    прошлое решение, растёт из того ADR, а не из идеи."""
+    прошлое решение, растёт из того ADR, а не из идеи; ADR из каталога пропал — выгружать
+    нельзя: вопрос и его решение молча легли бы в цепочку новой идеи."""
     key = unique(question_key(question), taken)
     revisited = catalog.notes.get(question.revisits or "")
-    links = (revisited.id,) if revisited is not None and revisited.type == "adr" else ("idea",)
+    if question.revisits and (revisited is None or revisited.type != "adr"):
+        raise NotesError(f"{question.id} пересматривает {question.revisits}, а такого решения в "
+                         "каталоге заметок уже нет: верните заметку или отберите решения проекта "
+                         "заново")
+    links = (revisited.id,) if revisited is not None else ("idea",)
     asked = Part(key, "open_question", question.note or question.text, links)
     offered: list[Part] = []
     adr = None
@@ -291,6 +296,11 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено."""
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
+    texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
+             if plan.action != "edited"}
+    empty = [plan.id for plan in notes if texts.get(plan.key) == ""]
+    if empty:                            # до первой записи: каталог не останется наполовину
+        raise NotesError(f"У заметки {empty[0]} пустой текст")
     exported: list[ExportedNote] = []
     for plan in notes:
         path = path_of(root, Note(plan.id, plan.type, ""))
@@ -298,9 +308,7 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
             old = before[plan.key]
             exported.append(old.model_copy(update={"generated": plan.generated}))
             continue
-        text = edits.get(plan.key, plan.text).strip()
-        if not text:
-            raise NotesError(f"У заметки {plan.id} пустой текст")
+        text = texts[plan.key]
         note = Note(plan.id, plan.type, text, tuple(plan.links))
         if plan.action != "same" or text != plan.text.strip():
             write_file(path, rendered(note))
@@ -353,7 +361,8 @@ def untranslated(notes: Sequence[NotePlan]) -> dict[str, str]:
 
 
 def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
-    """Перевод заметок из ответа: каждая — и с теми же номерами заметок и задач внутри."""
+    """Перевод заметок из ответа: каждая — и ровно с теми же номерами заметок и задач внутри.
+    Лишний номер тоже негоден: ISS-… в итоге — задача, по нему считают след и новые номера."""
     items = data.get("notes")
     if not isinstance(items, list):
         raise BadAnswer("нет списка notes")
@@ -364,9 +373,13 @@ def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
     if missing:
         raise BadAnswer(f"нет перевода заметок: {', '.join(missing[:5])}")
     for key, text in found.items():
-        lost = set(NUMBER.findall(sources[key])) - set(NUMBER.findall(text))
-        if lost:
-            raise BadAnswer(f"в переводе {key} потеряны номера {', '.join(sorted(lost))}")
+        source, translated = set(NUMBER.findall(sources[key])), set(NUMBER.findall(text))
+        if source - translated:
+            raise BadAnswer(f"в переводе {key} потеряны номера "
+                            f"{', '.join(sorted(source - translated))}")
+        if translated - source:
+            raise BadAnswer(f"в переводе {key} лишние номера "
+                            f"{', '.join(sorted(translated - source))}")
     return found
 
 

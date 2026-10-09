@@ -22,7 +22,16 @@ from ..export import (
     words_for,
     written,
 )
-from ..models import Council, GroupsEdit, NotePlan, NotesDraft, NotesExport, Stream
+from ..models import (
+    Council,
+    GroupsEdit,
+    IssueNumber,
+    NotePlan,
+    NotesDraft,
+    NotesExport,
+    Stream,
+    VanishedNote,
+)
 from ..notes import Catalog, NotesError
 from ..pipeline import CouncilRun, NotesRun, translating
 from ..prompts import language, notes_language
@@ -75,11 +84,21 @@ def cut(stream: Stream) -> str:
     return stream.issues.run
 
 
+def drafted_for(council: Council, group: str, stream: Stream, root: Path,
+                catalog: Catalog) -> tuple[list[NotePlan], list[VanishedNote],
+                                           list[IssueNumber], list[str]]:
+    """Что выгрузил бы совет сейчас. Не выгрузить (пересматриваемое решение пропало из
+    каталога) — 422 с причиной."""
+    fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
+    try:
+        return drafted(stream, fragments, catalog, root, stream.notes, words_for(language()))
+    except NotesError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 def draft_of(council: Council, group: str, stream: Stream, root: Path,
              catalog: Catalog) -> NotesDraft:
-    fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
-    notes, vanished, numbers, skipped = drafted(stream, fragments, catalog, root, stream.notes,
-                                                words_for(language()))
+    notes, vanished, numbers, skipped = drafted_for(council, group, stream, root, catalog)
     return NotesDraft(state="running", run=uuid4().hex[:8], issues=cut(stream),
                       language=notes_language(), steps=translating(council.judge), notes=notes,
                       vanished=vanished, numbers=numbers, skipped=skipped)
@@ -93,7 +112,8 @@ def drafting(group: str):
              responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
                         409: {"description": "Задачи не нарезаны, черновик уже собирается или "
                                              "группы уже другие"},
-                        422: {"description": "Каталог заметок не задан или его не прочитать"}})
+                        422: {"description": "Каталог заметок не задан или его не прочитать, "
+                                             "или поток в него не выгрузить"}})
 def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                 config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
                 notes: NotesDep) -> Council:
@@ -149,9 +169,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         stream = stream_in(council, group)
         draft = checked_draft(stream, edit)
         catalog = catalog_of(root)
-        fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
-        fresh, vanished, numbers, _ = drafted(stream, fragments, catalog, root, stream.notes,
-                                        words_for(language()))
+        fresh, vanished, numbers, _ = drafted_for(council, group, stream, root, catalog)
         if (shape(fresh) != shape(draft.notes)
                 or [(n.key, n.id) for n in numbers] != [(n.key, n.id) for n in draft.numbers]
                 or [v.id for v in vanished] != [v.id for v in draft.vanished]):

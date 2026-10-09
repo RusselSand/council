@@ -202,6 +202,7 @@ def test_past_decisions_are_selected_before_the_questions(agents):
     assert stream.questions.decisions == ["ADR-0001"]
     accepted = section(agents.prompts["question_discovery"], "ACCEPTED PROJECT DECISIONS")
     assert '"adr_id": "ADR-0001"' in accepted and "та же область" in accepted
+    assert '"status": "under_review"' in accepted                  # статус — и дальше
     first = stream.questions.run
     assert picks(council_id, ["ADR-0001"]).status_code == 200      # тот же отбор — повтор
     assert streams_of(council_id)["C"].questions.run == first

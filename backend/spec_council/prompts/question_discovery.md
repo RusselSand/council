@@ -122,10 +122,14 @@ during implementation without changing the IDEA.
 ## Accepted project decisions
 
 ACCEPTED PROJECT DECISIONS are ADRs from previous councils of the project that the user
-selected as relevant to this IDEA. Each has `relevance` (`applicable`,
-`potential_conflict` or `uncertain`) and `reason`.
+selected as relevant to this IDEA. Each has `status`, `relevance` (`applicable`,
+`potential_conflict` or `uncertain`) and `reason`. `status` tells whether the decision still
+governs the work: `active` — it is in force; `under_review` — a later council opened a question
+about it and has not decided yet; `superseded` — the decision in `superseded_by` replaced it, and
+it no longer governs the work.
 
-- Do not ask an OPEN QUESTION that an `applicable` decision already answers for this IDEA.
+- Do not ask an OPEN QUESTION that an `applicable` and `active` decision already answers for this
+  IDEA. A `superseded` or `under_review` decision does not settle a question.
 - If the IDEA may require revisiting a decision (`potential_conflict`, or `uncertain` with a
   concrete reason), ask that OPEN QUESTION explicitly and put the decision ID into
   `revisits`.

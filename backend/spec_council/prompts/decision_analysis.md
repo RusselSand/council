@@ -7,7 +7,8 @@ You are given:
 - the applicable constraints and risks;
 - the related OPEN QUESTIONS;
 - accepted project decisions that the user selected as relevant to this IDEA (from previous
-  councils), with their relevance and reason;
+  councils), with their status (only `active` is in force: `superseded` was replaced by the
+  decision in `superseded_by`, `under_review` is being revisited), relevance and reason;
 - the user's preliminary choice, if there is one.
 
 ## What an ADR is

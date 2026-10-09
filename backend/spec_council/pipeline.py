@@ -1171,9 +1171,12 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
 
 def accepted_prompt(decisions: Sequence[ProjectDecision]) -> str:
     """Принятые решения проекта, отобранные человеком для потока, — для промптов вопросов,
-    вариантов и решений: номер, к какой идее, вопрос, решение, насколько и почему относится."""
+    вариантов и решений: номер, к какой идее, вопрос, решение, действует ли оно (заменённое —
+    и каким), насколько и почему относится."""
     return as_json([{"adr_id": d.adr_id, "idea": d.idea, "question": d.question,
-                     "decision": d.decision, "relevance": d.relevance, "reason": d.reason}
+                     "decision": d.decision, "status": d.status,
+                     "superseded_by": d.superseded_by, "relevance": d.relevance,
+                     "reason": d.reason}
                     for d in decisions])
 
 

@@ -2,7 +2,14 @@
 
 import pytest
 
-from spec_council.export import drafted, graph_problems, numbered_issues, words_for, written
+from spec_council.export import (
+    drafted,
+    graph_problems,
+    numbered_issues,
+    translations,
+    words_for,
+    written,
+)
 from spec_council.models import (
     Decision,
     Issue,
@@ -19,6 +26,7 @@ from spec_council.models import (
     StreamIdea,
 )
 from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
+from spec_council.slicing import BadAnswer
 
 WORDS = words_for("Russian")
 FRAGMENTS = {
@@ -228,3 +236,33 @@ def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):
 def test_an_empty_text_is_not_written(root):
     with pytest.raises(NotesError, match="пустой текст"):
         export(root, edits={"idea": "   "})
+
+
+def test_an_empty_text_anywhere_leaves_the_catalog_as_it_was(root):
+    notes, _, _, _ = draft(root)
+    last = notes[-1]
+    with pytest.raises(NotesError, match=f"У заметки {last.id} пустой текст"):
+        written(notes, [], {last.key: " "}, [], root, None)
+    assert sorted(note.id for note in Catalog.load(root).notes.values()) == sorted(
+        note.id for note in PAST)                                      # ничего не записано
+
+
+def test_a_revisited_decision_gone_from_the_catalog_stops_the_draft(root):
+    (root / "adrs" / "ADR-0001.md").unlink()
+    (root / "outcomes" / "OUT-0001.md").unlink()
+    with pytest.raises(NotesError, match="Q3 пересматривает ADR-0001"):
+        draft(root)
+
+
+def test_a_translation_keeps_exactly_the_numbers_of_the_source():
+    sources = {"o": "Итог\n\nЗадачи:\n- ISS-0001: Кнопка", "a": "Откат, потому что ADR-0001."}
+    good = {"notes": [{"key": "o", "text": "Outcome\n\nIssues:\n- ISS-0001: Button"},
+                      {"key": "a", "text": "Rollback, because of ADR-0001."}]}
+    assert translations(good, sources)["o"].endswith("ISS-0001: Button")
+    lost = {"notes": [good["notes"][0], {"key": "a", "text": "Rollback."}]}
+    with pytest.raises(BadAnswer, match="потеряны номера ADR-0001"):
+        translations(lost, sources)
+    added = {"notes": [{"key": "o", "text": "Outcome\n\nIssues:\n- ISS-0001: Button\n"
+                                            "- ISS-9999: Extra"}, good["notes"][1]]}
+    with pytest.raises(BadAnswer, match="лишние номера ISS-9999"):
+        translations(added, sources)

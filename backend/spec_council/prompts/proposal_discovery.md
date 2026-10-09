@@ -7,7 +7,8 @@ You are given:
 - the PROPOSALS that already exist for this question;
 - the related constraints and risks;
 - accepted project decisions that the user selected as relevant to this IDEA (from previous
-  councils), with their relevance and reason.
+  councils), with their status (only `active` is in force: `superseded` was replaced by the
+  decision in `superseded_by`, `under_review` is being revisited), relevance and reason.
 
 ## What a PROPOSAL is
 

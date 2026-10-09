@@ -8,7 +8,8 @@ You are given:
 - the applicable CONSTRAINTS and RISKS;
 - the related OPEN QUESTIONS;
 - accepted project decisions that the user selected as relevant to this IDEA (from previous
-  councils), with their relevance and reason;
+  councils), with their status (only `active` is in force: `superseded` was replaced by the
+  decision in `superseded_by`, `under_review` is being revisited), relevance and reason;
 - the results of several independent Decision Analyses.
 
 Your task is to independently check the agents' conclusions and form one

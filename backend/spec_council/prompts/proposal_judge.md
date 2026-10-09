@@ -6,7 +6,8 @@ You are given:
 - the existing PROPOSALS;
 - the applicable CONSTRAINTS and RISKS;
 - accepted project decisions that the user selected as relevant to this IDEA (from previous
-  councils), with their relevance and reason;
+  councils), with their status (only `active` is in force: `superseded` was replaced by the
+  decision in `superseded_by`, `under_review` is being revisited), relevance and reason;
 - new PROPOSALS found independently by agents.
 
 Your task is to compare the agents' proposals and decide which candidate answers

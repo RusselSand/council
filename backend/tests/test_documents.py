@@ -136,6 +136,17 @@ def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents,
     assert not (notes_dir / "ideas").exists()
 
 
+def test_a_draft_that_cannot_be_built_says_why(agents, notes_dir):
+    council_id = cut_c()
+    # Вопрос пересматривает прошлое решение, а его из каталога уже убрали.
+    streams = [s.model_copy(update={"scope": [s.scope[0].model_copy(update={
+        "revisits": "ADR-0042"}), *s.scope[1:]]}) if s.group == "C" else s
+        for s in get_store().get_council(council_id).streams]
+    get_store().update_council(council_id, {"streams": streams})
+    res = drafts(council_id)
+    assert res.status_code == 422 and "пересматривает ADR-0042" in res.json()["detail"]
+
+
 class Translating(Agents):
     """Судья переводит заметки: каждый текст — с пометкой EN."""
 
