@@ -179,10 +179,10 @@ def test_several_repositories_split_the_map_paths_by_folder(tmp_path):
 
 
 def test_a_file_named_only_as_a_flow_entry_point_is_traced_too(tmp_path):
-    (tmp_path / "api").mkdir()
-    (tmp_path / "api" / "routes x.py").write_text("…", encoding="utf-8")
+    # Файла в рабочей копии уже нет (переименовали) — а в карте он есть, и в истории тоже.
     scan = scan_of(("", tmp_path))
-    scan.result.flows = [RepositoryFlow(name="Поиск", entry_point="api/routes x.py:find"),
+    scan.result.flows = [RepositoryFlow(name="Поиск", entry_point="api/routes x.py:find",
+                                        entry_file="api/routes x.py"),
                          RepositoryFlow(name="Без точки входа")]
     assert evidence_files(scan) == [(tmp_path, "app.py", "app.py"),
                                     (tmp_path, "api/routes x.py", "api/routes x.py")]

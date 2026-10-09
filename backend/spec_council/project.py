@@ -83,8 +83,7 @@ def evidence_files(scan: RepositoryScan) -> list[tuple[Path, str, str]]:
     result = scan.result
     shown = [evidence.path for finding in (result.findings if result else [])
              for evidence in finding.evidence]
-    shown += [path for flow in (result.flows if result else [])
-              if (path := entry_file(flow.entry_point, roots))]
+    shown += [flow.entry_file for flow in (result.flows if result else []) if flow.entry_file]
     files = [found for path in dict.fromkeys(shown) if (found := located(path, roots))]
     return files[:FILES_MAX]
 
@@ -95,18 +94,6 @@ def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | No
     if folder in roots and rest and "\\" not in rest:
         return roots[folder], rest, shown
     return None
-
-
-def entry_file(entry: str, roots: Mapping[str, Path]) -> str:
-    """Файл точки входа потока («api/routes.py:handler» → «api/routes.py»): самое длинное
-    начало до «:», « » или «(», что есть файлом в рабочей копии, — в именах бывают и они."""
-    ends = [len(entry), *sorted({i for i, char in enumerate(entry) if char in ": ("},
-                                reverse=True)]
-    for end in ends:
-        found = located(entry[:end], roots)
-        if found is not None and (found[0] / found[1]).is_file():
-            return entry[:end]
-    return ""
 
 
 def trails_of(files: Sequence[tuple[Path, str, str]],

@@ -778,7 +778,7 @@ describe('Поток: репозиторий', () => {
           evidence: [{ path: 'worker/state.py', lines: '10-30', symbol: 'save' }], relevance: 'там же надо хранить итог' },
         { id: 'R2', statement: 'Повторы не дедуплицируются', status: 'inferred', evidence: [], relevance: '' },
       ],
-      flows: [{ name: 'Ход воркера', entry_point: 'worker/main.py',
+      flows: [{ name: 'Ход воркера', entry_point: 'worker/main.py', entry_file: 'worker/main.py',
                 steps: [{ description: 'берёт задачу из очереди', finding_ids: ['R1'] }] }],
       coverage: [{ area: 'Хранение', status: 'covered', evidence_ids: ['R1'], reason: '' },
                  { area: 'Очередь', status: 'not_investigated', evidence_ids: [], reason: 'вне репозитория' }],

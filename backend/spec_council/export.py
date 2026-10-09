@@ -323,8 +323,11 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
     for part in parts:
         old = olds.get(part.key)
         held = catalog.notes.get(old.id) if old else None
-        if (old and old.type == part.type and (held is None or held.type == part.type)
-                and old.id not in reserved):
+        # Прежний номер — если он всё ещё наш: заметка с ним того же типа, а нет её — файл
+        # с этим именем свободен (в него не переименовали чужую) и номер не за другим потоком.
+        if old and old.type == part.type and old.id not in reserved and (
+                held.type == part.type if held is not None
+                else catalog.occupant(old.id) is None):
             ids[part.key] = old.id
     for part in parts:
         if part.key not in ids:

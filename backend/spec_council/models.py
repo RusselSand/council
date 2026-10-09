@@ -240,6 +240,9 @@ class RepositoryFlow(BaseModel):
 
     name: str
     entry_point: str = ""
+    # Файл точки входа без символа, каким его нашли в репозитории при скане: по нему ищется след
+    # решений в коде — и после того, как файл переименовали или удалили.
+    entry_file: str = ""
     steps: list[FlowStep] = []
 
 

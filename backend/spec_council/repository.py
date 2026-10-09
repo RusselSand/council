@@ -1027,29 +1027,35 @@ def ids_in(value: object, known: set[str]) -> list[str]:
     return list(dict.fromkeys(name for name in found if name in known))
 
 
-def entry_of(value: object, context: Context) -> str:
+def entry_of(value: object, context: Context) -> tuple[str, str]:
     """Точка входа потока — файл репозитория, можно с символом: «api/routes.py:handler». Путь —
     самое длинное начало, которое есть в inventory: в именах бывают и пробелы. Файла нет — точки
-    входа нет: следующие шаги поверили бы несуществующему компоненту."""
+    входа нет: следующие шаги поверили бы несуществующему компоненту. Вернёт (файл, точку
+    входа)."""
     text = path_text(value)       # как есть: пробел в начале — тоже имя; обрезает path_of
     ends = [len(text), *sorted({i for i, char in enumerate(text) if char in ": ("}, reverse=True)]
     for end in ends:
         path = context.path_of(text[:end])
         if path in context.files:
             rest = text[end:]
-            return shown(path) + (rest[:1] + reason_of(rest[1:]))[:TEXT_MAX]
-    return ""
+            return shown(path), shown(path) + (rest[:1] + reason_of(rest[1:]))[:TEXT_MAX]
+    return "", ""
 
 
 def flows_of(value: object, known: set[str], context: Context) -> list[RepositoryFlow]:
     items = value if isinstance(value, list) else []
-    return [RepositoryFlow(
-        name=text_of(item.get("name")), entry_point=entry_of(item.get("entry_point"), context),
+    return [flow_of(item, known, context)
+            for item in items if isinstance(item, dict) and text_of(item.get("name"))]
+
+
+def flow_of(item: dict, known: set[str], context: Context) -> RepositoryFlow:
+    entry_file, entry_point = entry_of(item.get("entry_point"), context)
+    steps = item.get("steps") if isinstance(item.get("steps"), list) else []
+    return RepositoryFlow(
+        name=text_of(item.get("name")), entry_point=entry_point, entry_file=entry_file,
         steps=[FlowStep(description=text_of(step.get("description")),
                         finding_ids=ids_in(step.get("finding_ids"), known))
-               for step in (item.get("steps") if isinstance(item.get("steps"), list) else [])
-               if isinstance(step, dict) and text_of(step.get("description"))])
-        for item in items if isinstance(item, dict) and text_of(item.get("name"))]
+               for step in steps if isinstance(step, dict) and text_of(step.get("description"))])
 
 
 def coverage_of(value: object, known: set[str]) -> list[CoverageArea]:

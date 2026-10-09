@@ -373,6 +373,20 @@ def test_an_empty_text_is_not_written(root):
         export(root, edits={"idea": "   "})
 
 
+def test_an_old_number_whose_file_holds_another_note_is_not_reused(root):
+    first, _, _, _ = export(root)
+    old = next(note for note in first.notes if note.type == "idea")
+    path = root / "ideas" / f"{old.id}.md"
+    path.unlink()                                          # нашу идею удалили руками,
+    foreign = Note("IDEA-0099", "idea", "Чужая идея.")
+    path.write_text(rendered(foreign), encoding="utf-8")   # а в её файл переименовали чужую
+    notes, _, _, _ = draft(root, previous=first)
+    idea = next(note for note in notes if note.type == "idea")
+    assert (idea.id, idea.action) == ("IDEA-0100", "create")
+    export(root, previous=first)
+    assert path.read_text(encoding="utf-8") == rendered(foreign)          # не затёрта
+
+
 def test_an_edit_must_keep_the_numbers_and_the_issue_lines(root):
     notes, _, _, _ = draft(root)
     outcome = next(note for note in notes if "\n- ISS-" in note.text)

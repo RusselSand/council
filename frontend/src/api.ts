@@ -86,7 +86,7 @@ export interface RepositoryFinding {
 }
 /** Как поведение проходит через систему: откуда начинается и через что идёт. */
 export interface RepositoryFlow {
-  name: string; entry_point: string; steps: { description: string; finding_ids: string[] }[]
+  name: string; entry_point: string; entry_file: string; steps: { description: string; finding_ids: string[] }[]
 }
 export interface CoverageArea {
   area: string; status: 'covered' | 'partial' | 'not_investigated' | 'not_applicable'; evidence_ids: string[]; reason: string

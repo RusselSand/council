@@ -210,6 +210,12 @@ class Catalog:
         return sorted((note for note in self.notes.values()
                        if note.id == idea_id or self.roots(note.id) == {idea_id}), key=order)
 
+    def occupant(self, note_id: str) -> Note | None:
+        """Другая заметка в файле с именем note_id (ADR-0001.md) — его переименовали: новая
+        заметка с этим номером легла бы туда и затёрла её."""
+        return next((note for note in self.notes.values() if note.path is not None
+                     and note.path.stem == note_id and note.id != note_id), None)
+
     def next_id(self, kind: str, taken: Iterable[str] = ()) -> str:
         """Следующий свободный номер типа — после самого большого в каталоге и в taken. Имя
         файла тоже занимает номер: в ADR-0002.md могла лечь другая заметка, и новая ADR-0002
