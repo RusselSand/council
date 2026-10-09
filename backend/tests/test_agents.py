@@ -116,3 +116,28 @@ def test_a_workspace_reaches_the_model_through_agent_workers(tmp_path, monkeypat
     assert adapter.asked[-1]["workspace"] == str(repo.resolve())
     with pytest.raises(ModelFailed, match="workspace"):
         runner.ask("sol", "привет", "k2", workspace=tmp_path / "нет")
+
+
+@pytest.mark.parametrize(("interruption", "said"), [
+    # Перезагрузка сервера — не сбой модели: шаг надо просто запустить снова.
+    ("stopped", "^сервер перезапускался посреди хода: запустите шаг снова$"),
+    # Почему ход сняли, говорит agent-workers ≥ 0.3.0, а не голое no_terminal_event.
+    ("idle", "^ход оборвался: CLI молчала 15 мин, ход снят как зависший"),
+    ("timeout", "^ход оборвался: не уложился в предел хода: 60 мин"),
+])
+def test_a_turn_taken_down_says_why(tmp_path, monkeypatch, interruption, said):
+    from agent_workers.base import worker as worker_module
+    from agent_workers.base.process import Outcome
+
+    def cut(*args, on_start, **kwargs):
+        on_start()
+        return Outcome(None, interruption)
+
+    monkeypatch.setattr("spec_council.agents.STOP", threading.Event())
+    monkeypatch.setattr(worker_module, "supervise", cut)
+    worker = Worker(FakeAdapter(tmp_path), Profile("sol", tmp_path / "home"), tmp_path / "runs",
+                    QUIET)
+    runner = AgentRunner({"sol": Agent(provider="codex", model="gpt-5.6-sol")})
+    monkeypatch.setattr(runner, "_worker", lambda alias: worker)
+    with pytest.raises(ModelFailed, match=said):
+        runner.ask("sol", "привет", "k")

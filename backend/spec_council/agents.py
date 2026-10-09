@@ -72,9 +72,14 @@ def failure(result: Mapping) -> str:
         case "aborted":
             return "остановлено до запуска"
         case _:
-            reply = result.get("reply")
-            detail = result.get("reason") or (reply.diagnostic if reply else None)
-            return f"ход оборвался: {detail or 'без объяснения'}"
+            entry, reply = result.get("entry"), result.get("reply")
+            if entry is not None and entry.meta.get("interruption") == "stopped":
+                # Ход останавливает только STOP, а его поднимает остановка приложения, в
+                # разработке — и перезагрузка после правки кода.
+                return "сервер перезапускался посреди хода: запустите шаг снова"
+            # Почему ход сняли (предел хода или молчания CLI) и что успела сказать CLI.
+            details = [result.get("reason"), reply.diagnostic if reply else None]
+            return f"ход оборвался: {'; '.join(filter(None, details)) or 'без объяснения'}"
 
 
 class AgentRunner:
