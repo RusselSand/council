@@ -13,6 +13,10 @@ x-paths: &paths
   COUNCIL_DATA: /data/councils
   COUNCIL_REPOS: /repos
   HOME: /tmp
+  # Пределы хода моделей (agent-workers), если заданы в .env. Без значения здесь: не задан —
+  # переменной в контейнере нет, и действует умолчание; пустая строка сняла бы предел.
+  AGENT_TIMEOUT:
+  AGENT_IDLE_TIMEOUT:
 
 # Под кем работают оба сервиса. CLI и лоток ходов пишут в .accounts с хоста, советы — в .data.
 # - Windows и macOS: root, по умолчанию. Docker Desktop показывает каталоги учётных записей

@@ -11,7 +11,7 @@ dependencies = [
 
 [tool.uv.sources]
 # Приватный репо: сборке Docker нужен AGENT_WORKERS_TOKEN, см. README.
-agent-workers = { git = "https://github.com/RusselSand/agent-workers", tag = "v0.2.0" }
+agent-workers = { git = "https://github.com/RusselSand/agent-workers", rev = "a3e695d0b7e95e07e77a40d8fb0445f90bd62fc9" }
 
 [dependency-groups]
 dev = [
