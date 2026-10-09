@@ -116,6 +116,7 @@ from .models import (
     Outcome,
     OutcomeDiscovery,
     OutcomeGap,
+    ProjectDecision,
     Proposal,
     ProposalDiscovery,
     QuestionAnalysis,
@@ -744,21 +745,26 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
                  participants: list[str], judge: str, runner: Runner,
                  report: Callable[[QuestionDiscovery], None], *, repository: str = SKIPPED,
                  repository_map: str = context_prompt(None), design: str = SKIPPED,
-                 design_map: str = design_context(None)) -> None:
+                 design_map: str = design_context(None),
+                 accepted: Sequence[ProjectDecision] = ()) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_questions(participants, judge, idea, repository, design))
         self.idea = idea
         self.repository = repository_map
         self.design = design_map
+        self.accepted = accepted_prompt(accepted)
+        self.decision_ids = frozenset(decision.adr_id for decision in accepted)
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
     def work(self) -> dict[str, Any]:
         group = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text}
                          for f in self.fragments.values()])
         prompt = render("question_discovery", idea=self.idea, fragments=group,
-                        repository=self.repository, design=self.design)
+                        repository=self.repository, design=self.design,
+                        accepted_decisions=self.accepted)
         answers = self._ask_all(StepName.question_discovery, prompt,
-                                lambda data: question_list(data, self.fragments))
+                                lambda data: question_list(data, self.fragments,
+                                                           self.decision_ids))
         lists = list(answers.values())
         if len(lists) > 1 and same_lists(lists):
             self._skip(StepName.question_judge)
@@ -768,9 +774,11 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
             numbered_lists = [{"agent": n, **c} for n, c in enumerate(candidates, 1)]
             prompt = render("question_judge", idea=self.idea, fragments=group,
                             repository=self.repository, design=self.design,
+                            accepted_decisions=self.accepted,
                             question_candidates=as_json(numbered_lists))
             chosen = self._ask_judge(StepName.question_judge, prompt,
-                                     lambda data: question_list(data, self.fragments))
+                                     lambda data: question_list(data, self.fragments,
+                                                                self.decision_ids))
         return {"questions": numbered(with_user_questions(chosen, self.fragments))}
 
 
@@ -792,12 +800,14 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[ProposalDiscovery], None], *,
                  repository: str = context_prompt(None),
-                 design: str = design_context(None)) -> None:
+                 design: str = design_context(None),
+                 accepted: Sequence[ProjectDecision] = ()) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_proposals(participants, judge, scope))
         self.idea = idea
         self.repository = repository
         self.design = design
+        self.accepted = accepted_prompt(accepted)
         self.scope = scope
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
@@ -827,7 +837,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
             }
             answers = self._ask_all(
                 StepName.proposal_discovery,
-                render("proposal_discovery", **values, accepted_decisions="[]"),
+                render("proposal_discovery", **values, accepted_decisions=self.accepted),
                 partial(proposal_list, context=context))
             self._keep_failures(StepName.proposal_discovery, question.id, failures)
             existing = {same_question(self.fragments[i].text): i for i in question.proposal_ids
@@ -837,7 +847,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
             if candidates:
                 judged = True
                 variants = shuffled([proposal_prompt(c) for c in candidates])
-                prompt = render("proposal_judge", **values, accepted_adrs="[]",
+                prompt = render("proposal_judge", **values, accepted_adrs=self.accepted,
                                 proposal_candidates=as_json(
                                     [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
                 verdict = without_repeats(self._ask_judge(
@@ -893,12 +903,14 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                  fragments: list[LabeledFragment], participants: list[str], judge: str,
                  runner: Runner, report: Callable[[DecisionAnalysis], None], *,
                  repository: str = context_prompt(None),
-                 design: str = design_context(None)) -> None:
+                 design: str = design_context(None),
+                 accepted: Sequence[ProjectDecision] = ()) -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_analysis(participants, judge, choices))
         self.idea = idea
         self.repository = repository
         self.design = design
+        self.accepted = accepted_prompt(accepted)
         self.scope = scope
         self.choices = {choice.question_id: choice.proposal for choice in choices}
         self.found = {options.question_id: options.proposals
@@ -948,12 +960,13 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
             "design": self.design,
         }
         answers = self._ask_all(StepName.decision_analysis,
-                                render("decision_analysis", **values, accepted_decisions="[]"),
+                                render("decision_analysis", **values,
+                                       accepted_decisions=self.accepted),
                                 partial(analysis_of, context=context))
         self._keep_failures(StepName.decision_analysis, question.id, failures)
         distinct = {as_json(analysis_prompt(a)): analysis_prompt(a) for a in answers.values()}
         variants = shuffled(list(distinct.values()))
-        prompt = render("decision_judge", **values, accepted_adrs="[]",
+        prompt = render("decision_judge", **values, accepted_adrs=self.accepted,
                         decision_analyses=as_json(
                             [{"analysis": n, **v} for n, v in enumerate(variants, 1)]))
         return self._ask_judge(StepName.decision_judge, prompt,
@@ -1129,6 +1142,14 @@ class RepositoryRun(CouncilRun[RepositoryScan]):
             return self._explored(StepName.repository_discovery, StepName.repository_judge,
                                   values, partial(map_of, context=context),
                                   partial(judged_map, context=context), map_prompt)
+
+
+def accepted_prompt(decisions: Sequence[ProjectDecision]) -> str:
+    """Принятые решения проекта, отобранные человеком для потока, — для промптов вопросов,
+    вариантов и решений: номер, к какой идее, вопрос, решение, насколько и почему относится."""
+    return as_json([{"adr_id": d.adr_id, "idea": d.idea, "question": d.question,
+                     "decision": d.decision, "relevance": d.relevance, "reason": d.reason}
+                    for d in decisions])
 
 
 def fragments_prompt(fragments: Iterable[LabeledFragment]) -> str:

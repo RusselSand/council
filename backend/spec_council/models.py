@@ -42,6 +42,7 @@ class StepName(StrEnum):
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
     issue_discovery = "issue_discovery"  # участники нарезают утверждённые итоги на задачи
     issue_judge = "issue_judge"          # судья сводит их нарезки в итоговый набор задач
+    notes_translation = "notes_translation"  # судья переводит заметки на язык документации
 
 
 class ModelRun(BaseModel):
@@ -477,6 +478,32 @@ class DesignStep(BaseModel):
     scan_run: str = ""
 
 
+class CodeTrail(BaseModel):
+    """След решения в коде: коммит с номером задачи, которая реализовала итог этого решения, в
+    файле, который новая идея, по карте репозитория, будет затрагивать."""
+
+    issue: str
+    outcome: str
+    commit: str
+    file: str
+
+
+class ProjectDecision(BaseModel):
+    """Принятое решение проекта из каталога заметок, каким его видят шаги потока: номер, к
+    какой идее, на какой вопрос и что решено, действует ли оно, его след в коде — и, когда
+    его отобрали, насколько и почему оно относится к идее потока."""
+
+    adr_id: str
+    idea: str = ""
+    question: str = ""
+    decision: str = ""
+    status: Literal["active", "under_review", "superseded"] = "active"
+    superseded_by: str | None = None
+    found_in_code: list[CodeTrail] = []
+    relevance: Literal["applicable", "potential_conflict", "uncertain"] | None = None
+    reason: str = ""
+
+
 class OpenQuestion(BaseModel):
     """Открытый вопрос: что ещё неизвестно, чтобы идею можно было реализовать. Ответов в нём
     нет: предложения из текста связаны с ним через proposal_ids."""
@@ -491,6 +518,10 @@ class OpenQuestion(BaseModel):
     # Фрагменты-предложения группы, которые отвечают на этот вопрос.
     proposal_ids: list[int] = []
     reason: str | None = None
+    # Для заметки: у вопроса из текста — та же неопределённость атомарно, одним предложением.
+    note: str | None = None
+    # Принятое решение проекта, которое вопрос пересматривает (ADR-0007), — из отобранных.
+    revisits: str | None = None
 
 
 class QuestionDiscovery(BaseModel):
@@ -685,6 +716,90 @@ class Issue(BaseModel):
     acceptance_criteria: list[str] = []
 
 
+NoteType = Literal["idea", "open_question", "proposal", "adr", "outcome"]
+
+
+class NotePlan(BaseModel):
+    """Заметка, какой она ляжет в каталог при выгрузке. key — какая это часть потока (идея,
+    вопрос, вариант, решение, итог): по нему повторная выгрузка находит свою прежнюю заметку.
+    generated — текст от совета; text — что предлагается записать (прежний, если совет
+    написал бы то же самое, — с правками человека). action: create — новая; update — файл
+    перепишется; same — в файле уже это; edited — файл правили руками после выгрузки, совет его
+    не трогает."""
+
+    key: str
+    id: str
+    type: NoteType
+    text: str
+    generated: str
+    links: list[str] = []
+    action: Literal["create", "update", "same", "edited"]
+    # Что в файле сейчас — у update и edited.
+    current: str | None = None
+
+
+class VanishedNote(BaseModel):
+    """Заметка прежней выгрузки, которой в потоке больше нет. Сама не удаляется: удалить её
+    можно, только если на неё не ссылается ничего вне потока (linked_from)."""
+
+    id: str
+    type: NoteType
+    text: str
+    linked_from: list[str] = []
+
+
+class IssueNumber(BaseModel):
+    """Номер задачи на весь проект (ISS-0012): его пишут в финальный коммит, и по нему скан
+    репозитория находит, под какие решения сделан код."""
+
+    key: str
+    id: str
+    issue_id: str
+    title: str
+    outcome_ids: list[str] = []
+
+
+class NotesDraft(BaseModel):
+    """Черновик выгрузки потока в заметки: что ляжет, что изменится, что исчезло и номера
+    задач. Собирается сразу; если язык документации другой, — ход судьи с переводом. К
+    каким задачам собран (issues): нарезали заново — черновик устарел."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    issues: str = ""
+    language: str = ""
+    steps: list[Step] = []
+    notes: list[NotePlan] = []
+    vanished: list[VanishedNote] = []
+    numbers: list[IssueNumber] = []
+    # Что не выгружается и почему: итог без решений, решение из другой идеи в итоге.
+    skipped: list[str] = []
+    error: str | None = None
+
+
+class ExportedNote(BaseModel):
+    """Заметка, как её выгрузили: из какой части потока, под каким номером, что сгенерировал
+    совет, что записали и отпечаток файла — по нему видно, правили ли его потом руками."""
+
+    key: str
+    id: str
+    type: NoteType
+    generated: str
+    written: str
+    links: list[str] = []
+    digest: str
+
+
+class NotesExport(BaseModel):
+    """Последняя выгрузка потока: по ней повторная находит свои заметки и номера задач."""
+
+    run: str
+    issues: str
+    language: str
+    notes: list[ExportedNote] = []
+    numbers: list[IssueNumber] = []
+
+
 class IssueDiscovery(BaseModel):
     """Нарезка утверждённых итогов на задачи: участники по отдельности, судья сводит их в
     итоговый набор. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же
@@ -746,12 +861,16 @@ class Stream(BaseModel):
     decisions: list[Decision] | None = None
     outcomes: OutcomeDiscovery | None = None
     issues: IssueDiscovery | None = None
+    # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:
+    # по ней повторная находит свои прежние заметки.
+    notes_draft: NotesDraft | None = None
+    notes: NotesExport | None = None
 
 
 # Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
 # вариантов, проверка выбора, сборка итогов, нарезка на задачи.
 STREAM_RUNS = ("discovery", "scan", "design_scan", "questions", "proposals", "analysis",
-               "outcomes", "issues")
+               "outcomes", "issues", "notes_draft")
 
 
 class Council(BaseModel):
@@ -927,6 +1046,8 @@ class Settings(BaseModel):
     repositories: str | None = None
     # Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать.
     figma: bool = False
+    # Каталог заметок проекта (COUNCIL_NOTES): без него поток не выгрузить.
+    notes: str | None = None
     min_participants: int
     default_participants: list[str]
     default_judge: str

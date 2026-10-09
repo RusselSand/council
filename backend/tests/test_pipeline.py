@@ -1,6 +1,7 @@
 """Конвейер нарезки и разметки на поддельных моделях: кто что получает и когда нужен судья."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,11 @@ class FakeRunner:
         return self.identities.get(model, model)
 
 
+def names_models(prompt):
+    """Судья видит имена моделей — словами, а не частью другого слова («solution»)."""
+    return re.search(r"(sol|fable)", prompt) is not None
+
+
 def run(replies, participants=("sol", "fable"), judge="fable"):
     runner, reports = FakeRunner(replies), []
     result = SlicingRun("c1", TEXT, list(participants), judge, runner, reports.append).run()
@@ -127,7 +133,7 @@ def test_different_slicing_goes_to_the_judge_without_model_names():
     assert [f.text for f in result.fragments] == joined
     judge_prompt = runner.asked["slice_judge", "fable"]
     assert "одна мысль" in judge_prompt and PARTS[2] in judge_prompt
-    assert "sol" not in judge_prompt and "fable" not in judge_prompt
+    assert not names_models(judge_prompt)
 
 
 def test_one_model_seeing_two_variants_is_a_dispute_too():
@@ -331,7 +337,7 @@ def test_different_groupings_go_to_the_judge_and_shared_fragments_are_marked():
     assert [(r.source, r.target, r.type) for r in result.relations] == [("B", "A", "related")]
     assert result.decisions[0].decision == "A+B"
     prompt = runner.asked["structure_judge", "fable"]
-    assert "sol" not in prompt and "fable" not in prompt
+    assert not names_models(prompt)
 
 
 def test_structure_judge_refusal_makes_a_retry_ask_the_participants_again():
@@ -395,7 +401,7 @@ def test_different_ideas_go_to_the_judge_without_model_names():
     assert result.options[result.proposal.option].idea == other
     prompt = runner.asked["idea_judge", "fable"]
     assert FIND in prompt and other in prompt
-    assert "sol" not in prompt and "fable" not in prompt
+    assert not names_models(prompt)
 
 
 def test_judge_may_merge_wordings_and_may_reject_them_all():
@@ -476,7 +482,7 @@ def test_different_lists_go_to_the_judge_and_a_dropped_text_question_comes_back(
         ("Q1", "Где человек ищет ответ?", "inferred"), ("Q2", "Кто платит за хостинг?", "user")]
     prompt = runner.asked["question_judge", "fable"]
     assert HOW in prompt and "Где искать?" in prompt
-    assert "sol" not in prompt and "fable" not in prompt
+    assert not names_models(prompt)
 
 
 def test_a_judge_answer_without_a_list_fails_the_search():

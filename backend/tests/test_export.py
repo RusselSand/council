@@ -1,0 +1,195 @@
+"""Выгрузка потока в заметки: что ложится, под какими номерами и что при повторной выгрузке."""
+
+import pytest
+
+from spec_council.export import drafted, numbered_issues, words_for, written
+from spec_council.models import (
+    Decision,
+    Issue,
+    IssueDiscovery,
+    LabeledFragment,
+    NotesExport,
+    OpenQuestion,
+    Outcome,
+    OutcomeDiscovery,
+    Proposal,
+    ProposalDiscovery,
+    QuestionOptions,
+    Stream,
+    StreamIdea,
+)
+from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
+
+WORDS = words_for("Russian")
+FRAGMENTS = {
+    3: LabeledFragment(id=3, text="Деплой запускает CI после merge.", label="proposal",
+                       reason="", council_label="proposal"),
+    5: LabeledFragment(id=5, text="Деплоить по merge или по тегу?", label="question",
+                       reason="", council_label="question"),
+}
+SCOPE = [
+    OpenQuestion(id="Q1", text=FRAGMENTS[5].text, source="user", source_question_id=5,
+                 proposal_ids=[3], note="Что запускает деплой?"),
+    OpenQuestion(id="Q2", text="Где хранить секреты деплоя?", source="discovered"),
+    OpenQuestion(id="Q3", text="Оставлять ли ручной откат?", source="discovered",
+                 revisits="ADR-0001"),
+]
+FOUND = ProposalDiscovery(state="done", run="p1", steps=[], options=[
+    QuestionOptions(question_id="Q1", verdict="alternatives", proposals=[
+        Proposal(id="P1", text="Деплой запускают по тегу релиза.", reason="")]),
+    QuestionOptions(question_id="Q2", verdict="recommended", proposals=[
+        Proposal(id="P2", text="Секреты лежат в хранилище CI.", reason="")]),
+    QuestionOptions(question_id="Q3", verdict="recommended", proposals=[
+        Proposal(id="P3", text="Ручной откат остаётся.", reason="")]),
+])
+DECIDED = [Decision(question_id="Q1", proposal="F3",
+                    rationale="Рутинные шаги не должны требовать ручной координации.",
+                    rationale_by="human"),
+           Decision(question_id="Q2", proposal=None),
+           Decision(question_id="Q3", proposal="P3", rationale="Откат нужен при сбое.",
+                    rationale_by="human")]
+OUTCOMES = OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
+    Outcome(id="O1", title="Деплой по merge", behavior="После merge CI сам выкладывает.",
+            adr_ids=["ADR-1", "ADR-3"], acceptance_criteria=["Merge в main выкладывает сборку."]),
+    Outcome(id="O2", title="Хранение секретов", behavior="Секреты где-то лежат.",
+            blocked_by=["Q2"]),
+])
+ISSUES = IssueDiscovery(state="done", run="i1", outcomes="o1", steps=[], issues=[
+    Issue(id="I1", title="Запуск деплоя по merge", user_story="As a dev…",
+          outcome_ids=["O1"])])
+STREAM = Stream(group="A", idea=StreamIdea(text="Деплой требует меньше ручной работы.",
+                                           by="human"),
+                scope=SCOPE, proposals=FOUND, decisions=DECIDED, outcomes=OUTCOMES,
+                issues=ISSUES)
+# В каталоге уже есть прошлый совет: его решение пересматривает Q3, и задача ISS-0007.
+PAST = [Note("IDEA-0001", "idea", "Откаты делаются быстро."),
+        Note("OQ-0001", "open_question", "Как откатывать?", ("IDEA-0001",)),
+        Note("PRO-0001", "proposal", "Откат руками.", ("OQ-0001",)),
+        Note("ADR-0001", "adr", "Откат руками, потому что так проще.", ("PRO-0001",)),
+        Note("OUT-0001", "outcome", "Откат\n\nЗадачи:\n- ISS-0007: Кнопка отката",
+             ("ADR-0001",))]
+
+
+@pytest.fixture
+def root(tmp_path):
+    for note in PAST:
+        path = path_of(tmp_path, note)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered(note), encoding="utf-8")
+    return tmp_path
+
+
+def draft(root, stream=STREAM, previous=None):
+    return drafted(stream, FRAGMENTS, Catalog.load(root), root, previous, WORDS)
+
+
+def export(root, stream=STREAM, previous=None, edits=None, delete=()):
+    notes, vanished, numbers, skipped = draft(root, stream, previous)
+    done = written(notes, vanished, edits or {}, delete, root, previous)
+    return NotesExport(run="r", issues=stream.issues.run, language="Russian", notes=done,
+                       numbers=numbers), notes, vanished, skipped
+
+
+def by_id(notes):
+    return {note.id: note for note in notes}
+
+
+def test_a_stream_becomes_linked_notes_with_numbers_after_the_catalog(root):
+    notes, vanished, numbers, skipped = draft(root)
+    assert vanished == []
+    assert [(n.id, n.type, n.action) for n in notes] == [
+        ("IDEA-0002", "idea", "create"),
+        ("OQ-0002", "open_question", "create"), ("OQ-0003", "open_question", "create"),
+        ("OQ-0004", "open_question", "create"),
+        ("PRO-0002", "proposal", "create"), ("PRO-0003", "proposal", "create"),
+        ("PRO-0004", "proposal", "create"), ("PRO-0005", "proposal", "create"),
+        ("ADR-0002", "adr", "create"), ("ADR-0003", "adr", "create"),
+        ("OUT-0002", "outcome", "create")]
+    note = by_id(notes)
+    assert note["OQ-0002"].text == "Что запускает деплой?"            # формулировка заметки
+    assert note["OQ-0002"].links == ["IDEA-0002"]
+    assert note["OQ-0004"].links == ["ADR-0001"]                       # пересматривает прошлое
+    assert note["PRO-0002"].links == ["OQ-0002"]
+    assert note["ADR-0002"].text == ("Деплой запускает CI после merge, потому что рутинные "
+                                     "шаги не должны требовать ручной координации.")
+    assert note["ADR-0002"].links == ["PRO-0002"]
+    # Решение по Q3 — в цепочке прошлой идеи: итог связан только с решениями своей.
+    assert note["OUT-0002"].links == ["ADR-0002"]
+    assert note["OUT-0002"].text == (
+        "Деплой по merge\n\nПосле merge CI сам выкладывает.\n\nКритерии готовности:\n"
+        "- Merge в main выкладывает сборку.\n\nЗадачи:\n- ISS-0008: Запуск деплоя по merge")
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1")]
+    assert any("O2" in reason and "не выгружается" in reason for reason in skipped)
+    assert any("O1" in reason and "пересматривают" in reason for reason in skipped)
+
+
+def test_written_notes_make_a_valid_graph_with_the_past_one(root):
+    record, _, _, _ = export(root)
+    catalog = Catalog.load(root)
+    assert catalog.problems() == []
+    assert catalog.status("ADR-0001") == ("superseded", "ADR-0003")
+    assert {note.id for note in record.notes} == {
+        "IDEA-0002", "OQ-0002", "OQ-0003", "OQ-0004", "PRO-0002", "PRO-0003", "PRO-0004",
+        "PRO-0005", "ADR-0002", "ADR-0003", "OUT-0002"}
+    assert (root / "adrs" / "ADR-0002.md").read_text(encoding="utf-8").startswith(
+        "---\nid: ADR-0002\ntype: adr\nlinks:\n- PRO-0002\n---\n")
+
+
+def test_exporting_again_keeps_numbers_and_human_edits(root):
+    first, _, _, _ = export(root, edits={"idea": "Деплой без ручной работы."})
+    notes, _, numbers, _ = draft(root, previous=first)
+    assert {note.action for note in notes} == {"same"}
+    assert by_id(notes)["IDEA-0002"].text == "Деплой без ручной работы."   # правка осталась
+    assert [n.id for n in numbers] == ["ISS-0008"]
+
+
+def test_a_file_edited_by_hand_is_left_alone(root):
+    first, _, _, _ = export(root)
+    path = root / "ideas" / "IDEA-0002.md"
+    path.write_text(path.read_text(encoding="utf-8") + "Дописали руками.\n", encoding="utf-8")
+    notes, _, _, _ = draft(root, previous=first)
+    edited = by_id(notes)["IDEA-0002"]
+    assert edited.action == "edited" and "Дописали руками." in edited.current
+    record, _, _, _ = export(root, previous=first)
+    assert "Дописали руками." in path.read_text(encoding="utf-8")
+    assert by_id(record.notes)["IDEA-0002"].digest == first.notes[0].digest
+
+
+def test_another_choice_is_another_decision_and_the_old_one_is_kept_unless_deleted(root):
+    first, _, _, _ = export(root)
+    other = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
+    notes, vanished, _, _ = draft(root, other, previous=first)
+    assert by_id(notes)["ADR-0004"].links == ["PRO-0003"]            # новый номер
+    assert [(v.id, v.linked_from) for v in vanished] == [("ADR-0002", [])]
+    record, _, _, _ = export(root, other, previous=first)
+    assert (root / "adrs" / "ADR-0002.md").exists()                     # само не удаляется
+    _, _, _, _ = export(root, other, previous=first, delete=["ADR-0002"])
+    assert not (root / "adrs" / "ADR-0002.md").exists()
+
+
+def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
+    first, _, _, _ = export(root)
+    outside = Note("OQ-0009", "open_question", "Пересмотреть?", ("ADR-0002",))
+    (root / "open_questions" / "OQ-0009.md").write_text(rendered(outside), encoding="utf-8")
+    other = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
+    _, vanished, _, _ = draft(root, other, previous=first)
+    assert [(v.id, v.linked_from) for v in vanished] == [("ADR-0002", ["OQ-0009"])]
+    with pytest.raises(NotesError, match="ссылаются OQ-0009"):
+        export(root, other, previous=first, delete=["ADR-0002"])
+
+
+def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):
+    first, _, _, _ = export(root)
+    more = ISSUES.model_copy(update={"issues": [
+        *ISSUES.issues, Issue(id="I2", title="Уведомление о деплое", user_story="…",
+                              outcome_ids=["O1"])]})
+    numbers = numbered_issues(STREAM.model_copy(update={"issues": more}), Catalog.load(root),
+                              first)
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
+
+
+def test_an_empty_text_is_not_written(root):
+    with pytest.raises(NotesError, match="пустой текст"):
+        export(root, edits={"idea": "   "})
