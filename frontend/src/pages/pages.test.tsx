@@ -678,7 +678,7 @@ describe('Поток: группа и идея', () => {
                                            choices: [{ question_id: 'Q1', proposal: 'P1' },
                                                      { question_id: 'Q2', proposal: null }] } })))
     const first = await screen.findByRole('radiogroup', { name: 'Где хранить состояние?' })
-    expect(within(first).getAllByRole('radio')).toHaveLength(3)    // F2 из группы, P1 от ИИ, «пока не решаю»
+    expect(within(first).getAllByRole('radio')).toHaveLength(4)    // F2 из группы, P1 от ИИ, свой, «пока не решаю»
     expect(within(first).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()
     expect(within(first).getByText(ru['options.recommended'])).toBeTruthy()
     expect(within(first).getByText('зависит от: Q2')).toBeTruthy()
@@ -698,6 +698,65 @@ describe('Поток: группа и идея', () => {
       choices: [{ question_id: 'Q1', proposal: 'P1' }, { question_id: 'Q2', proposal: null }] } }])
     expect(screen.getAllByText('P1 · Хранить в SQLite')).toHaveLength(2)   // ваш выбор и решение в ADR
     expect(screen.getAllByText(ru['decisions.checking'])).toHaveLength(2)    // оба вопроса ещё проверяют
+  })
+
+  it('свой вариант пишут прямо у вопроса — он уходит на сервер текстом, а номер даёт сервер', async () => {
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Хранить в SQLite', reason: '', constraint_ids: [], risk_ids: [], depends_on: [],
+            recommended: true }] },
+        { question_id: 'Q2', verdict: 'none', reason: null, proposals: [] }],
+    }
+    const ready = { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals }
+    const checking: DecisionAnalysis = { state: 'running', run: 'd1', choices: [], steps: [], analyses: [], error: null }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: ready }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { ...ready, analysis: checking, choices: [
+                 { question_id: 'Q1', proposal: 'P2', text: 'Хранить в Redis' }, { question_id: 'Q2', proposal: null }] } })))
+    const first = await screen.findByRole('radiogroup', { name: 'Где хранить состояние?' })
+    expect(within(first).getAllByRole('radio')).toHaveLength(4)    // F2, P1, свой, «пока не решаю»
+    expect(screen.queryByRole('textbox', { name: 'Свой вариант к Q1' })).toBeNull()
+    fireEvent.click(within(first).getByRole('radio', { name: /Свой вариант/ }))
+    const own = screen.getByRole('textbox', { name: 'Свой вариант к Q1' })
+    expect(document.activeElement).toBe(own)
+    expect(screen.getByText(ru['options.ownEmpty'])).toBeTruthy()
+    const second = screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
+    const approve = screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
+    expect(screen.getByText('Выбрано 1 из 2')).toBeTruthy()          // пустой свой — ещё не выбор
+    expect(approve.disabled).toBe(true)
+
+    fireEvent.change(own, { target: { value: '  Хранить   в Redis ' } })
+    expect(screen.queryByText(ru['options.ownEmpty'])).toBeNull()
+    // Выбрали другой и вернулись — текст на месте.
+    fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
+    expect(screen.queryByRole('textbox', { name: 'Свой вариант к Q1' })).toBeNull()
+    fireEvent.click(within(first).getByRole('radio', { name: /Свой вариант/ }))
+    expect((screen.getByRole('textbox', { name: 'Свой вариант к Q1' }) as HTMLTextAreaElement).value).toBe('  Хранить   в Redis ')
+    expect(screen.getByText('Выбрано 2 из 2')).toBeTruthy()
+    fireEvent.click(approve)
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'choices', body: {
+      run: 'g1', revision: 0, proposals_run: 'p1',
+      choices: [{ question_id: 'Q1', proposal: null, text: 'Хранить в Redis' }, { question_id: 'Q2', proposal: null }] } }])
+    expect(screen.getAllByText('P2 · Хранить в Redis')).toHaveLength(2)   // ваш выбор и решение в ADR
+  })
+
+  it('утверждённый свой вариант виден с номером, пока его текст не поправили', async () => {
+    const proposals: ProposalDiscovery = { state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: {
+      questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals,
+      choices: [{ question_id: 'Q1', proposal: 'F2' }, { question_id: 'Q2', proposal: 'P1', text: 'Считать потери' }] } }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['decisions.change'] }))
+    const second = await screen.findByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    const own = within(second).getByRole('radio', { name: /Свой вариант/ }) as HTMLInputElement
+    expect(own.checked).toBe(true)
+    expect(within(second).getByText('P1')).toBeTruthy()
+    const text = screen.getByRole('textbox', { name: 'Свой вариант к Q2' }) as HTMLTextAreaElement
+    expect(text.value).toBe('Считать потери')
+    expect(document.activeElement).not.toBe(text)
+    fireEvent.change(text, { target: { value: 'Считать потери по дням' } })
+    expect(within(second).queryByText('P1')).toBeNull()
   })
 
   it('варианты ищет ИИ — найденное видно по вопросу, утвердить нельзя', async () => {
@@ -980,6 +1039,18 @@ describe('Поток: решения и итоги', () => {
     expect(within(first).getByText(ru['decisions.waits'])).toBeTruthy()
   })
 
+  const OWN_CHOICE = [{ question_id: 'Q1', proposal: 'P3', text: 'Хранить в Redis' }, { question_id: 'Q2', proposal: null }]
+
+  it('свой вариант из выбора — среди вариантов решения', async () => {
+    const own: DecisionAnalysis = { ...CHECKED, analyses: [
+      { ...CHECKED.analyses[0], proposal: 'P3', rationale: 'Redis уже есть.' }, CHECKED.analyses[1]] }
+    openStream(() => deciding({ choices: OWN_CHOICE, analysis: own }))
+    const first = await card('Где хранить состояние?')
+    expect(within(first).getAllByText('P3 · Хранить в Redis')).toHaveLength(2)   // ваш выбор и решение в ADR
+    expect(within(first).getAllByRole('radio').map(r => r.textContent)).toEqual(['F2', 'P1', 'P3', ru['decisions.keepOpen']])
+    expect(why('Q1').value).toBe('Redis уже есть.')
+  })
+
   it('проблема, найденная ИИ, видна, но решению не мешает', async () => {
     const conflict: DecisionAnalysis = { ...CHECKED, analyses: [
       { question_id: 'Q1', verdict: 'conflict', proposal: 'F2', constraint_conflicts: [3], risk_ids: [], depends_on: [],
@@ -1030,6 +1101,12 @@ describe('Поток: решения и итоги', () => {
         gaps: [{ question: 'Где хранить отчёт?', reason: 'нет решения' }] },
     ],
   }
+
+  it('итог на решении своим вариантом — с его текстом', async () => {
+    openStream(() => deciding({ choices: OWN_CHOICE, outcomes: ASSEMBLED, decisions: [
+      { question_id: 'Q1', proposal: 'P3', rationale: 'Redis уже есть.', rationale_by: 'human' }, FIXED[1]] }))
+    expect(within(await card('Состояние в файлах')).getByText('Хранить в Redis')).toBeTruthy()   // ADR-1 — P3
+  })
 
   it('итоги: готовый и заблокированный открытым вопросом — из него назад, к этому вопросу', async () => {
     // В jsdom прокрутки нет: подставляем её на этот тест и убираем после.

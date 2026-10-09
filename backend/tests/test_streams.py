@@ -504,11 +504,17 @@ def test_no_scope_before_the_idea(agents):
 
 # --- варианты и выбор
 
+def choice_of(question, proposal, text=None):
+    """Выбор по вопросу; text — свой вариант человека."""
+    return {"question_id": question, "proposal": proposal} | (
+        {"text": text} if text is not None else {})
+
+
 def chose(council_id, group, choices, revision=0, proposals_run=None):
     run = proposals_run or streams_of(council_id)[group].proposals.run
     return client.post(f"/api/councils/{council_id}/streams/{group}/choices",
                        json={"run": "g1", "revision": revision, "proposals_run": run,
-                             "choices": [{"question_id": q, "proposal": p} for q, p in choices]})
+                             "choices": [choice_of(*choice) for choice in choices]})
 
 
 def proposes(council_id, group):
@@ -606,6 +612,49 @@ def test_a_senseless_choice_is_refused(agents, choices, problem):
     assert streams_of(council_id)["C"].choices is None
 
 
+OWN = "Спрашивать команду раз в месяц"
+
+
+def test_an_own_option_gets_a_number_after_the_councils(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    res = chose(council_id, "C", [("Q1", None, f"  {OWN} "), ("Q2", None, "Своё мерило")])
+    assert res.status_code == 200
+    choices = streams_of(council_id)["C"].choices
+    assert [(c.question_id, c.proposal, c.text) for c in choices] == [
+        ("Q1", "P3", OWN), ("Q2", "P4", "Своё мерило")]
+    # Найденное советом не меняется: свой вариант живёт в выборе.
+    assert [[p.id for p in o.proposals] for o in streams_of(council_id)["C"].proposals.options] == [
+        ["P1"], ["P2"]]
+
+
+def test_an_own_option_like_one_of_the_question_is_that_option(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    assert chose(council_id, "C", [("Q1", None, f"{OPTION.upper()}."),
+                                   ("Q2", None, OWN)]).status_code == 200
+    choices = streams_of(council_id)["C"].choices
+    assert [(c.question_id, c.proposal, c.text) for c in choices] == [
+        ("Q1", "P1", None), ("Q2", "P3", OWN)]
+
+
+@pytest.mark.parametrize(("own", "problem"), [
+    (("Q1", None, "  "), "Свой вариант по Q1 пуст"),
+    (("Q1", None, "x" * 601), "Свой вариант по Q1 длиннее 600 знаков"),
+    (("Q1", "P1", OWN), "По вопросу Q1 и вариант, и свой текст"),
+])
+def test_a_senseless_own_option_is_refused(agents, own, problem):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    res = chose(council_id, "C", [own, ("Q2", None)])
+    assert res.status_code == 422
+    assert problem in res.json()["detail"]
+    assert streams_of(council_id)["C"].choices is None
+
+
 def test_a_choice_for_an_earlier_search_or_before_proposals_is_refused(agents):
     council_id = grouped()
     confirm(council_id)
@@ -676,6 +725,46 @@ def test_the_same_choices_keep_the_check_and_other_ones_check_again(agents):
     stream = streams_of(council_id)["C"]
     assert stream.analysis.run != first and stream.decisions is None
     assert [a.verdict for a in stream.analysis.analyses] == ["recommended", "recommended"]
+
+
+def test_an_own_option_is_checked_decided_and_built_on_like_the_councils(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, OWN)])
+    analysis = streams_of(council_id)["C"].analysis
+    assert [(a.question_id, a.verdict, a.proposal) for a in analysis.analyses] == [
+        ("Q1", "validated", "P1"), ("Q2", "validated", "P3")]
+    prompt = agents.prompts["decision_analysis"]                       # последний — про Q2
+    assert json.loads(section(prompt, "PROPOSALS"))[-1] == {"id": "P3", "source": "user",
+                                                             "text": OWN}
+    assert json.loads(section(prompt, "USER SELECTION"))["proposal_id"] == "P3"
+
+    assert decide(council_id, "C", [("Q1", "P3", WHY), ("Q2", None, None)]).json()["detail"] == (
+        "У вопроса Q1 нет варианта P3")
+    assert decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P3", WHY)]).status_code == 200
+    adrs = json.loads(section(agents.prompts["outcome_discovery"], "ACCEPTED ADRS"))
+    assert [(adr["id"], adr["proposal_id"], adr["decision"]) for adr in adrs] == [
+        ("ADR-1", "P1", OPTION), ("ADR-2", "P3", OWN)]
+    assert approves(council_id, "C").status_code == 200
+    assert OWN in section(agents.prompts["issue_discovery"], "ACCEPTED ADRS")
+
+
+def test_another_own_option_checks_again_and_the_same_one_does_not(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, OWN)])
+    first = streams_of(council_id)["C"].analysis.run
+    decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P3", WHY)])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, f"{OWN} ")])
+    stream = streams_of(council_id)["C"]
+    assert stream.analysis.run == first and stream.decisions is not None
+
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, "Другое мерило")])
+    stream = streams_of(council_id)["C"]
+    assert stream.analysis.run != first and stream.decisions is None
+    assert stream.choices[1].text == "Другое мерило"
 
 
 def test_another_scope_or_idea_drops_the_check_and_the_decisions(agents):
@@ -774,10 +863,10 @@ def test_an_option_the_council_did_not_check_is_decided_with_ones_own_rationale(
     scope = [OpenQuestion(id="Q1", text=MEASURE, source="discovered", proposal_ids=[2, 3])]
     analysis = DecisionAnalysis(state="done", steps=[], analyses=[QuestionAnalysis(
         question_id="Q1", verdict="validated", proposal="F2", rationale=WHY)])
-    [other] = decided(scope, None, analysis,
+    [other] = decided(scope, {}, analysis,
                       [DecisionDraft(question_id="Q1", proposal="F3", rationale=WHY)])
     assert (other.proposal, other.rationale_by) == ("F3", "human")
-    [checked] = decided(scope, None, analysis,
+    [checked] = decided(scope, {}, analysis,
                         [DecisionDraft(question_id="Q1", proposal="F2", rationale=WHY)])
     assert checked.rationale_by == "ai"
 

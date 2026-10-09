@@ -1584,11 +1584,14 @@ function QuestionItem({ question, fragments, removed, busy, onToggle }: Readonly
   )
 }
 
+/** Выбран свой вариант: номер ему даст сервер, а до того в выборе — эта метка. */
+const OWN = 'own'
+
 /**
  * Шаг «Варианты»: к каждому отобранному вопросу совет ищет новые варианты ответа, а человек
- * выбирает один — из текста группы или найденный — либо оставляет вопрос unresolved: его
- * разберёт следующий шаг. Найденное к вопросу видно, как только готово. Черновик выбора — к
- * нынешнему поиску; утверждённый выбор — его начало.
+ * выбирает один — из текста группы, найденный или свой, написанный тут же, — либо оставляет
+ * вопрос unresolved: его разберёт следующий шаг. Найденное к вопросу видно, как только готово.
+ * Черновик выбора — к нынешнему поиску; утверждённый выбор — его начало.
  */
 function OptionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
@@ -1598,16 +1601,21 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const { t } = useTranslation()
   const search = stream.proposals
   const scope = stream.scope ?? []
-  // Выбор по вопросу: id варианта, null — unresolved; нет ключа — ещё не выбран.
+  // Выбор по вопросу: id варианта, OWN — свой, null — unresolved; нет ключа — ещё не выбран.
   const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(
-    () => new Map(stream.choices?.map(c => [c.question_id, c.proposal]) ?? []))
+    () => new Map(stream.choices?.map(c => [c.question_id, c.text ? OWN : c.proposal]) ?? []))
+  // Свой вариант по вопросу: выбрали другой — текст остаётся, вернулись — он на месте.
+  const [owned, setOwned] = useState<ReadonlyMap<string, string>>(
+    () => new Map(stream.choices?.flatMap(c => c.text ? [[c.question_id, c.text] as const] : []) ?? []))
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = search?.state === 'running'
   const stale = structureIsStale(council)
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const found = new Map(search?.options.map(o => [o.question_id, o]) ?? [])
-  const chosen = scope.filter(q => picked.has(q.id)).length
+  const ownOf = (question: string) => squash(owned.get(question) ?? '')
+  // Свой вариант без текста — ещё не выбор: такой сервер не примет.
+  const chosen = scope.filter(q => picked.has(q.id) && (picked.get(q.id) !== OWN || ownOf(q.id) !== '')).length
   // Пока ИИ работает с утверждённым выбором (проверяет, собирает итоги), выбор не поменять: 423.
   const checking = runningFrom(stream, 'analysis')
   const canApprove = !busy && !sought && !checking && !stale && search !== null && chosen === scope.length
@@ -1621,8 +1629,10 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const submit = () => void approve.go(async () => {
     try {
       return await api.approveChoices(council.id, { run: structure.run, revision: structure.revision },
-                                      group.id, search?.run ?? '',
-                                      scope.map(q => ({ question_id: q.id, proposal: picked.get(q.id) ?? null })))
+                                      group.id, search?.run ?? '', scope.map(q => {
+        const proposal = picked.get(q.id) ?? null
+        return proposal === OWN ? { question_id: q.id, proposal: null, text: ownOf(q.id) } : { question_id: q.id, proposal }
+      }))
     } catch (e) {
       // Группы уже другие (поправили в другой вкладке) — показываем нынешние.
       if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
@@ -1660,11 +1670,17 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
           </p>
         </div>
       )}
-      {scope.map(question => (
-        <QuestionChoice key={question.id} question={question} options={found.get(question.id)}
-                        sought={sought} fragments={fragments} value={picked.get(question.id)}
-                        busy={busy} onPick={proposal => pick(question.id, proposal)} />
-      ))}
+      {scope.map(question => {
+        const kept = stream.choices?.find(c => c.question_id === question.id)
+        return (
+          <QuestionChoice key={question.id} question={question} options={found.get(question.id)}
+                          sought={sought} fragments={fragments} value={picked.get(question.id)}
+                          own={owned.get(question.id) ?? ''}
+                          ownId={kept?.text && squash(kept.text) === ownOf(question.id) ? kept.proposal : null}
+                          busy={busy} onPick={proposal => pick(question.id, proposal)}
+                          onOwn={text => setOwned(before => new Map(before).set(question.id, text))} />
+        )
+      })}
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
       {checking && <p className="fragment-note">{t('options.belowRunning')}</p>}
       <div className="stream-actions spread">
@@ -1675,21 +1691,27 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   )
 }
 
-/** Вопрос и его варианты: из текста группы, найденные советом и «пока не решаю». */
-function QuestionChoice({ question, options, sought, fragments, value, busy, onPick }: Readonly<{
+/** Вопрос и его варианты: из текста группы, найденные советом, свой и «пока не решаю». */
+function QuestionChoice({ question, options, sought, fragments, value, own, ownId, busy, onPick, onOwn }: Readonly<{
   question: OpenQuestion; options: QuestionOptions | undefined; sought: boolean
-  fragments: Map<number, LabeledFragment>; value: string | null | undefined; busy: boolean
-  onPick: (proposal: string | null) => void
+  fragments: Map<number, LabeledFragment>; value: string | null | undefined
+  /** Свой вариант и его номер, если сервер уже принял этот текст. */
+  own: string; ownId: string | null; busy: boolean
+  onPick: (proposal: string | null) => void; onOwn: (text: string) => void
 }>) {
   const { t } = useTranslation()
   const name = `choice-${question.id}`
   const fromModels = question.source === 'inferred' || question.source === 'discovered'
-  const option = (id: string | null, body: ReactNode, className = 'option') => (
+  // Свой вариант выбрали только что — поле сразу под курсором; восстановленный выбор фокус не берёт.
+  const [writing, setWriting] = useState(false)
+  const option = (id: string | null, body: ReactNode, className = 'option', more?: ReactNode) => (
     <li key={id ?? 'unresolved'}>
       <label className={className}>
-        <input type="radio" name={name} checked={value === id} disabled={busy} onChange={() => onPick(id)} />
+        <input type="radio" name={name} checked={value === id} disabled={busy}
+               onChange={() => { setWriting(id === OWN); onPick(id) }} />
         <span className="option-body">{body}</span>
       </label>
+      {more}
     </li>
   )
   return (
@@ -1729,6 +1751,20 @@ function QuestionChoice({ question, options, sought, fragments, value, busy, onP
             )}
           </>
         )))}
+        {option(OWN, (
+          <span className="option-head">
+            {ownId && <span className="fragment-id">{ownId}</span>}
+            <span className="source-tag">{t('options.byYou')}</span>
+            <span className="option-text">{t('options.own')}</span>
+          </span>
+        ), 'option', value === OWN && (
+          <div className="option-own">
+            <textarea className="idea-text" aria-label={t('options.ownField', { id: question.id })} autoFocus={writing}
+                      placeholder={t('options.ownPlaceholder')} value={own} maxLength={600} readOnly={busy}
+                      onChange={e => onOwn(e.target.value)} />
+            {squash(own) === '' && <p className="fragment-note">{t('options.ownEmpty')}</p>}
+          </div>
+        ))}
         {option(null, t('options.unresolved'), 'option unresolved')}
       </ul>
       {!options && sought && <p className="option-note">{t('options.seeking')}</p>}
@@ -1770,7 +1806,7 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
   const sought = analysis?.state === 'running'
   const stale = structureIsStale(council)
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
-  const found = new Map(stream.proposals?.options.map(o => [o.question_id, o.proposals]) ?? [])
+  const found = foundOf(stream)
   const said = new Map(analysis?.analyses.map(a => [a.question_id, a]) ?? [])
   // Обоснование совета — к тому варианту, который он проверил или рекомендовал.
   const suggested = (question: string, proposal: string) => {
@@ -1792,7 +1828,7 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
 
   const optionsOf = (question: OpenQuestion) => [
     ...question.proposal_ids.map(id => ({ id: `F${id}`, text: fragments.get(id)?.text ?? '—' })),
-    ...(found.get(question.id) ?? []).map(p => ({ id: p.id, text: p.text })),
+    ...(found.get(question.id) ?? []),
   ]
   const check = () => void retry.go(() => startOrFollow(
     () => api.checkChoices(council.id, group.id), council, c => streamOf(c, group.id)?.analysis))
@@ -1991,7 +2027,7 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
   const stale = structureIsStale(council)
   const scope = stream.scope ?? []
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
-  const found = new Map(stream.proposals?.options.flatMap(o => o.proposals).map(p => [p.id, p.text]) ?? [])
+  const found = new Map([...foundOf(stream).values()].flat().map(p => [p.id, p.text]))
   const textOf = (id: string) => (id.startsWith('F') ? fragments.get(Number(id.slice(1)))?.text : found.get(id)) ?? id
   // Решение ADR-n — по n-му вопросу отбора: тот же номер, что у его карточки на шаге «Решения».
   const adrs = new Map(scope.flatMap((question, n) => {
@@ -2079,7 +2115,7 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
   const stale = structureIsStale(council)
   const scope = stream.scope ?? []
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
-  const found = new Map(stream.proposals?.options.flatMap(o => o.proposals).map(p => [p.id, p.text]) ?? [])
+  const found = new Map([...foundOf(stream).values()].flat().map(p => [p.id, p.text]))
   const textOf = (id: string) => (id.startsWith('F') ? fragments.get(Number(id.slice(1)))?.text : found.get(id)) ?? id
   const adrs = new Map(scope.flatMap((question, n) => {
     const proposal = stream.decisions?.find(d => d.question_id === question.id)?.proposal
@@ -2331,6 +2367,16 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap
 }
 
 /** Что предлагал совет: его предложение и варианты участников. */
+/** Варианты вопросов, кроме предложений группы: найденные советом и свой вариант человека из выбора. */
+function foundOf(stream: Stream): Map<string, { id: string; text: string }[]> {
+  const found = new Map((stream.proposals?.options ?? []).map(o => [
+    o.question_id, o.proposals.map(p => ({ id: p.id, text: p.text }))]))
+  for (const { question_id, proposal, text } of stream.choices ?? []) {
+    if (proposal && text) found.set(question_id, [...(found.get(question_id) ?? []), { id: proposal, text }])
+  }
+  return found
+}
+
 function offeredBy(search: IdeaDiscovery | null): { idea: string; evidence: number[]; reason: string }[] {
   if (!search) return []
   const proposal = search.proposal?.idea ? [{ ...search.proposal, idea: search.proposal.idea }] : []

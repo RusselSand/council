@@ -4,12 +4,14 @@
 Вариант — один возможный ответ, а не решение. Его ссылки — на ограничения и риски группы и
 на другие вопросы потока, от которых он зависит. Ссылки вторичны: чужой или не тот номер
 просто отбрасывается, а сам вариант остаётся. Одинаковые варианты разных участников — один.
+Свой вариант человек пишет при выборе: он хранится в выборе и встаёт к найденным советом.
 """
 
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .ideas import fragment_number, reason_of
+from .models import Choice, Proposal, ProposalDiscovery
 from .questions import same_question
 from .slicing import BadAnswer
 
@@ -137,3 +139,22 @@ def as_prompt(candidate: Candidate) -> dict:
             "constraint_ids": [f"F{i}" for i in candidate.constraint_ids],
             "risk_ids": [f"F{i}" for i in candidate.risk_ids],
             "depends_on_question_ids": list(candidate.depends_on)}
+
+
+def found_by_question(search: ProposalDiscovery | None,
+                      choices: Iterable[Choice] | None = None) -> dict[str, list[Proposal]]:
+    """Варианты каждого вопроса, кроме предложений группы: найденные советом и следом — свой
+    вариант человека из его выбора."""
+    found = {options.question_id: list(options.proposals)
+             for options in (search.options if search else [])}
+    for choice in choices or ():
+        if choice.text is not None and choice.proposal is not None:
+            found.setdefault(choice.question_id, []).append(
+                Proposal(id=choice.proposal, text=choice.text, reason="", source="added"))
+    return found
+
+
+def last_number(search: ProposalDiscovery | None) -> int:
+    """Последний номер варианта, найденного советом: свои варианты человека — дальше."""
+    return max((int(proposal.id[1:]) for options in (search.options if search else [])
+                for proposal in options.proposals if proposal.id[1:].isdigit()), default=0)

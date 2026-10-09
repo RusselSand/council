@@ -216,8 +216,11 @@ export interface ProposalDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; scope: string[]; steps: Step[]
   options: QuestionOptions[]; error: string | null
 }
-/** Выбор по вопросу: Fn — вариант из текста, Pn — найденный советом, null — пока не решает (unresolved). */
-export interface Choice { question_id: string; proposal: string | null }
+/**
+ * Выбор по вопросу: Fn — вариант из текста, Pn — найденный советом или свой, null — пока не решает
+ * (unresolved). text — свой вариант человека: на сервер — с proposal null, с сервера — с его номером Pn.
+ */
+export interface Choice { question_id: string; proposal: string | null; text?: string | null }
 /**
  * Что совет сказал по вопросу перед решением. validated — выбор человека проверен, проблем нет;
  * conflict — с ним проблема (решать всё равно человеку); recommended — для unresolved совет

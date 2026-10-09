@@ -16,6 +16,7 @@ from spec_council.export import (
     written,
 )
 from spec_council.models import (
+    Choice,
     Decision,
     Issue,
     IssueDiscovery,
@@ -185,6 +186,22 @@ def test_another_choice_is_another_decision_and_the_old_one_is_kept_unless_delet
     assert [v.id for v in vanished] == ["ADR-0002"]                       # и снова к удалению
     _, _, _, _ = export(root, other, previous=first, delete=["ADR-0002"])
     assert not (root / "adrs" / "ADR-0002.md").exists()
+
+
+def test_an_own_option_is_exported_as_a_proposal_with_its_decision(root):
+    own = "Секреты лежат в переменных окружения."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="F3"),
+                    Choice(question_id="Q2", proposal="P4", text=own),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": [DECIDED[0], Decision(question_id="Q2", proposal="P4", rationale="Так проще.",
+                                           rationale_by="human"), DECIDED[2]]})
+    notes, _, _, _ = draft(root, stream)
+    asked = next(n for n in notes if n.text == SCOPE[1].text)
+    proposal = next(n for n in notes if n.type == "proposal" and n.text == own)
+    assert proposal.links == [asked.id]
+    adr = next(n for n in notes if n.type == "adr" and n.links == [proposal.id])
+    assert adr.text == "Секреты лежат в переменных окружения, потому что так проще."
 
 
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
