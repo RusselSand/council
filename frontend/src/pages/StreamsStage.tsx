@@ -4,13 +4,13 @@ import { Link, useParams } from 'react-router'
 import {
   api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, outcomeReady, REPOSITORIES_MAX, startOrFollow,
   streamOf, structureIsStale, type Council, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
-  type IssueGap, type LabeledFragment, type Model, type OpenQuestion, type Outcome, type QuestionAnalysis,
+  type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
-import { CHAIN, chainLight, currentStep, exported, reachable, streamLight, type ChainStep } from '../light'
+import { CHAIN, chainLight, currentStep, exported, exportedCount, reachable, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
 type T = ReturnType<typeof useTranslation>['t']
@@ -387,7 +387,7 @@ function notesStatus(stream: Stream, t: T): string {
   const draft = stream.notes_draft
   if (draft?.state === 'running') return t('chain.notesTranslating')
   if (draft?.state === 'failed') return t('chain.notesFailed')
-  if (exported(stream)) return t('chain.notesWritten', { count: stream.notes?.notes.length ?? 0 })
+  if (exported(stream)) return t('chain.notesWritten', { count: exportedCount(stream) })
   if (stream.notes) return t('chain.notesOutdated')
   if (draft) return t('chain.notesDrafted')
   return t('chain.notesNone')
@@ -1250,6 +1250,9 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
   const stale = !!draft && stream.issues?.run !== draft.issues
   const ready = draft?.state === 'done' && !stale
   const written = !!draft && stream.notes?.run === draft.run && exported(stream)
+  // Записанное — с правками человека: они есть только в выгрузке, черновик их не знает.
+  const wrote = new Map(written ? stream.notes?.notes.map(note => [note.key, note.written]) : [])
+  const shown = (note: NotePlan) => wrote.get(note.key) ?? edits[note.key] ?? note.text
   const locked = act.busy || drafting.busy || building || structureIsStale(council)
   const build = () => void drafting.go(() => startOrFollow(
     () => api.draftNotes(council.id, at, group.id), council, c => streamOf(c, group.id)?.notes_draft))
@@ -1277,7 +1280,7 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
         {root ? <p className="repo-summary">{t('notes.where', { root })}</p> : <p className="fragment-note">{t('notes.noRoot')}</p>}
         {stream.notes && (
           <p className={exported(stream) ? 'check ok' : 'fragment-note'}>
-            {t(exported(stream) ? 'notes.written' : 'notes.outdated', { count: stream.notes.notes.length })}
+            {t(exported(stream) ? 'notes.written' : 'notes.outdated', { count: exportedCount(stream) })}
           </p>
         )}
         <div className="stream-actions">
@@ -1313,8 +1316,8 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
                         </>
                       ) : (
                         <textarea className="text-field note-text" aria-label={t('notes.text', { id: note.id })}
-                                  value={edits[note.key] ?? note.text} readOnly={locked || written}
-                                  rows={Math.min(8, (edits[note.key] ?? note.text).split('\n').length + 1)}
+                                  value={shown(note)} readOnly={locked || written}
+                                  rows={Math.min(8, shown(note).split('\n').length + 1)}
                                   onChange={e => {
                                     const value = e.target.value
                                     setEdits(before => ({ ...before, [note.key]: value }))

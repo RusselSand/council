@@ -88,7 +88,7 @@ class FakeRunner:
 
 def names_models(prompt):
     """Судья видит имена моделей — словами, а не частью другого слова («solution»)."""
-    return re.search(r"(sol|fable)", prompt) is not None
+    return re.search(r"\b(sol|fable)\b", prompt) is not None
 
 
 def run(replies, participants=("sol", "fable"), judge="fable"):

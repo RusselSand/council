@@ -812,6 +812,9 @@ class ExportedNote(BaseModel):
     written: str
     links: list[str] = []
     digest: str
+    # Исчезла из потока, а человек оставил её в каталоге: заметка всё ещё потока — её решения
+    # не «прошлые» для него, и повторная выгрузка снова предложит её удалить.
+    kept: bool = False
 
 
 class NotesExport(BaseModel):

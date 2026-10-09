@@ -212,6 +212,20 @@ def test_past_decisions_are_selected_before_the_questions(agents):
     assert stream.questions.run != first
 
 
+def test_a_catalog_that_appears_later_leaves_the_found_questions_alone(agents, tmp_path):
+    root = tmp_path / "later"
+    root.mkdir()
+    app.dependency_overrides[get_notes_root] = lambda: root
+    council_id = at_questions()
+    stream = streams_of(council_id)["C"]
+    assert stream.decisions_search is None and stream.questions.state == "done"
+    first = stream.questions.run
+    put(root)                                  # другой поток выгрузил решения
+    assert passes(council_id, "C").status_code == 200       # тот же шаг «Дизайн» ещё раз
+    stream = streams_of(council_id)["C"]
+    assert stream.decisions_search is None and stream.questions.run == first
+
+
 def test_a_decision_not_from_the_selection_is_refused(agents):
     council_id = at_questions()
     res = picks(council_id, ["ADR-0002"])

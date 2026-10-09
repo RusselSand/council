@@ -471,6 +471,10 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
         changes: dict = {"design": step}
         runs: list[CouncilRun] = []
         ready = stream.model_copy(update={"design": step})
+        # То же, что сочла plan(): иначе ходы ниже сбросились бы мимо её проверок (423, модели).
+        if not asks_anew(stream, stream.repository, step):
+            return store.update_council(council_id, {
+                "streams": replaced(council, stream.model_copy(update=changes))}), runs
         catalog = project_catalog(notes, stream)
         if catalog is not None and searches_anew(ready):
             if missing:
@@ -481,7 +485,7 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
                 runs = [decisions_run(council, group, ready, agents, store, catalog)]
                 search = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DESIGN, "decisions_search": search}
-        elif catalog is None and asks_anew(stream, stream.repository, step, []):
+        elif catalog is None:
             if missing:
                 questions = unconnected(start_questions(
                     council.participants, council.judge, stream.idea.text,

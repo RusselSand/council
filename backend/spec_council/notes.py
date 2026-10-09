@@ -203,17 +203,22 @@ class Catalog:
 
     def status(self, adr_id: str) -> tuple[str, str | None]:
         """Действует ли решение: из ADR вырос вопрос (его пересматривают) — under_review, пока
-        на вопрос нет нового ADR, и superseded, когда он есть (и каким)."""
+        на вопрос нет нового ADR, и superseded, когда он есть (и каким). Пересмотров несколько
+        и хоть один уже решён — заменено, сколько бы других ещё ни шло."""
         replaced = None
+        pending = False
         for question in self.children(adr_id):
             if question.type != "open_question":
                 continue
             answers = [adr for proposal in self.children(question.id)
                        for adr in self.children(proposal.id) if adr.type == "adr"]
-            if not answers:
-                return "under_review", None
-            replaced = replaced or answers[-1].id
-        return ("superseded", replaced) if replaced else ("active", None)
+            if answers:
+                replaced = replaced or answers[-1].id
+            else:
+                pending = True
+        if replaced:
+            return "superseded", replaced
+        return ("under_review", None) if pending else ("active", None)
 
 
 def order(note: Note) -> tuple[int, str]:

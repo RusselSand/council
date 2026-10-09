@@ -17,6 +17,7 @@
 
 import hashlib
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,15 @@ def knows_words(language: str) -> bool:
 def word_language(language: str) -> str:
     name = language.strip().lower()
     return ALIASES.get(name, name)
+
+
+def keyed(bases: Sequence[str], details: Sequence[str], taken: set[str]) -> list[str]:
+    """Ключи частей одного рода. У совпавших формулировок (два итога с одним названием) в ключе
+    и подробность — поведение итога, история задачи: ключ держится за суть, а не за место в
+    списке, и модель, отдавшая их в другом порядке, не поменяет им номера местами."""
+    counts = Counter(bases)
+    return [unique(base if counts[base] == 1 else f"{base}|{detail}", taken)
+            for base, detail in zip(bases, details, strict=True)]
 
 
 def unique(key: str, taken: set[str]) -> str:
@@ -189,7 +199,10 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
             by_outcome.setdefault(outcome_id, []).append(number)
     parts: list[Part] = []
     skipped: list[str] = []
-    for outcome in stream.outcomes.outcomes if stream.outcomes else []:
+    outcomes = stream.outcomes.outcomes if stream.outcomes else []
+    keys = keyed([f"o:{same_question(outcome.title)}" for outcome in outcomes],
+                 [same_question(outcome.behavior) for outcome in outcomes], taken)
+    for outcome, key in zip(outcomes, keys, strict=True):
         linked = [adr_of[name] for name in outcome.adr_ids if name in adr_of]
         own = [key for key in linked if key not in external]
         if len(own) < len(linked):
@@ -201,8 +214,7 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
             continue
         text = outcome_text(outcome.title, outcome.behavior, outcome.acceptance_criteria,
                             by_outcome.get(outcome.id, []), words)
-        parts.append(Part(unique(f"o:{same_question(outcome.title)}", taken), "outcome", text,
-                          tuple(dict.fromkeys(own))))
+        parts.append(Part(key, "outcome", text, tuple(dict.fromkeys(own))))
     return parts, skipped
 
 
@@ -217,9 +229,10 @@ def numbered_issues(stream: Stream, catalog: Catalog,
              if (found := ISSUE.fullmatch(number))]
     top = max(used, default=0)
     numbers: list[IssueNumber] = []
-    taken: set[str] = set()
-    for issue in stream.issues.issues if stream.issues else []:
-        key = unique(f"i:{same_question(issue.title)}", taken)
+    issues = stream.issues.issues if stream.issues else []
+    keys = keyed([f"i:{same_question(issue.title)}" for issue in issues],
+                 [same_question(issue.user_story) for issue in issues], set())
+    for issue, key in zip(issues, keys, strict=True):
         if key in known:
             identifier = known[key]
         else:
@@ -293,31 +306,45 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
             edits: Mapping[str, str], delete: Sequence[str], root: Path,
             previous: NotesExport | None) -> list[ExportedNote]:
     """Записывает подтверждённое: заметки с правками человека (edits — по ключу), удаляет
-    отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено."""
+    отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено, —
+    и исчезнувшие, что человек оставил в каталоге: они всё ещё потока.
+
+    Сначала всё, что может не выйти, — пустой текст, временные файлы, удаление; только потом
+    временные файлы подменяют заметки: отказ не оставит каталог выгруженным наполовину."""
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
     texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
              if plan.action != "edited"}
     empty = [plan.id for plan in notes if texts.get(plan.key) == ""]
-    if empty:                            # до первой записи: каталог не останется наполовину
+    if empty:
         raise NotesError(f"У заметки {empty[0]} пустой текст")
+    changed = [plan for plan in notes if plan.action != "edited"
+               and (plan.action != "same" or texts[plan.key] != plan.text.strip())]
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for plan in changed:
+            path = path_of(root, Note(plan.id, plan.type, ""))
+            note = Note(plan.id, plan.type, texts[plan.key], tuple(plan.links))
+            staged.append((staged_file(path, rendered(note)), path))
+        for note_id in delete:
+            removed(path_of(root, Note(note_id, gone[note_id].type, "")))
+    except NotesError:
+        for part, _ in staged:
+            part.unlink(missing_ok=True)
+        raise
+    placed(staged)
     exported: list[ExportedNote] = []
     for plan in notes:
-        path = path_of(root, Note(plan.id, plan.type, ""))
         if plan.action == "edited":
-            old = before[plan.key]
-            exported.append(old.model_copy(update={"generated": plan.generated}))
+            exported.append(before[plan.key].model_copy(update={"generated": plan.generated}))
             continue
-        text = texts[plan.key]
-        note = Note(plan.id, plan.type, text, tuple(plan.links))
-        if plan.action != "same" or text != plan.text.strip():
-            write_file(path, rendered(note))
+        path = path_of(root, Note(plan.id, plan.type, ""))
         exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
-                                     generated=plan.generated, written=text, links=plan.links,
-                                     digest=digest_of(path)))
-    for note_id in delete:
-        path_of(root, Note(note_id, gone[note_id].type, "")).unlink(missing_ok=True)
-    return exported
+                                     generated=plan.generated, written=texts[plan.key],
+                                     links=plan.links, digest=digest_of(path)))
+    kept = [old.model_copy(update={"kept": True}) for old in before.values()
+            if old.id in gone and old.id not in delete]
+    return exported + kept
 
 
 def deletable(vanished: Sequence[VanishedNote], delete: Sequence[str]) -> dict[str, VanishedNote]:
@@ -383,13 +410,32 @@ def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
     return found
 
 
-def write_file(path: Path, text: str) -> None:
-    """Через временный файл и подмену: оборванная запись заметку не испортит."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def staged_file(path: Path, text: str) -> Path:
+    """Заметка во временном файле рядом: подменит её placed, когда всё остальное вышло."""
     part = path.with_suffix(".md.part")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         part.write_text(text, encoding="utf-8", newline="\n")
-        part.replace(path)
     except OSError as exc:
         part.unlink(missing_ok=True)
         raise NotesError(f"Заметку {path.name} не записать: {exc.strerror or exc}") from exc
+    return part
+
+
+def placed(staged: Sequence[tuple[Path, Path]]) -> None:
+    """Временные файлы — на место заметок. Подмена в той же папке: оборванная запись заметку
+    не испортит."""
+    for n, (part, path) in enumerate(staged):
+        try:
+            part.replace(path)
+        except OSError as exc:
+            for rest, _ in staged[n:]:
+                rest.unlink(missing_ok=True)
+            raise NotesError(f"Заметку {path.name} не записать: {exc.strerror or exc}") from exc
+
+
+def removed(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise NotesError(f"Заметку {path.name} не удалить: {exc.strerror or exc}") from exc

@@ -122,6 +122,10 @@ def test_a_decision_questioned_again_is_under_review_and_then_superseded():
     catalog = Catalog({note.id: note for note in (*CHAIN, revisit, answer, newer)})
     assert catalog.status("ADR-0001") == ("superseded", "ADR-0002")
     assert catalog.roots("ADR-0002") == {"IDEA-0001"}       # пересмотр — в той же цепочке
+    # Второй поток тоже пересматривает ADR-0001 и ещё не решил: заменённое уже не «под вопросом».
+    another = Note("OQ-0003", "open_question", "Нужен ли деплой по merge?", ("ADR-0001",))
+    catalog = Catalog({note.id: note for note in (*CHAIN, another, revisit, answer, newer)})
+    assert catalog.status("ADR-0001") == ("superseded", "ADR-0002")
 
 
 def test_issue_numbers_are_found_in_texts():

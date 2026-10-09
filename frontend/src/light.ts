@@ -58,6 +58,9 @@ export const reachable = (stream: Stream): ChainStep => stream.issues?.state ===
 export const exported = (stream: Stream): boolean =>
   !!stream.notes && !!stream.issues && stream.notes.issues === stream.issues.run
 
+/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
+export const exportedCount = (stream: Stream): number => stream.notes?.notes.filter(note => !note.kept).length ?? 0
+
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
  * Утверждённая идея проходит шаг, и прежний поиск идеи, даже упавший, уже не важен. Итоги

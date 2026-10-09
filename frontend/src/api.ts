@@ -320,6 +320,8 @@ export interface NotesDraft {
 }
 export interface ExportedNote {
   key: string; id: string; type: NoteType; generated: string; written: string; links: string[]; digest: string
+  /** Исчезла из потока, а её оставили в каталоге: всё ещё потока, но в выгрузку не входит. */
+  kept: boolean
 }
 /** Последняя выгрузка потока: из какого черновика и к каким задачам. */
 export interface NotesExport { run: string; issues: string; language: string; notes: ExportedNote[]; numbers: IssueNumber[] }

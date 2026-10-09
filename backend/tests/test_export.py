@@ -1,5 +1,7 @@
 """Выгрузка потока в заметки: что ложится, под какими номерами и что при повторной выгрузке."""
 
+from pathlib import Path
+
 import pytest
 
 from spec_council.export import (
@@ -173,6 +175,10 @@ def test_another_choice_is_another_decision_and_the_old_one_is_kept_unless_delet
     assert [(v.id, v.linked_from) for v in vanished] == [("ADR-0002", [])]
     record, _, _, _ = export(root, other, previous=first)
     assert (root / "adrs" / "ADR-0002.md").exists()                     # само не удаляется
+    kept = [note for note in record.notes if note.kept]
+    assert [(n.id, n.key) for n in kept] == [("ADR-0002", first.notes[8].key)]   # всё ещё наше
+    _, vanished, _, _ = draft(root, other, previous=record)
+    assert [v.id for v in vanished] == ["ADR-0002"]                       # и снова к удалению
     _, _, _, _ = export(root, other, previous=first, delete=["ADR-0002"])
     assert not (root / "adrs" / "ADR-0002.md").exists()
 
@@ -206,21 +212,50 @@ def test_a_vanished_parent_is_not_deleted_while_a_vanished_child_links_to_it(roo
     assert Catalog.load(root).problems() == []
 
 
-def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
+def twins(order=(0, 1)):
     twin = OUTCOMES.outcomes[0].model_copy(update={"id": "O3", "behavior": "И откат по merge."})
-    stream = STREAM.model_copy(update={
-        "outcomes": OUTCOMES.model_copy(update={"outcomes": [*OUTCOMES.outcomes, twin]}),
-        "issues": ISSUES.model_copy(update={"issues": [
-            *ISSUES.issues, ISSUES.issues[0].model_copy(update={"id": "I2",
-                                                                "outcome_ids": ["O3"]})]})})
-    first, notes, _, _ = export(root, stream)
+    other = ISSUES.issues[0].model_copy(update={"id": "I2", "user_story": "As an ops…",
+                                                "outcome_ids": ["O3"]})
+    outcomes, issues = [OUTCOMES.outcomes[0], twin], [ISSUES.issues[0], other]
+    return STREAM.model_copy(update={
+        "outcomes": OUTCOMES.model_copy(update={"outcomes": [
+            *(outcomes[i] for i in order), OUTCOMES.outcomes[1]]}),
+        "issues": ISSUES.model_copy(update={"issues": [issues[i] for i in order]})})
+
+
+def test_a_note_that_cannot_be_deleted_stops_the_export_before_any_write(root, monkeypatch):
+    first, _, _, _ = export(root)
+    other = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"proposal": "P1"}), *DECIDED[1:]]})
+    unlink = Path.unlink
+
+    def refused(path, missing_ok=False):
+        if path.name == "ADR-0002.md":
+            raise PermissionError(13, "Permission denied")
+        return unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refused)
+    with pytest.raises(NotesError, match="ADR-0002.md не удалить"):
+        export(root, other, previous=first, delete=["ADR-0002"])
+    assert not (root / "adrs" / "ADR-0004.md").exists()                  # новое не записано
+    assert list(root.rglob("*.part")) == []
+    assert (root / "adrs" / "ADR-0002.md").exists()
+
+
+def test_outcomes_and_issues_with_the_same_title_stay_separate(root):
+    first, notes, _, _ = export(root, twins())
     assert len({note.key for note in notes}) == len(notes)
     assert [n.id for n in notes if n.type == "outcome"] == ["OUT-0002", "OUT-0003"]
     assert "И откат по merge." in (root / "outcomes" / "OUT-0003.md").read_text(encoding="utf-8")
     assert [(n.id, n.issue_id) for n in first.numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
-    again, _, numbers, _ = draft(root, stream, previous=first)
+    again, _, numbers, _ = draft(root, twins(), previous=first)
     assert {note.action for note in again} == {"same"}
     assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0008", "I1"), ("ISS-0009", "I2")]
+    # Модель отдала их в другом порядке — номера держатся за суть, а не за место в списке.
+    swapped, _, numbers, _ = draft(root, twins((1, 0)), previous=first)
+    assert {n.id: n.text.split("\n")[2] for n in swapped if n.type == "outcome"} == {
+        "OUT-0002": "После merge CI сам выкладывает.", "OUT-0003": "И откат по merge."}
+    assert [(n.id, n.issue_id) for n in numbers] == [("ISS-0009", "I2"), ("ISS-0008", "I1")]
 
 
 def test_a_new_issue_takes_the_next_number_and_the_old_ones_keep_theirs(root):

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotesDraft, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
+  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
   RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure,
 } from '../api'
@@ -1301,6 +1301,21 @@ describe('Поток: решения и итоги', () => {
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.noRoot'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
+    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', numbers: DRAFT.numbers, notes: [
+      { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
+        links: [], digest: 'd1', kept: false },
+      { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
+        links: [], digest: 'd2', kept: true }] }
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT, notes }),
+             () => json(atStart()))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText('Выгружено заметок: 1.')).toBeTruthy()
+    const idea = screen.getByRole('textbox', { name: 'Текст заметки IDEA-0002' }) as HTMLTextAreaElement
+    expect(idea.value).toBe('Воркер не теряет результат.')
+    expect(idea.readOnly).toBe(true)
   })
 
   it('черновик заметок не собрался — причина видна, собрать можно снова', async () => {
