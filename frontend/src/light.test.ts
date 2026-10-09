@@ -4,7 +4,7 @@ import type {
   Council, DecisionAnalysis, DesignScan, IdeaDiscovery, Outcome, OutcomeDiscovery, ProposalDiscovery, QuestionDiscovery,
   RepositoryScan, Slicing, Stream, Structure,
 } from './api'
-import { attention, CHAIN, chainLight, councilLight, currentStep, stageLight, streamLight } from './light'
+import { attention, CHAIN, chainLight, councilLight, currentStep, reachable, stageLight, streamLight } from './light'
 
 const BASE: Council = {
   id: 'c1', name: 'Совет', status: 'brief', brief: 'текст', participants: ['sol', 'fable'], judge: 'fable',
@@ -22,7 +22,7 @@ const structure = (state: Structure['state'], labels: Structure['labels'] = { 1:
 const search = (state: IdeaDiscovery['state']): IdeaDiscovery =>
   ({ state, run: 'i1', steps: [], options: [], proposal: null, error: null })
 const asked = (state: QuestionDiscovery['state']): QuestionDiscovery =>
-  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', steps: [], questions: [], error: null })
+  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', decisions: [], steps: [], questions: [], error: null })
 const offered = (state: ProposalDiscovery['state']): ProposalDiscovery =>
   ({ state, run: 'p1', scope: [], steps: [], options: [], error: null })
 const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>
@@ -52,7 +52,8 @@ const stream = (discovery: IdeaDiscovery | null, approved = false, questions: Qu
   // Утверждённая идея — шаги «Репозиторий» и «Дизайн» пропущены: их проверяют свои тесты.
   scan: null, repository: approved ? { by: 'skipped', scan_run: '' } : null,
   design_scan: null, design: approved ? { by: 'skipped', scan_run: '' } : null,
-  scope: chosen ? [{ id: 'Q1', text: 'Как?', source: 'discovered', source_question_id: null, proposal_ids: [], reason: null }]
+  decisions_search: null, project_decisions: null, notes_draft: null, notes: null,
+  scope: chosen ? [{ id: 'Q1', text: 'Как?', source: 'discovered', source_question_id: null, proposal_ids: [], reason: null, note: null, revisits: null }]
     : null,
   proposals, choices: picked ? [{ question_id: 'Q1', proposal: null }] : null,
   analysis, decisions: decided ? [{ question_id: 'Q1', proposal: null, rationale: null, rationale_by: null }] : null,
@@ -90,7 +91,7 @@ describe('светофор', () => {
     expect(streamLight(stream(search('done')))).toBe('yours')
     const picked = stream(search('done'), true, asked('done'), true, offered('done'), true)
     expect(streamLight(picked)).toBe('yours')
-    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'yours', 'idle', 'idle'])
+    expect(CHAIN.map(step => chainLight(picked, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'yours', 'idle', 'idle', 'idle'])
   })
 
   it('своя идея после упавшего поиска: поток прошёл шаг, ошибки больше нет', () => {
@@ -196,7 +197,7 @@ describe('светофор', () => {
     const approved = on(assembled('done', [result({ blocked_by: ['Q1'] })]), cut('running'))
     expect(currentStep(approved)).toBe('issues')
     expect(CHAIN.map(step => chainLight(approved, step)))
-      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'running'])
+      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'running', 'idle'])
   })
 
   it('задачи: нарезает ИИ, нарезка упала; все готовы и каждый итог в задаче — поток готов', () => {
@@ -208,13 +209,22 @@ describe('светофор', () => {
     const gaps = on({ ...cut('done', [task()]), gaps: [{ id: 'G1', question: 'Где отчёт?', reason: '', outcome_ids: [] }] })
     const lost = on({ ...cut('done', [task()]), uncovered_outcome_ids: ['O2'] })
     const none = on(cut('done'))
+    // Все задачи готовы — дальше документация: поток готов, когда выгружен к этим задачам.
     expect([on(cut('running')), on(cut('failed')), ready, blocked, gaps, lost, none].map(streamLight))
-      .toEqual(['running', 'failed', 'done', 'yours', 'yours', 'yours', 'yours'])
-    expect(CHAIN.map(step => chainLight(ready, step))).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done'])
+      .toEqual(['running', 'failed', 'yours', 'yours', 'yours', 'yours', 'yours'])
+    expect([currentStep(ready), currentStep(blocked), reachable(blocked)]).toEqual(['notes', 'issues', 'notes'])
+    expect(CHAIN.map(step => chainLight(ready, step)))
+      .toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'yours'])
+    const written = { ...ready, notes: { run: 'n1', issues: 'i1', language: 'Russian', notes: [], numbers: [] } }
+    expect(streamLight(written)).toBe('done')
+    expect(streamLight({ ...written, notes: { ...written.notes, issues: 'i0' } })).toBe('yours')   // к прежним задачам
+    expect(chainLight({ ...ready, notes_draft: { state: 'running', run: 'n2', issues: 'i1', language: 'English',
+      steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } }, 'notes')).toBe('running')
     const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
     expect(attention(council(blocked)).map(a => a.what)).toEqual(['issuesWait'])
     expect(attention(council(on(cut('failed')))).map(a => a.what)).toEqual(['issuesFailed'])
-    expect(attention(council(ready))).toEqual([])
+    expect(attention(council(ready)).map(a => a.what)).toEqual(['notesWait'])
+    expect(attention(council(written))).toEqual([])
     // Решение, не вошедшее ни в один итог, нет и в задачах: спецификация его потеряла — не зелёный.
     const unplaced = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                             { ...assembled('done', [result()]), uncovered_adr_ids: ['ADR-1'] }, cut('done', [task()]))

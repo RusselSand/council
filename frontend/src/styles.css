@@ -358,6 +358,11 @@ section > .option-note { margin: 8px 0 0 18px }
 .repo-path .text-field { min-width: 0 }
 .repo-add { justify-self: start }
 .repo-remove { padding: 4px 8px; font-size: 18px; line-height: 1; text-decoration: none }
+.notes-type { margin: 18px 0 8px }
+.note-plan { display: grid; gap: 6px }
+.note-text { width: 100%; box-sizing: border-box; min-height: 2.6em; resize: vertical; field-sizing: content }
+.note-current { white-space: pre-wrap; color: var(--fg-soft) }
+.decision-pick { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px }
 .repo-summary { margin: 12px 0 0; color: var(--fg-soft); font: 12.5px var(--mono); overflow-wrap: anywhere }
 .repo-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none }
 .repo-finding { display: grid; gap: 2px }
@@ -386,7 +391,7 @@ section > .option-note { margin: 8px 0 0 18px }
 .now-caps.failed { color: var(--stop-bright) }
 .now-caps.running, .now-caps.done { color: var(--go-bright) }
 .now-title { margin: 0 0 14px; font-size: 17px; font-weight: 600 }
-.segments { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
+.segments { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none }
 .segment::before { content: ""; display: block; height: 4px; margin-bottom: 8px; border-radius: 99px; background: var(--ink-line) }
 .segment.done::before, .segment.running::before { background: var(--go-bright) }
 .segment.yours::before { background: var(--wait) }
@@ -433,5 +438,5 @@ section > .option-note { margin: 8px 0 0 18px }
 @media (max-width: 600px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)) }
   /* Пять сегментов в узкой карточке не помещаются: листаются внутри неё. */
-  .segments { grid-template-columns: repeat(8, minmax(76px, 1fr)); overflow-x: auto; padding-bottom: 4px }
+  .segments { grid-template-columns: repeat(9, minmax(92px, 1fr)); overflow-x: auto; padding-bottom: 4px }
 }

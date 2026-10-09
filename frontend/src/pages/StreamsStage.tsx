@@ -10,7 +10,7 @@ import {
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
-import { CHAIN, chainLight, currentStep, streamLight, type ChainStep } from '../light'
+import { CHAIN, chainLight, currentStep, exported, reachable, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
 type T = ReturnType<typeof useTranslation>['t']
@@ -37,11 +37,12 @@ export function StreamsStage({ council, settings, onChange }: Readonly<{
   // Свой экземпляр на поток: открытый шаг и черновик идеи — у каждого потока свои.
   return <StreamPage key={stream.group} council={council} structure={structure} stream={stream}
                      models={settings.models} repositories={settings.repositories} figma={settings.figma}
-                     onChange={onChange} />
+                     notes={settings.notes} onChange={onChange} />
 }
 
-function StreamPage({ council, structure, stream, models, repositories, figma, onChange }: Readonly<{
+function StreamPage({ council, structure, stream, models, repositories, figma, notes, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null; figma: boolean
+  notes: string | null
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -61,10 +62,11 @@ function StreamPage({ council, structure, stream, models, repositories, figma, o
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
-  const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(currentStep(stream)) ? chosen : currentStep(stream)
+  const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(reachable(stream)) ? chosen : currentStep(stream)
   const search = stream.discovery
-  const runs = { group: search, repository: stream.scan, design: stream.design_scan, questions: stream.questions,
-                 options: stream.proposals, decisions: stream.analysis, outcomes: stream.outcomes, issues: stream.issues }
+  const runs = { group: search, repository: stream.scan, design: stream.design_scan,
+                 questions: stream.questions ?? stream.decisions_search, options: stream.proposals,
+                 decisions: stream.analysis, outcomes: stream.outcomes, issues: stream.issues, notes: stream.notes_draft }
   const run = runs[view]
   const open = (step: ChainStep) => {
     setFocus(null)
@@ -128,15 +130,20 @@ function StreamPage({ council, structure, stream, models, repositories, figma, o
                         onQuestion={question => { setFocus(question); setView('decisions') }}
                         onGap={question => { setGap(question); setView('questions') }} />
         )}
+        {view === 'notes' && (
+          // Новый черновик — и правки заново, к его заметкам.
+          <NotesStep key={stream.notes_draft?.run ?? ''} council={council} structure={structure} stream={stream}
+                     group={group} root={notes} onChange={onChange} />
+        )}
         {view === 'issues' && (
           <IssuesStep council={council} stream={stream} group={group} onChange={onChange}
-                      onBack={() => open('outcomes')}
+                      onBack={() => open('outcomes')} onNext={() => open('notes')}
                       onQuestion={question => { setFocus(question); setView('decisions') }}
                       onGap={question => { setGap(question); setView('questions') }} />
         )}
       </div>
       <aside className="streams-side">
-        {run && <Progress steps={run.steps} models={models} />}
+        {run && run.steps.length > 0 && <Progress steps={run.steps} models={models} />}
       </aside>
     </div>
   )
@@ -176,11 +183,12 @@ function StreamList({ council, structure, open }: Readonly<{
 function whereIs(stream: Stream, t: T): string {
   const step = currentStep(stream)
   const run = { group: stream.discovery, repository: stream.scan, design: stream.design_scan,
-                questions: stream.questions, options: stream.proposals, decisions: stream.analysis,
-                outcomes: stream.outcomes, issues: stream.issues }[step]
+                questions: stream.questions ?? stream.decisions_search, options: stream.proposals,
+                decisions: stream.analysis, outcomes: stream.outcomes, issues: stream.issues,
+                notes: stream.notes_draft }[step]
   if (run?.state === 'running') return t(`streams.${step}.seeking`)
   if (run?.state === 'failed') return t(`streams.${step}.failed`)
-  if (step === 'issues' && streamLight(stream) === 'done') return t('streams.issues.done')
+  if (step === 'notes' && streamLight(stream) === 'done') return t('streams.notes.done')
   return t(`streams.${step}.yours`)
 }
 
@@ -219,6 +227,7 @@ function Now({ stream, group }: Readonly<{ stream: Stream; group: Group }>) {
                 <span className="segment-sub">{outcomesStatus(stream, t)}</span>
               )}
               {step === 'issues' && stream.issues && <span className="segment-sub">{issuesStatus(stream, t)}</span>}
+              {step === 'notes' && stream.issues?.state === 'done' && <span className="segment-sub">{notesStatus(stream, t)}</span>}
             </li>
           )
         })}
@@ -233,6 +242,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
 }>) {
   const { t } = useTranslation()
   const reached = CHAIN.indexOf(currentStep(stream))
+  const open = CHAIN.indexOf(reachable(stream))
   const status = (step: ChainStep, i: number) => {
     if (step === 'group') return groupStatus(stream, group, t)
     if (step === 'repository' && stream.idea) return repositoryStatus(stream, t)
@@ -242,6 +252,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
     if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
     if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
     if (step === 'issues' && stream.issues) return issuesStatus(stream, t)
+    if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, t)
     return t(i === reached ? 'chain.soon' : 'chain.notStarted')
   }
   return (
@@ -271,7 +282,7 @@ function Chain({ stream, group, view, onView }: Readonly<{
           const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}`
           return (
             <li key={step}>
-              {i <= reached
+              {i <= open
                 ? <button className={className} aria-current={view === step ? 'step' : undefined}
                           onClick={() => onView(step)}>{body}</button>
                 : <div className={className}>{body}</div>}
@@ -371,10 +382,25 @@ function designStatus(stream: Stream, t: T): string {
   return t('chain.designNone')
 }
 
-/** Что с вопросами потока: ищутся, упали, найдены, отобраны или ещё не искались. */
+/** Что с документацией потока: черновик переводится, перевод упал, выгружена, черновик ждёт или не собирали. */
+function notesStatus(stream: Stream, t: T): string {
+  const draft = stream.notes_draft
+  if (draft?.state === 'running') return t('chain.notesTranslating')
+  if (draft?.state === 'failed') return t('chain.notesFailed')
+  if (exported(stream)) return t('chain.notesWritten', { count: stream.notes?.notes.length ?? 0 })
+  if (stream.notes) return t('chain.notesOutdated')
+  if (draft) return t('chain.notesDrafted')
+  return t('chain.notesNone')
+}
+
+/** Что с вопросами потока: решения проекта отбираются или ждут, вопросы ищутся, упали, найдены, отобраны. */
 function questionsStatus(stream: Stream, t: T): string {
   const search = stream.questions
   if (stream.scope) return t('chain.questionsChosen', { count: stream.scope.length })
+  const decisions = stream.decisions_search
+  if (!search && decisions?.state === 'running') return t('chain.projectSearching')
+  if (!search && decisions?.state === 'failed') return t('chain.projectFailed')
+  if (!search && decisions) return t('chain.projectWait')
   if (search?.state === 'running') return t('chain.questionsSeeking')
   if (search?.state === 'failed') return t('chain.questionsFailed')
   if (search) return t('chain.questionsFound', { count: search.questions.length })
@@ -1088,6 +1114,264 @@ function DesignMapView({ scan }: Readonly<{ scan: DesignScan }>) {
   )
 }
 
+const RELEVANCE_PILL = { applicable: 'pill ready', potential_conflict: 'pill blocked', uncertain: 'pill open' } as const
+
+/**
+ * Блок «Решения проекта» в начале шага «Вопросы»: совет отобрал прошлые решения из каталога заметок, что
+ * относятся к идее, — человек отмечает, какие учитывать, и совет ищет вопросы с ними. Решения соседних
+ * потоков попадают в каталог, только когда поток выгружен: какие не выгружены — видно здесь.
+ */
+function ProjectDecisions({ council, structure, stream, group, onChange }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; group: Group; onChange: (council: Council) => void
+}>) {
+  const { t } = useTranslation()
+  const search = stream.decisions_search
+  const chosen = stream.project_decisions
+  const [keep, setKeep] = useState<ReadonlySet<string>>(() => new Set(chosen
+    ? chosen.map(d => d.adr_id)
+    : (search?.decisions ?? []).filter(d => d.relevance !== 'uncertain').map(d => d.adr_id)))
+  const [editing, setEditing] = useState(chosen === null)
+  const act = useAction(onChange, 'project.selectFailed')
+  const idea = stream.idea
+  if (!search || !idea) return null
+  const at = { run: structure.run, revision: structure.revision }
+  const sought = search.state === 'running'
+  // Пока ИИ работает с вопросами или ниже, отбор не поменять: сервер ответит 423.
+  const below = [stream.questions, stream.proposals, stream.analysis, stream.outcomes, stream.issues]
+    .some(run => run?.state === 'running')
+  const locked = act.busy || sought || below || structureIsStale(council)
+  const unexported = (council.streams ?? [])
+    .filter(other => other.group !== stream.group && other.decisions && !exported(other)).map(other => other.group)
+  const toggle = (id: string) => setKeep(before => {
+    const next = new Set(before)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
+  const submit = (ids: string[]) => void act.go(async () => {
+    try {
+      return await api.selectDecisions(council.id, at, group.id, search.state === 'done' ? search.run : null, ids, idea.text)
+    } catch (e) {
+      // Отбор уже другой или идею поменяли (другая вкладка) — показываем нынешнее.
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  }, () => setEditing(false))
+  const retry = () => void act.go(() => startOrFollow(
+    () => api.searchDecisions(council.id, group.id), council, c => streamOf(c, group.id)?.decisions_search))
+
+  return (
+    <section className="card panel" aria-labelledby="project-title">
+      <h3 id="project-title" className="panel-title">{t('project.title')}</h3>
+      {!editing && chosen ? (
+        <>
+          <p className="muted">
+            {chosen.length > 0 ? t('project.taken', { ids: chosen.map(d => d.adr_id).join(', ') }) : t('project.none')}
+          </p>
+          <div className="stream-actions">
+            <button className="btn-link" disabled={locked} onClick={() => setEditing(true)}>{t('project.change')}</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="panel-hint">{t('project.hint')}</p>
+          {unexported.length > 0 && <p className="fragment-note">{t('project.unexported', { groups: unexported.join(', ') })}</p>}
+          {sought && <p className="muted">{t('project.searching')} {t('run.note')}</p>}
+          {search.state === 'failed' && (
+            <>
+              <p className="error-text" role="alert">{search.error}</p>
+              <p className="fragment-note">
+                {t('project.failedNote')}{' '}
+                <button className="btn-link" disabled={locked} onClick={retry}>{t('run.retry')}</button>
+              </p>
+            </>
+          )}
+          {search.state === 'done' && (
+            <>
+              <p className="repo-summary">{t('project.catalog', { count: search.catalog, traced: search.traced })}</p>
+              {search.decisions.length === 0 && <p className="muted">{t('project.empty')}</p>}
+              <ul className="repo-list">{search.decisions.map(decision => (
+                <li key={decision.adr_id} className="repo-finding">
+                  <label className="decision-pick">
+                    <input type="checkbox" checked={keep.has(decision.adr_id)} disabled={locked}
+                           onChange={() => toggle(decision.adr_id)} />
+                    <span className="fragment-id">{decision.adr_id}</span>
+                    {decision.relevance && (
+                      <span className={RELEVANCE_PILL[decision.relevance]}>{t(`project.relevance.${decision.relevance}`)}</span>
+                    )}
+                    <span className="repo-statement">{decision.decision}</span>
+                  </label>
+                  {decision.question && <span className="option-note">{t('project.question', { question: decision.question })}</span>}
+                  {decision.reason && <span className="option-note">{decision.reason}</span>}
+                  {decision.found_in_code.length > 0 && (
+                    <span className="repo-evidence">{t('project.trail', {
+                      items: decision.found_in_code.map(trail => `${trail.issue} · ${trail.file} · ${trail.commit}`).join('; ') })}</span>
+                  )}
+                  {decision.status !== 'active' && <span className="option-note">{t(`project.status.${decision.status}`)}</span>}
+                </li>
+              ))}</ul>
+            </>
+          )}
+          {stream.questions && <p className="fragment-note">{t('project.changeNote')}</p>}
+          {act.error && <p className="error-text" role="alert">{act.error}</p>}
+          <div className="stream-actions spread">
+            <button className="btn-secondary" disabled={locked} onClick={() => submit([])}>{t('project.skip')}</button>
+            {search.state === 'done' && search.decisions.length > 0 && (
+              <button className="btn-primary" disabled={locked} onClick={() => submit([...keep])}>{t('project.approve')}</button>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+const ACTION_PILL = { create: 'pill ready', update: 'pill open', same: 'pill', edited: 'pill blocked' } as const
+const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome'] as const
+
+/**
+ * Шаг «Документация» — после задач. Совет собирает черновик выгрузки потока в заметки проекта (IDEA,
+ * вопросы, варианты, решения, итоги — файлом на заметку, в формате Causa): номера, тексты и что с каждой
+ * будет. Человек правит тексты, отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после
+ * прошлой выгрузки, совет не трогает.
+ */
+function NotesStep({ council, structure, stream, group, root, onChange }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; group: Group; root: string | null
+  onChange: (council: Council) => void
+}>) {
+  const { t } = useTranslation()
+  const draft = stream.notes_draft
+  const [edits, setEdits] = useState<Record<string, string>>({})
+  const [remove, setRemove] = useState<ReadonlySet<string>>(new Set())
+  const act = useAction(onChange, 'notes.writeFailed')
+  const at = { run: structure.run, revision: structure.revision }
+  const building = draft?.state === 'running'
+  const stale = !!draft && stream.issues?.run !== draft.issues
+  const ready = draft?.state === 'done' && !stale
+  const written = !!draft && stream.notes?.run === draft.run && exported(stream)
+  const locked = act.busy || building || structureIsStale(council)
+  const build = () => void act.go(() => startOrFollow(
+    () => api.draftNotes(council.id, at, group.id), council, c => streamOf(c, group.id)?.notes_draft))
+  const write = () => void act.go(async () => {
+    if (!draft) return council
+    const changed = Object.fromEntries(draft.notes.filter(note => edits[note.key] !== undefined
+      && edits[note.key] !== note.text).map(note => [note.key, edits[note.key]]))
+    try {
+      return await api.writeNotes(council.id, at, group.id, draft.run, changed, [...remove])
+    } catch (e) {
+      // Черновик устарел или каталог поменялся — показываем нынешнее.
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  })
+
+  return (
+    <>
+      <section className="card panel" aria-labelledby="step-title">
+        <p className="next-caps">{t(building ? 'notes.capsAi' : 'notes.caps')}</p>
+        <h2 id="step-title" className="panel-title large">{t('notes.title')}</h2>
+        <p className="panel-hint">{t('notes.hint')}</p>
+      </section>
+      <section className="card panel" aria-label={t('notes.title')}>
+        {root ? <p className="repo-summary">{t('notes.where', { root })}</p> : <p className="fragment-note">{t('notes.noRoot')}</p>}
+        {stream.notes && (
+          <p className={exported(stream) ? 'check ok' : 'fragment-note'}>
+            {t(exported(stream) ? 'notes.written' : 'notes.outdated', { count: stream.notes.notes.length })}
+          </p>
+        )}
+        <div className="stream-actions">
+          <button className="btn-secondary" disabled={!root || locked} onClick={build}>
+            {t(draft ? 'notes.rebuild' : 'notes.build')}
+          </button>
+        </div>
+        {building && <p className="muted">{t('notes.translating', { language: draft.language })} {t('run.note')}</p>}
+        {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
+        {stale && <p className="fragment-note">{t('notes.stale')}</p>}
+        {ready && (
+          <>
+            <p className="repo-summary">{t('notes.language', { language: draft.language })}</p>
+            {draft.skipped.map(reason => <p key={reason} className="fragment-note">{reason}</p>)}
+            {NOTE_TYPES.map(type => {
+              const notes = draft.notes.filter(note => note.type === type)
+              if (notes.length === 0) return null
+              return (
+                <div key={type}>
+                  <h3 className="panel-title caps notes-type">{t(`notes.type.${type}`)}</h3>
+                  <ul className="repo-list">{notes.map(note => (
+                    <li key={note.key} className="note-plan">
+                      <span className="repo-finding-head">
+                        <span className="fragment-id">{note.id}</span>
+                        <span className={ACTION_PILL[note.action]}>{t(`notes.action.${note.action}`)}</span>
+                        {note.links.length > 0 && <span className="repo-evidence">→ {note.links.join(', ')}</span>}
+                      </span>
+                      {note.action === 'edited' ? (
+                        <>
+                          <span className="fragment-note">{t('notes.editedNote')}</span>
+                          <span className="note-current">{note.current}</span>
+                        </>
+                      ) : (
+                        <textarea className="text-field note-text" aria-label={t('notes.text', { id: note.id })}
+                                  value={edits[note.key] ?? note.text} readOnly={locked || written}
+                                  rows={Math.min(8, (edits[note.key] ?? note.text).split('\n').length + 1)}
+                                  onChange={e => {
+                                    const value = e.target.value
+                                    setEdits(before => ({ ...before, [note.key]: value }))
+                                  }} />
+                      )}
+                      {note.action === 'update' && note.current && (
+                        <details className="question-proposals">
+                          <summary>{t('notes.current')}</summary>
+                          <span className="note-current">{note.current}</span>
+                        </details>
+                      )}
+                    </li>
+                  ))}</ul>
+                </div>
+              )
+            })}
+            {draft.vanished.length > 0 && (
+              <div>
+                <h3 className="panel-title caps notes-type">{t('notes.vanished')}</h3>
+                <ul className="repo-list">{draft.vanished.map(note => (
+                  <li key={note.id} className="repo-finding">
+                    <label className="decision-pick">
+                      <input type="checkbox" checked={remove.has(note.id)} disabled={locked || written || note.linked_from.length > 0}
+                             onChange={() => setRemove(before => {
+                               const next = new Set(before)
+                               if (!next.delete(note.id)) next.add(note.id)
+                               return next
+                             })} />
+                      <span className="fragment-id">{note.id}</span>
+                      <span className="repo-statement">{note.text}</span>
+                    </label>
+                    {note.linked_from.length > 0 && (
+                      <span className="option-note">{t('notes.linkedFrom', { ids: note.linked_from.join(', ') })}</span>
+                    )}
+                  </li>
+                ))}</ul>
+              </div>
+            )}
+            {draft.numbers.length > 0 && (
+              <div>
+                <h3 className="panel-title caps notes-type">{t('notes.issues')}</h3>
+                <ul className="repo-list">{draft.numbers.map(number => (
+                  <li key={number.key}><span className="fragment-id">{number.id}</span> {number.issue_id} · {number.title}</li>
+                ))}</ul>
+              </div>
+            )}
+            {act.error && <p className="error-text" role="alert">{act.error}</p>}
+            <div className="stream-actions spread">
+              <span className="muted">{t('notes.count', { count: draft.notes.length })}</span>
+              <button className="btn-primary large" disabled={locked || written || !root} onClick={write}>
+                {t(written ? 'notes.done' : 'notes.write')}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </>
+  )
+}
+
 /**
  * Шаг «Вопросы»: совет ищет открытые вопросы к утверждённой идее, а человек оставляет нужные,
  * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
@@ -1160,7 +1444,10 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, p
   }, onApproved)
 
   let list
-  if (!search) list = (
+  if (!search && stream.decisions_search && stream.project_decisions === null) list = (
+    <p className="muted">{t('questions.afterDecisions')}</p>
+  )
+  else if (!search) list = (
     <>
       <p className="muted">
         {t('questions.notSought')}{' '}
@@ -1231,6 +1518,8 @@ function QuestionsStep({ council, structure, stream, group, onChange, approve, p
           </div>
           <p className="idea-fixed">{idea.text}</p>
         </div>
+        <ProjectDecisions key={stream.decisions_search?.run ?? ''} council={council} structure={structure}
+                          stream={stream} group={group} onChange={onChange} />
         {list}
         {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
         {offering && <p className="fragment-note">{t('questions.belowRunning')}</p>}
@@ -1256,11 +1545,15 @@ function QuestionItem({ question, fragments, removed, busy, onToggle }: Readonly
         <span className="fragment-id">{question.id}</span>
         <span className={fromModels ? 'source-tag ai' : 'source-tag'}>{t(`questions.source.${question.source}`)}</span>
         <span className="question-text">{question.text}</span>
+        {question.revisits && <span className="pill blocked">{t('questions.revisits', { id: question.revisits })}</span>}
         {removed && <span className="group-tag">{t('questions.removedTag')}</span>}
         <button className="btn-secondary" disabled={busy} onClick={onToggle}>
           {t(removed ? 'questions.restore' : 'questions.remove')}
         </button>
       </div>
+      {question.note && question.note !== question.text && (
+        <p className="question-why">{t('questions.note', { note: question.note })}</p>
+      )}
       {question.reason && <p className="question-why">{t('questions.why', { reason: question.reason })}</p>}
       {question.proposal_ids.length > 0 && (
         <details className="question-proposals">
@@ -1759,12 +2052,14 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
  * Задачи: утверждённые итоги, нарезанные на задачи для coding agents. Задачу, которой не хватает
  * решения, держит пробел или открытый вопрос: пробел несут в вопросы, к вопросу возвращаются.
  */
-function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGap }: Readonly<{
+function IssuesStep({ council, stream, group, onChange, onBack, onNext, onQuestion, onGap }: Readonly<{
   council: Council; stream: Stream; group: Group; onChange: (council: Council) => void
-  onBack: () => void; onQuestion: (question: string) => void; onGap: (question: string) => void
+  onBack: () => void; onNext: () => void; onQuestion: (question: string) => void; onGap: (question: string) => void
 }>) {
   const { t } = useTranslation()
   const run = stream.issues
+  // Номера задач на весь проект — у выгруженного к этим задачам потока.
+  const numbers = new Map(exported(stream) ? (stream.notes?.numbers ?? []).map(n => [n.issue_id, n.id]) : [])
   const retry = useAction(onChange)
   const stale = structureIsStale(council)
   const scope = stream.scope ?? []
@@ -1816,7 +2111,7 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
       {run.state === 'done' && run.issues.length === 0 && <p className="muted">{t('issues.none')}</p>}
       {run.issues.map((issue, n) => (
         <IssueCard key={issue.id} issue={issue} n={n + 1} adrs={adrs} questions={questions} outcomes={outcomes}
-                   gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} />
+                   gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} number={numbers.get(issue.id)} />
       ))}
       {run.gaps.length > 0 && (
         <section className="card panel" aria-labelledby="issue-gaps-title">
@@ -1853,18 +2148,21 @@ function IssuesStep({ council, stream, group, onChange, onBack, onQuestion, onGa
       )}
       {lost.length > 0 && <p className="fragment-note">{t('issues.lostDecisions', { ids: lost.join(', ') })}</p>}
       {vague.length > 0 && <p className="fragment-note">{t('issues.vagueOutcomes', { ids: vague.join(', ') })}</p>}
-      <div className="stream-actions">
+      <div className="stream-actions spread">
         <button className="btn-link" onClick={onBack}>{t('issues.change')}</button>
+        {run.state === 'done' && <button className="btn-primary large" onClick={onNext}>{t('issues.toNotes')}</button>}
       </div>
     </>
   )
 }
 
 /** Задача: кому и зачем, где менять и что там сейчас, что сделать, на чём стоит — и что её держит. */
-function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQuestion }: Readonly<{
+function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQuestion, number }: Readonly<{
   issue: Issue; n: number; adrs: Map<string, { question: string; text: string }>
   questions: Map<string, string>; outcomes: Map<string, string>; gaps: IssueGap[]
   fragments: Map<number, LabeledFragment>; onQuestion: (question: string) => void
+  /** Номер задачи на весь проект — когда поток выгружен в заметки к этим задачам. */
+  number?: string
 }>) {
   const { t } = useTranslation()
   const name = `issue-${issue.id}`
@@ -1881,9 +2179,11 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
     <section className="card panel" aria-labelledby={`${name}-title`}>
       <div className="question-head">
         <span className="fragment-id">{issue.id}</span>
+        {number && <span className="pill ready">{number}</span>}
         <h3 id={`${name}-title`} className="question-text">{issue.title}</h3>
         {pill}
       </div>
+      {number && <p className="fragment-note">{t('issues.commit', { id: number })}</p>}
       {open.length > 0 && (
         <div className="check problem outcome-missing">
           <span>{t('issues.missing', { ids: open.join(', ') })}</span>
