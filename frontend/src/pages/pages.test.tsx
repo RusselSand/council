@@ -714,6 +714,9 @@ describe('Поток: группа и идея', () => {
     expect(within(second).getByText('Новых вариантов нет: всё уже есть')).toBeTruthy()
     fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
     expect(screen.getByText('Выбрано 2 из 2')).toBeTruthy()
+    // «Пока не решаю» — ответ шага, но вопрос открыт: фишка жёлтая и не в счёте готовых.
+    expect(screen.getByRole('tab', { name: /Q2, ждёт вас/ })).toBeTruthy()
+    expect(screen.getByText('готово 1 из 2')).toBeTruthy()
     fireEvent.click(approve)
     expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'choices', body: {
@@ -1255,6 +1258,15 @@ describe('Поток: решения и итоги', () => {
     expect(scrolled.mock.contexts.map(el => (el as Element).id)).toContain('decision-Q2-title')
   })
 
+  it('«пока не решаю» на вариантах — жёлтый: на повторном заходе слайдер открывается на нём', async () => {
+    openStream(() => deciding())
+    const chain = await screen.findByRole('region', { name: /Цепочка/ })
+    fireEvent.click(within(chain).getByRole('button', { name: /Варианты/ }))
+    expect(await screen.findByRole('heading', { name: ru['options.title'] })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q1, готово/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q2, ждёт вас/, selected: true })).toBeTruthy()
+  })
+
   it('открытый вопрос не зелёный, даже зафиксированный: он держит итог, слайдер открывается на нём', async () => {
     openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }))
     const chain = await screen.findByRole('region', { name: /Цепочка/ })
@@ -1346,6 +1358,10 @@ describe('Поток: решения и итоги', () => {
     // Прежний выбор подставлен; по новому вопросу — ещё нет, и утвердить рано.
     const approve = () => screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
     expect(approve().disabled).toBe(true)
+    // Прежний «пока не решаю» — жёлтый, но открыт вопрос совсем без ответа: Q3.
+    expect(screen.getByRole('tab', { name: /Q1, готово/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q2, ждёт вас/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q3, ждёт вас/, selected: true })).toBeTruthy()
     fireEvent.click(within(screen.getByRole('region', { name: 'Где хранить отчёт?' })).getByRole('radio', { name: /пока не решаю/i }))
     expect(approve().disabled).toBe(false)
     fireEvent.click(approve())
