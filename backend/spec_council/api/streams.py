@@ -1245,8 +1245,7 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
             kept = kept_outcomes(stream, stream.scope, decisions)
             if missing:
                 outcomes = unconnected(start_outcomes(
-                    council.participants, council.judge, decisions, [o.id for o in kept]),
-                    missing)
+                    council.participants, council.judge, decisions, kept), missing)
             else:
                 runs = [outcome_run(council, group, stream.model_copy(
                     update={"decisions": decisions}), agents, store, kept)]
@@ -1364,7 +1363,8 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
         carried, cut = cutting_plan(stream)
         if missing and cut:
             issues = unconnected(start_issues(council.participants, council.judge,
-                                              edit.outcomes_run), missing)
+                                              edit.outcomes_run, stream.decisions or [], carried),
+                                 missing)
         else:
             run = issue_run(council, group, stream, sources, agents, store,
                             carried=carried, cut=cut)
@@ -1459,8 +1459,7 @@ def settle_touch(council_id: str, group: str, edit: SettleTouch, store: StoreDep
                     if outcome.id != edit.outcome_id]
             if missing:
                 outcomes = unconnected(start_outcomes(
-                    council.participants, council.judge, stream.decisions,
-                    [o.id for o in kept]), missing)
+                    council.participants, council.judge, stream.decisions, kept), missing)
             else:
                 runs = [outcome_run(council, group, stream, agents, store, kept)]
                 outcomes = runs[0].state.model_copy(deep=True)

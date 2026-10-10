@@ -343,10 +343,12 @@ def decisions_key(decisions: list[Decision]) -> list[str]:
 
 
 def start_outcomes(participants: list[str], judge: str, decisions: list[Decision],
-                   kept: Iterable[str] = ()) -> OutcomeDiscovery:
-    """kept — номера закреплённых итогов: их не пересобирают."""
+                   kept: Sequence[Outcome] = ()) -> OutcomeDiscovery:
+    """kept — закреплённые итоги: их не пересобирают, и они видны сразу, пока собираются
+    остальные."""
     return OutcomeDiscovery(state="running", run=uuid4().hex[:8],
-                            decisions=decisions_key(decisions), kept=list(kept),
+                            decisions=decisions_key(decisions), outcomes=list(kept),
+                            kept=[outcome.id for outcome in kept],
                             steps=steps(participants, judge,
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
 
@@ -359,10 +361,13 @@ def outcome_print(outcome: Outcome) -> str:
 
 
 def start_issues(participants: list[str], judge: str, outcomes_run: str,
-                 decisions: Sequence[Decision] = ()) -> IssueDiscovery:
-    """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан."""
+                 decisions: Sequence[Decision] = (),
+                 carried: Sequence[Issue] = ()) -> IssueDiscovery:
+    """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан. carried —
+    перенесённые задачи: их не нарезают заново, и они видны сразу, пока режут остальное."""
     return IssueDiscovery(state="running", run=uuid4().hex[:8], outcomes=outcomes_run,
-                          decisions=decisions_key(list(decisions)),
+                          decisions=decisions_key(list(decisions)), issues=list(carried),
+                          kept=[issue.id for issue in carried],
                           steps=steps(participants, judge,
                                       (StepName.issue_discovery, StepName.issue_judge)))
 
@@ -1145,8 +1150,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         """choices — выбор человека: из него свои варианты, которыми можно было решить."""
         self.kept = list(kept)
         super().__init__(council_id, participants, judge, runner, report,
-                         start_outcomes(participants, judge, decisions,
-                                        [outcome.id for outcome in self.kept]))
+                         start_outcomes(participants, judge, decisions, self.kept))
         self.idea = idea
         self.repository = repository
         self.design = design
@@ -1334,7 +1338,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
                          start_issues(participants, judge, stream.outcomes.run,
-                                      stream.decisions or []))
+                                      stream.decisions or [], carried))
         self.carried = list(carried)
         self.cut = set(cut) if cut is not None else {o.id for o in stream.outcomes.outcomes}
         self.idea = stream.idea.text

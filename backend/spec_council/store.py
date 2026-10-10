@@ -142,7 +142,10 @@ class FileStore(InMemoryStore):
         super().__init__(sorted(councils, key=lambda council: council.updated_at))
 
     def _keep(self, council: Council) -> None:
-        kept(self._folder, council.id, council.model_dump_json(indent=2))
+        # Вычисляемое (сохранённые итоги потока, правлены ли группы) считается при отдаче заново:
+        # в файл — только то, из чего его считают.
+        kept(self._folder, council.id,
+             council.model_dump_json(indent=2, exclude_computed_fields=True))
 
 
 def kept(folder: Path, name: str, text: str) -> None:

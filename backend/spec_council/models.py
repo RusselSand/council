@@ -970,6 +970,22 @@ class Stream(BaseModel):
     notes_draft: NotesDraft | None = None
     notes: NotesExport | None = None
 
+    # Сохранённое видно, пока поток до него не дошёл. Считается при отдаче, в файл не пишется
+    # (store: exclude_computed_fields). Импорт — здесь: work сам импортирует модели.
+    @computed_field
+    @property
+    def saved_outcomes(self) -> list[Outcome]:
+        """Прежние итоги, которые закрепятся, если решения не поменяются."""
+        from .work import saved_outcomes_of
+        return saved_outcomes_of(self)
+
+    @computed_field
+    @property
+    def saved_issues(self) -> list[Issue]:
+        """Прежние задачи, которые перенесутся, если их итоги и решения те же."""
+        from .work import saved_issues_of
+        return saved_issues_of(self)
+
 
 # Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
 # вариантов, проверка выбора, сборка итогов, нарезка на задачи.
