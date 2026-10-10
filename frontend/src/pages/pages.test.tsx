@@ -1297,6 +1297,14 @@ describe('Поток: решения и итоги', () => {
     expect(screen.queryByDisplayValue('Старое.')).toBeNull()
   })
 
+  it('у итога — его номер, а не место в списке: после пересборки номера идут с пропусками', async () => {
+    const sparse: OutcomeDiscovery = { ...ASSEMBLED, kept: ['O2'], outcomes: [
+      { ...ASSEMBLED.outcomes[0], id: 'O2' }, { ...ASSEMBLED.outcomes[1], id: 'O5' }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: sparse }))
+    expect(within(await card('Состояние в файлах')).getByText('O2')).toBeTruthy()
+    expect(within(await card('Замер потерь')).getByText('O5')).toBeTruthy()
+  })
+
   it('закреплённый итог, который задевают новые решения: утвердить нельзя, пока не решили — оставить или пересобрать', async () => {
     const touched: OutcomeDiscovery = { ...ASSEMBLED, kept: ['O1'],
       touched: [{ outcome_id: 'O1', adr_ids: ['ADR-2'], reason: 'меняет хранение' }] }

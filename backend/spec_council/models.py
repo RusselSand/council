@@ -904,6 +904,9 @@ class IssueDiscovery(BaseModel):
     kept: list[str] = []
     # Каким был каждый итог, когда его нарезали (outcome_print): тот же — его задачи переносят.
     cut: dict[str, str] = {}
+    # Решения, к которым резали (decisions_key): ADR-n задачи — n-е из них; по ним номера ADR
+    # перенесённой задачи пересчитывают к новому отбору.
+    decisions: list[str] = []
     # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
     uncovered_outcome_ids: list[str] = []
     error: str | None = None

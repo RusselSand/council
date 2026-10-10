@@ -2351,7 +2351,7 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps,
   return (
     <section className="card panel" aria-labelledby={`${name}-title`}>
       <div className="question-head">
-        <span className="fragment-id">{String(n).padStart(2, '0')}</span>
+        <span className="fragment-id">{outcome.id}</span>
         <h3 id={`${name}-title`} className="question-text">{outcome.title}</h3>
         {pill}
         {kept && <span className="pill" title={t('outcomes.keptHint')}>{t('outcomes.kept')}</span>}

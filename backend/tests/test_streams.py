@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,6 +81,9 @@ class Agents:
         self.online = {"sol", "fable"}
         # Сборка итогов говорит, что новые решения задевают закреплённые итоги.
         self.touching = False
+        # Сборка итогов при закреплённых нового не собирает; новые задачи зависят от перенесённых.
+        self.nothing_new = False
+        self.depending = False
         self.asked = []
         self.prompts = {}
         self.workspaces = {}
@@ -116,6 +120,8 @@ class Agents:
         if "-outcome_" in key:
             found = self.outcomes(prompt)
             fixed = json.loads(section(prompt, "FIXED OUTCOMES"))
+            if self.nothing_new and fixed:
+                found["outcomes"] = []
             if self.touching and fixed:
                 adrs = [adr["id"] for adr in json.loads(section(prompt, "ACCEPTED ADRS"))]
                 found["touches"] = [{"outcome_id": outcome["id"],
@@ -124,7 +130,12 @@ class Agents:
                                     for outcome in fixed]
             return json.dumps(found)
         if "-issue_" in key:
-            return json.dumps(self.issues(prompt))
+            found = self.issues(prompt)
+            fixed = json.loads(section(prompt, "FIXED ISSUES"))
+            if self.depending and fixed:
+                for n, issue in enumerate(found["issues"], len(fixed) + 1):
+                    issue["id"], issue["depends_on"] = f"I{n}", [one["id"] for one in fixed]
+            return json.dumps(found)
         if "-decision_" in key:
             return json.dumps(self.analysis(prompt, judge="-decision_judge-" in key))
         if "-proposal_discovery-" in key:
@@ -1151,6 +1162,49 @@ def test_a_touched_outcome_the_human_rebuilds_is_assembled_again(agents):
     # Задачу прежнего итога не переносят: итог пересобран.
     assert approves(council_id, "C").status_code == 200
     assert streams_of(council_id)["C"].issues.kept == []
+
+
+def test_a_new_issue_may_wait_for_a_carried_one(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.depending = True
+    added_c(council_id)
+    assert approves(council_id, "C").status_code == 200
+    run = streams_of(council_id)["C"].issues
+    assert run.state == "done", run.error
+    assert [(i.id, i.depends_on) for i in run.issues] == [("I1", []), ("I2", ["I1"])]
+
+
+def test_outcomes_all_covered_by_carried_issues_are_cut_without_models_at_once(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.nothing_new = True
+    added_c(council_id)
+    assert [o.id for o in streams_of(council_id)["C"].outcomes.outcomes] == ["O1"]
+    calls = len(agents.asked)
+    done = []
+    worker = threading.Thread(target=lambda: done.append(approves(council_id, "C")), daemon=True)
+    worker.start()
+    worker.join(5)
+    assert done and done[0].status_code == 200          # под замком совета не зависает
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.kept, [i.id for i in issues.issues]) == ("done", ["I1"], ["I1"])
+    assert len(agents.asked) == calls
+
+
+def test_an_issue_of_an_outcome_that_got_blocked_is_not_carried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    # Решение по Q2 сняли: итог тот же по тексту, но его держит Q2 — задачу не переносят.
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    assert decide(council_id, "C", DECIDED).status_code == 200
+    assert streams_of(council_id)["C"].outcomes.outcomes[0].blocked_by == ["Q2"]
+    assert approves(council_id, "C").status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert issues.kept == [] and issues.issues[0].blocked_by
 
 
 def settles(council_id, outcomes_run, outcome_id, rebuild=False):

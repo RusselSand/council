@@ -358,9 +358,11 @@ def outcome_print(outcome: Outcome) -> str:
                        outcome.constraint_ids, outcome.risk_ids], ensure_ascii=False)
 
 
-def start_issues(participants: list[str], judge: str, outcomes_run: str) -> IssueDiscovery:
+def start_issues(participants: list[str], judge: str, outcomes_run: str,
+                 decisions: Sequence[Decision] = ()) -> IssueDiscovery:
     """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан."""
     return IssueDiscovery(state="running", run=uuid4().hex[:8], outcomes=outcomes_run,
+                          decisions=decisions_key(list(decisions)),
                           steps=steps(participants, judge,
                                       (StepName.issue_discovery, StepName.issue_judge)))
 
@@ -1331,7 +1333,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                  carried: Sequence[Issue] = (), cut: Iterable[str] | None = None) -> None:
         """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
-                         start_issues(participants, judge, stream.outcomes.run))
+                         start_issues(participants, judge, stream.outcomes.run,
+                                      stream.decisions or []))
         self.carried = list(carried)
         self.cut = set(cut) if cut is not None else {o.id for o in stream.outcomes.outcomes}
         self.idea = stream.idea.text
@@ -1374,7 +1377,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             {o.id: Parent(tuple(o.adr_ids), tuple(o.constraint_ids), tuple(o.risk_ids),
                           tuple(o.blocked_by), tuple((g.question, g.reason) for g in o.gaps),
                           tuple(o.acceptance_criteria))
-             for o in uncut})
+             for o in uncut},
+            frozenset(issue.id for issue in self.carried))
         opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
                   for q in questions if q["status"] == "open"}
         values = {
@@ -1409,7 +1413,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             self._skip(StepName.issue_judge)
             chosen = next(iter(sets.values()))
         else:
-            variants = shuffled([issue_prompt(answer) for answer in sets.values()])
+            fixed = [issue.id for issue in self.carried]
+            variants = shuffled([issue_prompt(answer, fixed) for answer in sets.values()])
             prompt = render("issue_judge", **values, issue_candidates=as_json(
                 [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
             chosen = self._ask_judge(StepName.issue_judge, prompt, parse)
@@ -1427,6 +1432,14 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         return (f"Код рабочих копий — в текущем каталоге: {where}. Проверяй по нему точки входа "
                 f"и текущее состояние; карта ниже — с шага Repository Discovery.\n\n")
 
+    def carried_only(self) -> IssueDiscovery:
+        """Нарезка, когда резать нечего: только перенесённые задачи, ни моделей, ни кода. Без
+        отчёта — её можно собрать и под замком совета, где отчёт ждал бы тот же замок."""
+        return self.state.model_copy(update={
+            "state": "done", "steps": [step.model_copy(update={"state": "skipped", "runs": []})
+                                       for step in self.state.steps],
+            **self._numbered(IssueAnswer((), ()))})
+
     def _numbered(self, chosen: IssueAnswer) -> dict[str, Any]:
         """Номера по порядку: задачи — I-n дальше перенесённых, пробелы — G-n (в ответе они уже
         по порядку); зависимости — по новым номерам. Перенесённые — как были."""
@@ -1438,7 +1451,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                         scope=list(c.scope), outcome_ids=list(c.outcome_ids),
                         adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
                         risk_ids=list(c.risk_ids),
-                        depends_on=[renamed[name] for name in c.depends_on],
+                        depends_on=[renamed.get(name, name) for name in c.depends_on],
                         blocked_by=list(c.blocked_by), acceptance_criteria=list(c.criteria))
                   for n, c in enumerate(chosen.issues, first)]
         gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,

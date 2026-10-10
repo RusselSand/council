@@ -176,22 +176,43 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
 
 
 def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
-    """Задачи прежней нарезки, которые остаются: каждый их итог — тот же, что тогда нарезали,
-    задача ничем не заблокирована, и всё, от чего она зависит, тоже остаётся. Они уже в
-    разработке — их не нарезают заново."""
+    """Задачи прежней нарезки, которые остаются: каждый их итог — тот же, что тогда нарезали, и
+    по-прежнему готов (решение не пропало — иначе задачу бы заблокировали), задача ничем не
+    заблокирована, каждое её решение — то же (номер ADR — к новому отбору), и всё, от чего она
+    зависит, тоже остаётся. Они уже в разработке — их не нарезают заново."""
     before = remembered(stream)["earlier_issues"]
     if not isinstance(before, IssueDiscovery):
         return []
-    prints = {outcome.id: outcome_print(outcome) for outcome in outcomes}
-    fit = {issue.id: issue for issue in before.issues
+    prints = {outcome.id: outcome_print(outcome) for outcome in outcomes if outcome_ready(outcome)}
+    fit = {issue.id: renumbered for issue in before.issues
            if not issue.blocked_by and issue.outcome_ids
            and all(name in prints and before.cut.get(name) == prints[name]
-                   for name in issue.outcome_ids)}
+                   for name in issue.outcome_ids)
+           and (renumbered := with_new_adrs(issue, before.decisions, stream)) is not None}
     while dropped := [name for name, issue in fit.items()
                       if any(other not in fit for other in issue.depends_on)]:
         for name in dropped:
             del fit[name]
-    return [issue for issue in before.issues if issue.id in fit]
+    return [fit[issue.id] for issue in before.issues if issue.id in fit]
+
+
+def with_new_adrs(issue: Issue, decided: list[str], stream: Stream) -> Issue | None:
+    """Задача с номерами ADR по нынешнему отбору: ADR-n прежней нарезки — n-е из решений, к
+    которым резали (decided). Решение уже не то — задача не та: None."""
+    position = {question.id: n for n, question in enumerate(stream.scope or [], 1)}
+    now = {decision.question_id: decision for decision in stream.decisions or []}
+    adrs = []
+    for name in issue.adr_ids:
+        n = int(name.split("-")[1])
+        entry = decided[n - 1] if 0 < n <= len(decided) else ""
+        question = entry.split(": ", 1)[0]
+        decision = now.get(question)
+        if (decision is None or decision.proposal is None or question not in position
+                or decisions_key([decision])[0] != entry):
+            return None
+        adrs.append(f"ADR-{position[question]}")
+    return issue.model_copy(update={
+        "adr_ids": sorted(adrs, key=lambda name: int(name.split("-")[1]))})
 
 
 def uncut(stream: Stream, outcomes: list[Outcome], carried: list[Issue]) -> list[str]:

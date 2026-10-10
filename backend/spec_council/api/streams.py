@@ -1372,7 +1372,9 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
                 runs = [run]
                 issues = run.state.model_copy(deep=True)
             else:
-                issues = run.run()       # без моделей: только перенесённые задачи
+                # Без моделей: только перенесённые задачи. Не run(): его отчёт ждал бы замок
+                # совета, под которым мы уже стоим.
+                issues = run.carried_only()
         return store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
             update={"issues": issues,
                     "earlier_issues": remembered(stream)["earlier_issues"]}))}), runs
