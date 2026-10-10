@@ -48,7 +48,8 @@ class Store(Protocol):
 
     def get_council(self, council_id: str) -> Council | None: ...
 
-    def create_council(self, *, participants: list[str], judge: str) -> Council: ...
+    def create_council(self, *, participants: list[str], judge: str,
+                       project: str = "") -> Council: ...
 
     def update_council(self, council_id: str, changes: dict[str, Any], *,
                        touch: bool = True) -> Council | None: ...
@@ -76,7 +77,8 @@ class InMemoryStore:
         with self._lock:
             return self._councils.get(council_id)
 
-    def create_council(self, *, participants: list[str], judge: str) -> Council:
+    def create_council(self, *, participants: list[str], judge: str,
+                       project: str = "") -> Council:
         council = Council(
             id=uuid4().hex[:8],
             name="",  # человек ещё не назвал; подпись для пустого — на стороне фронта
@@ -85,6 +87,7 @@ class InMemoryStore:
             participants=list(participants),
             judge=judge,
             updated_at=datetime.now(UTC),
+            project=project,
         )
         with self._lock:
             self._keep(council)
@@ -139,21 +142,24 @@ class FileStore(InMemoryStore):
         super().__init__(sorted(councils, key=lambda council: council.updated_at))
 
     def _keep(self, council: Council) -> None:
-        # Сначала во временный файл, потом подменой: процесс, оборванный посреди записи, совет
-        # не испортит. Временный — свой на каждую запись и только владельцу (mkstemp: 0600):
-        # в советах тексты и ответы моделей, а при umask 022 файл читали бы все на машине.
-        # Без fsync: в докере он стоит 60–120 мс на запись, а пишем под замком на каждую
-        # правку. От пропадания питания это не спасает — для локального инструмента цена
-        # того не стоит.
-        path = self._folder / f"{council.id}.json"
-        handle, part = tempfile.mkstemp(dir=self._folder, prefix=f"{council.id}.", suffix=".part")
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as file:
-                file.write(council.model_dump_json(indent=2))
-            os.replace(part, path)
-        except BaseException:
-            Path(part).unlink(missing_ok=True)
-            raise
+        kept(self._folder, council.id, council.model_dump_json(indent=2))
+
+
+def kept(folder: Path, name: str, text: str) -> None:
+    """Файл <name>.json в каталоге. Сначала во временный файл, потом подменой: процесс,
+    оборванный посреди записи, файл не испортит. Временный — свой на каждую запись и только
+    владельцу (mkstemp: 0600): в советах тексты и ответы моделей, а при umask 022 файл читали
+    бы все на машине. Без fsync: в докере он стоит 60–120 мс на запись, а пишем под замком на
+    каждую правку. От пропадания питания это не спасает — для локального инструмента цена того
+    не стоит."""
+    handle, part = tempfile.mkstemp(dir=folder, prefix=f"{name}.", suffix=".part")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as file:
+            file.write(text)
+        os.replace(part, folder / f"{name}.json")
+    except BaseException:
+        Path(part).unlink(missing_ok=True)
+        raise
 
 
 def writable(folder: Path) -> None:

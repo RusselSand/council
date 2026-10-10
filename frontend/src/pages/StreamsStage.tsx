@@ -1,20 +1,22 @@
-import { useEffect, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, outcomeReady, REPOSITORIES_MAX, runningFrom,
-  startOrFollow,
+  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf, REPOSITORIES_MAX,
+  runningFrom, startOrFollow,
   streamOf, structureIsStale, type Council, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
   type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
+import { FieldList, listField } from '../components/FieldList'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { CHAIN, chainLight, currentStep, exported, exportedCount, reachable, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
-type T = ReturnType<typeof useTranslation>['t']
+type T = TFunction
 
 /**
  * Потоки: каждая подтверждённая группа — отдельный поток со своей цепочкой шагов. Слева —
@@ -38,12 +40,14 @@ export function StreamsStage({ council, settings, onChange }: Readonly<{
   // Свой экземпляр на поток: открытый шаг и черновик идеи — у каждого потока свои.
   return <StreamPage key={stream.group} council={council} structure={structure} stream={stream}
                      models={settings.models} repositories={settings.repositories} figma={settings.figma}
-                     notes={settings.notes} onChange={onChange} />
+                     notes={notesOf(council, settings)} known={projectOf(council, settings)?.repositories ?? []}
+                     onChange={onChange} />
 }
 
-function StreamPage({ council, structure, stream, models, repositories, figma, notes, onChange }: Readonly<{
+function StreamPage({ council, structure, stream, models, repositories, figma, notes, known, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null; figma: boolean
-  notes: string | null
+  /** Каталог заметок — папка документации проекта совета; known — рабочие копии проекта. */
+  notes: string | null; known: string[]
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -98,7 +102,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'repository' && (
           // Новый скан — и путь заново, из него.
           <RepositoryStep key={stream.scan?.run ?? ''} council={council} structure={structure} stream={stream}
-                          group={group} repositories={repositories} onChange={onChange} approve={passing}
+                          group={group} repositories={repositories} known={known} onChange={onChange} approve={passing}
                           onApproved={() => open('design')} />
         )}
         {view === 'design' && (
@@ -603,14 +607,28 @@ function IdeaOptions({ search, draft, models, busy, onTake }: Readonly<{
  * Шаг «Репозиторий» — необязательный. Совет сканирует рабочую копию под идею: inventory — список
  * файлов, участники и судья читают код и составляют карту того, как система устроена сейчас. Человек
  * утверждает карту или пропускает шаг — и совет сразу ищет вопросы; карта идёт во все следующие шаги.
+ * Рабочие копии проекта (known) уже отмечены — лишние для этой идеи снимают; свои добавляют путём.
  */
-function RepositoryStep({ council, structure, stream, group, repositories, onChange, approve, onApproved }: Readonly<{
-  council: Council; structure: Structure; stream: Stream; group: Group; repositories: string | null
+function RepositoryStep({ council, structure, stream, group, repositories, known, onChange, approve, onApproved }: Readonly<{
+  council: Council; structure: Structure; stream: Stream; group: Group; repositories: string | null; known: string[]
   onChange: (council: Council) => void; approve: ReturnType<typeof useAction>; onApproved: () => void
 }>) {
   const { t } = useTranslation()
   const scan = stream.scan
-  const [paths, setPaths] = useState(() => scan?.repositories.length ? scan.repositories.map(r => listField(r.path)) : [listField()])
+  // Был скан — отмечено то, что сканировали; нет — все рабочие копии проекта.
+  const scanned = scan?.repositories.map(r => r.path) ?? []
+  const [picked, setPicked] = useState(() => new Set(scanned.length ? known.filter(path => scanned.includes(path)) : known))
+  const [paths, setPaths] = useState(() => {
+    const own = scanned.filter(path => !known.includes(path))
+    return own.length || known.length ? own.map(path => listField(path)) : [listField()]
+  })
+  const ticked = known.filter(path => picked.has(path))
+  const chosen = [...ticked, ...paths.map(f => f.value)]
+  const toggle = (path: string) => setPicked(before => {
+    const next = new Set(before)
+    if (!next.delete(path)) next.add(path)
+    return next
+  })
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = scan?.state === 'running'
@@ -625,7 +643,7 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
     event.preventDefault()
     void retry.go(async () => {
       try {
-        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, paths.map(f => f.value), idea.text), council,
+        return await startOrFollow(() => api.scanRepository(council.id, at, group.id, chosen, idea.text), council,
                                    c => streamOf(c, group.id)?.scan)
       } catch (e) {
         // Идею поменяли в другой вкладке — показываем нынешнюю: скан пойдёт уже к ней.
@@ -660,15 +678,29 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
       <p className="options-idea"><span className="fragment-id">I1</span> {idea.text}</p>
       <section className="card panel" aria-label={t('repository.title')}>
         <form className="repo-scan" onSubmit={start}>
-          <FieldList fields={paths} onFields={setPaths} max={REPOSITORIES_MAX} locked={busy || sought}
-                     placeholder={placeholder} addLabel={t('repository.addPath')}
-                     label={n => paths.length > 1 ? t('repository.pathN', { n }) : t('repository.path')}
+          {known.length > 0 && (
+            <fieldset className="repo-known">
+              <legend className="select-label">{t('repository.known')}</legend>
+              {known.map(path => (
+                <label key={path} className="decision-pick">
+                  <input type="checkbox" checked={picked.has(path)} disabled={busy || sought}
+                         onChange={() => toggle(path)} />
+                  <span className="repo-known-path">{path}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <FieldList fields={paths} onFields={setPaths} max={REPOSITORIES_MAX - ticked.length} min={known.length ? 0 : 1}
+                     locked={busy || sought} placeholder={placeholder} addLabel={t('repository.addPath')}
+                     label={n => paths.length > 1 || known.length ? t('repository.pathN', { n }) : t('repository.path')}
                      removeLabel={n => t('repository.removePath', { n })} />
           <button type="submit" className="btn-secondary"
-                  disabled={busy || sought || below || stale || paths.some(f => f.value.trim() === '')}>
+                  disabled={busy || sought || below || stale || chosen.length === 0 || chosen.length > REPOSITORIES_MAX
+                            || paths.some(f => f.value.trim() === '')}>
             {t('repository.scan')}
           </button>
         </form>
+        {known.length > 0 && <p className="fragment-note">{t('repository.knownNote')}</p>}
         {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
         {(stream.design || stream.questions) && !sought && <p className="fragment-note">{t('repository.rescanNote')}</p>}
         {sought && (
@@ -701,40 +733,6 @@ function RepositoryStep({ council, structure, stream, group, repositories, onCha
 
 const FINDING_PILL = { verified: 'pill ready', inferred: 'pill open', unknown: 'pill' } as const
 const COVERAGE_PILL = { covered: 'pill ready', partial: 'pill open', not_investigated: 'pill blocked', not_applicable: 'pill' } as const
-
-/** Поле списка — путь к рабочей копии или ссылка на макет; key — чтобы React не путал поля, когда одно убирают. */
-interface ListField { key: number; value: string }
-let fieldKeys = 0
-const listField = (value = ''): ListField => ({ key: fieldKeys++, value })
-
-/** Поля списка: каждое можно поправить или убрать (пока их больше одного), добавить — пока их меньше max. */
-function FieldList({ fields, onFields, max, locked, placeholder, label, removeLabel, addLabel }: Readonly<{
-  fields: ListField[]; onFields: Dispatch<SetStateAction<ListField[]>>; max: number; locked: boolean
-  placeholder: string; label: (n: number) => string; removeLabel: (n: number) => string; addLabel: string
-}>) {
-  return (
-    <div className="repo-paths">
-      {fields.map((field, n) => (
-        <div className="repo-path" key={field.key}>
-          <input className="text-field" value={field.value} readOnly={locked} placeholder={placeholder}
-                 aria-label={label(n + 1)}
-                 onChange={e => {
-                   const value = e.target.value
-                   onFields(current => current.map(f => f.key === field.key ? { ...f, value } : f))
-                 }} />
-          {fields.length > 1 && (
-            <button type="button" className="btn-link repo-remove" disabled={locked} aria-label={removeLabel(n + 1)}
-                    onClick={() => onFields(current => current.filter(f => f.key !== field.key))}>×</button>
-          )}
-        </div>
-      ))}
-      {fields.length < max && (
-        <button type="button" className="btn-link repo-add" disabled={locked}
-                onClick={() => onFields(current => [...current, listField()])}>{addLabel}</button>
-      )}
-    </div>
-  )
-}
 
 /** Коммит коротко; нет коммитов — прочерк. */
 const shortSha = (sha: string) => sha.slice(0, 8) || '—'

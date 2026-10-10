@@ -8,9 +8,16 @@ import pytest
 
 from spec_council.api import documents
 from spec_council.app import app
-from spec_council.deps import get_agents, get_launcher, get_notes_root
-from spec_council.models import ExportedNote, NotesDraft
+from spec_council.deps import (
+    get_agents,
+    get_launcher,
+    get_notes_root,
+    get_projects,
+    get_repositories,
+)
+from spec_council.models import ExportedNote, NotesDraft, ProjectDraft
 from spec_council.notes import Catalog, Note, path_of, rendered
+from spec_council.projects import Projects
 from tests.test_streams import (
     TASK,
     Agents,
@@ -95,9 +102,28 @@ def test_a_cut_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir)
 
 
 def test_without_a_notes_folder_there_is_nothing_to_draft(agents):
-    council_id = cut_c()
+    council_id = cut_c()                                             # совет без проекта
     res = drafts(council_id)
-    assert res.status_code == 422 and "COUNCIL_NOTES" in res.json()["detail"]
+    assert res.status_code == 422 and "Папки документации нет" in res.json()["detail"]
+
+
+def test_notes_go_to_the_documentation_folder_of_the_council_project(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="app/docs"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    try:
+        council_id = cut_c()
+        assert client.patch(f"/api/councils/{council_id}",
+                            json={"project": project.id}).status_code == 200
+        assert drafts(council_id).status_code == 202
+        assert writes(council_id).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    root = (tmp_path / "app" / "docs").resolve()
+    assert streams_of(council_id)["C"].notes.root == str(root)
+    assert "IDEA-0001" in Catalog.load(root).notes
 
 
 def test_issues_must_be_cut_before_drafting(agents, notes_dir):
@@ -205,7 +231,7 @@ def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes
     council_id = cut_c()
     drafts(council_id)
     assert writes(council_id).status_code == 200
-    # COUNCIL_NOTES сменили: в новом каталоге под IDEA-0001 — чужая идея.
+    # Папку документации сменили: в новом каталоге под IDEA-0001 — чужая идея.
     other = tmp_path / "other"
     foreign = Note("IDEA-0001", "idea", "Чужая идея.")
     path = path_of(other, foreign)
@@ -312,6 +338,3 @@ def test_without_models_a_translated_draft_is_recorded_failed(notes_dir, transla
     assert writes(council_id).status_code == 409
 
 
-def test_settings_tell_where_the_notes_go(agents, notes_dir):
-    assert client.get("/api/settings").json()["notes"] == str(notes_dir)
-    assert get_store() is not None

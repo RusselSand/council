@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type {
   Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
-  RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure,
+  Project, ProjectDraft, RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure, WorkingCopies,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -12,10 +12,11 @@ import { en } from '../i18n/en'
 import { ru } from '../i18n/ru'
 import { HomePage } from './HomePage'
 import { CouncilPage, POLL_MS, STAGES, stagePath } from './CouncilPage'
+import { ProjectsPage } from './ProjectsPage'
 
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
-  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', slicing: null,
+  participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', project: '', slicing: null,
   structure: null, streams: null,
 }
 const SETTINGS: Settings = {
@@ -24,7 +25,13 @@ const SETTINGS: Settings = {
     { alias: 'fable', short_name: 'Fable', display_name: 'Claude Fable 5.1', cli: 'claude', available: true },
     { alias: 'astra', short_name: 'Astra', display_name: 'Gemini Astra 3', cli: 'gemini', available: false },
   ],
-  min_participants: 1, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true, notes: null,
+  min_participants: 1, default_participants: ['sol', 'fable'], default_judge: 'fable', repositories: null, figma: true, projects: [],
+}
+
+/** Проект с репозиториями и папкой документации: совет с ним выгружает заметки в notes_root. */
+const PROJECT: Project = {
+  id: 'p1', name: 'Кромка', repositories: ['kromka-api', 'kromka-front'], notes: 'kromka-api/docs',
+  updated_at: '2026-10-09T10:00:00Z', notes_root: '/notes', problem: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -210,6 +217,7 @@ const server = ({
 const renderAt = (path: string) => render(<RouterProvider router={createMemoryRouter([{
   path: '/', element: <App />, children: [
     { index: true, element: <HomePage /> },
+    { path: 'projects', element: <ProjectsPage /> },
     ...STAGES.map(stage => ({ path: `councils/:id/${stagePath(stage)}`, element: <CouncilPage stage={stage} /> })),
   ],
 }], { initialEntries: [path] })} />)
@@ -901,6 +909,34 @@ describe('Поток: репозиторий', () => {
     expect(path().value).toBe('web/front')
   })
 
+  it('у совета с проектом его репозитории уже отмечены: лишний снимают, свой добавляют — сканируют вместе', async () => {
+    fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }), stream: () => json(atStep()),
+                                          settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
+    renderAt('/councils/demo-1/streams/A')
+    const known = await screen.findByRole('group', { name: ru['repository.known'] })
+    const boxes = within(known).getAllByRole('checkbox') as HTMLInputElement[]
+    expect(boxes.map(box => [box.parentElement?.textContent, box.checked])).toEqual([['kromka-api', true], ['kromka-front', true]])
+    expect(screen.getByText(ru['repository.knownNote'])).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: ru['repository.path'] })).toBeNull()   // своих путей пока нет
+    fireEvent.click(boxes[1])
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.addPath'] }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Рабочая копия 1' }), { target: { value: 'shared/lib' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
+    await waitFor(() => expect(streamCalls).toHaveLength(1))
+    expect(streamCalls[0].body).toMatchObject({ paths: ['kromka-api', 'shared/lib'] })
+  })
+
+  it('пересканировать с проектом: отмечено то, что сканировали, а не все его репозитории', async () => {
+    const scanned: RepositoryScan = { ...SCANNED, repositories: [{ ...SCANNED.repositories[0], path: 'kromka-front' },
+                                                                   { ...SCANNED.repositories[0], path: 'other' }] }
+    fetchMock.mockImplementation(server({ council: () => ({ ...atStep({ scan: scanned }), project: PROJECT.id }),
+                                          settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
+    renderAt('/councils/demo-1/streams/A')
+    const known = await screen.findByRole('group', { name: ru['repository.known'] })
+    expect((within(known).getAllByRole('checkbox') as HTMLInputElement[]).map(box => box.checked)).toEqual([false, true])
+    expect((screen.getByRole('textbox', { name: 'Рабочая копия 1' }) as HTMLInputElement).value).toBe('other')
+  })
+
   it('скан нескольких репозиториев: у каждого свой коммит и папка в карте', async () => {
     const two: RepositoryScan = { ...SCANNED, repositories: [
       { ...SCANNED.repositories[0], name: 'back', path: 'back', outside: 0, omitted: [], omitted_count: 0 },
@@ -1284,8 +1320,10 @@ describe('Поток: решения и итоги', () => {
     expect(streamCalls).toEqual([])
   })
 
+  /** Совет с проектом; notes — его папка документации, как её находит сервер (null — папки нет). */
   const openWith = (council: () => Council, stream: () => Promise<Response>, notes: string | null = '/notes') => {
-    fetchMock.mockImplementation(server({ council, stream, settings: () => ({ ...SETTINGS, notes }) }))
+    fetchMock.mockImplementation(server({ council: () => ({ ...council(), project: PROJECT.id }), stream,
+                                          settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: notes }] }) }))
     renderAt('/councils/demo-1/streams/A')
   }
   const SEARCH: DecisionsSearch = {
@@ -1476,7 +1514,7 @@ describe('Поток: решения и итоги', () => {
     expect(within(issue).getByText(ru['issues.commit'].replace('{{id}}', 'ISS-0012'))).toBeTruthy()
   })
 
-  it('выгрузка в прежний каталог (COUNCIL_NOTES сменили) — не выгрузка: номеров у задач нет', async () => {
+  it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка: номеров у задач нет', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
                               notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
              () => json(atStart()), '/other')
@@ -1581,6 +1619,30 @@ describe('Ввод', () => {
     expect(locked()).toEqual([false, true, false])                   // последнего не снять
     fireEvent.click(checkbox(/Claude Fable/))
     expect(checkbox(/Claude Fable/).checked).toBe(true)
+  })
+
+  it('проект совета выбирают из списка — он сохраняется сразу; без папки документации — предупреждение', async () => {
+    const bare: Project = { ...PROJECT, id: 'p2', name: 'Без доков', notes: '', notes_root: null }
+    fetchMock.mockImplementation(server({ settings: () => ({ ...SETTINGS, projects: [PROJECT, bare] }) }))
+    renderAt('/councils/demo-1/brief')
+    const project = await screen.findByRole('combobox', { name: new RegExp(ru['brief.project']) }) as HTMLSelectElement
+    expect([...project.options].map(o => o.text)).toEqual([ru['brief.noProject'], 'Кромка', 'Без доков'])
+    expect(project.value).toBe('')
+    expect(screen.getByRole('link', { name: ru['brief.projectsLink'] }).getAttribute('href')).toBe('/projects')
+    fireEvent.change(project, { target: { value: 'p2' } })
+    await waitFor(() => expect(patches).toEqual([{ project: 'p2' }]))
+    expect(screen.getByText(ru['brief.projectNoNotes'])).toBeTruthy()
+    fireEvent.change(project, { target: { value: 'p1' } })
+    expect(screen.queryByText(ru['brief.projectNoNotes'])).toBeNull()
+  })
+
+  it('проекта совета больше нет среди проектов — он так и подписан, а не подменён первым', async () => {
+    fetchMock.mockImplementation(server({ council: () => ({ ...COUNCIL, project: 'gone' }),
+                                          settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
+    renderAt('/councils/demo-1/brief')
+    const project = await screen.findByRole('combobox', { name: new RegExp(ru['brief.project']) }) as HTMLSelectElement
+    expect(project.value).toBe('gone')
+    expect(project.selectedOptions[0].text).toBe(ru['brief.projectMissing'])
   })
 
   it('судью можно выбрать и не из участников, он сохраняется сразу', async () => {
@@ -2345,5 +2407,105 @@ describe('Поток: дизайн', () => {
     expect(screen.getByText(ru['design.failedNote'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['design.scan'] }) as HTMLButtonElement).disabled).toBe(false)
     expect(screen.queryByRole('button', { name: ru['design.approve'] })).toBeNull()
+  })
+})
+
+describe('Проекты', () => {
+  const COPIES: WorkingCopies = { root: '/repos', paths: ['kromka-api', 'kromka-front', 'tools'] }
+  let calls: { method: string; url: string; body: unknown }[]
+  /** Страница проектов: projects — что на сервере; answer — ответ на правку, иначе сервер её принимает. */
+  const open = (projects: Project[], answer?: (method: string) => Promise<Response>) => {
+    calls = []
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (url === '/api/repositories') return json(COPIES)
+      if (url === '/api/projects' && method === 'GET') return json(projects)
+      if (url.startsWith('/api/projects')) {
+        const body = init?.body ? JSON.parse(String(init.body)) as ProjectDraft : undefined
+        calls.push({ method, url, body })
+        if (answer) return answer(method)
+        if (method === 'DELETE') return Promise.resolve(new Response(null, { status: 204 }))
+        return json({ ...PROJECT, ...body, id: method === 'POST' ? 'p9' : url.split('/').pop(),
+                      notes_root: body?.notes ? `/repos/${body.notes}` : null }, method === 'POST' ? 201 : 200)
+      }
+      return server()(url, init)
+    })
+    renderAt('/projects')
+  }
+  const card = (name: string) => screen.findByRole('region', { name })
+
+  it('в шапке — ссылка на проекты', async () => {
+    fetchMock.mockImplementation(server())
+    renderAt('/')
+    expect((await screen.findByRole('link', { name: ru['header.projects'] })).getAttribute('href')).toBe('/projects')
+  })
+
+  it('проекты: репозитории, папка документации и что с ней не так; пусто — подсказка', async () => {
+    open([PROJECT, { ...PROJECT, id: 'p2', name: 'Старый', repositories: [], notes: '/old/notes', notes_root: null,
+                     problem: 'Путь вне каталога репозиториев /repos' }])
+    const kromka = await card('Кромка')
+    expect(within(kromka).getByText('kromka-api')).toBeTruthy()
+    expect(within(kromka).getByText('kromka-api/docs')).toBeTruthy()
+    const old = await card('Старый')
+    expect(within(old).getByText(ru['projects.noRepositories'])).toBeTruthy()
+    expect(within(old).getByText('Путь вне каталога репозиториев /repos')).toBeTruthy()
+    cleanup()
+    open([])
+    expect(await screen.findByText(ru['projects.empty'])).toBeTruthy()
+  })
+
+  it('новый проект: рабочие копии галочками, глубже — путём, папка документации — и он в списке', async () => {
+    open([])
+    fireEvent.click(await screen.findByRole('button', { name: ru['projects.new'] }))
+    const form = screen.getByRole('form', { name: ru['projects.newTitle'] })
+    expect(within(form).getByText(ru['projects.repositoriesHint'].replace('{{root}}', '/repos'))).toBeTruthy()
+    const create = within(form).getByRole('button', { name: ru['projects.create'] }) as HTMLButtonElement
+    expect(create.disabled).toBe(true)                                     // без названия
+    fireEvent.change(within(form).getByRole('textbox', { name: ru['projects.name'] }), { target: { value: 'Кромка' } })
+    fireEvent.click(within(form).getByRole('checkbox', { name: 'kromka-front' }))
+    fireEvent.click(within(form).getByRole('checkbox', { name: 'kromka-api' }))
+    fireEvent.click(within(form).getByRole('button', { name: ru['projects.addPath'] }))
+    fireEvent.change(within(form).getByRole('textbox', { name: 'Путь к рабочей копии 1' }), { target: { value: 'libs/shared' } })
+    fireEvent.click(within(form).getByRole('button', { name: ru['projects.addPath'] }))   // пустой путь не уйдёт
+    fireEvent.change(within(form).getByRole('textbox', { name: ru['projects.notesTitle'] }),
+                     { target: { value: 'kromka-api/docs' } })
+    fireEvent.click(create)
+    const saved = await card('Кромка')
+    // Отмеченные — в порядке каталога, а не кликов; потом вписанные.
+    expect(calls).toEqual([{ method: 'POST', url: '/api/projects', body: {
+      name: 'Кромка', repositories: ['kromka-api', 'kromka-front', 'libs/shared'], notes: 'kromka-api/docs' } }])
+    expect(within(saved).getByText('libs/shared')).toBeTruthy()
+    expect(screen.queryByRole('form')).toBeNull()
+  })
+
+  it('правка: отмечено то, что в проекте, путь не из каталога — полем; отказ сервера — его словами', async () => {
+    open([{ ...PROJECT, repositories: ['kromka-api', 'deep/repo'] }], () => json({ detail: 'deep/repo: Каталога нет' }, 422))
+    fireEvent.click(within(await card('Кромка')).getByRole('button', { name: ru['projects.edit'] }))
+    const form = screen.getByRole('form', { name: 'Кромка' })
+    expect((within(form).getByRole('checkbox', { name: 'kromka-api' }) as HTMLInputElement).checked).toBe(true)
+    expect((within(form).getByRole('checkbox', { name: 'kromka-front' }) as HTMLInputElement).checked).toBe(false)
+    expect((within(form).getByRole('textbox', { name: 'Путь к рабочей копии 1' }) as HTMLInputElement).value).toBe('deep/repo')
+    fireEvent.click(within(form).getByRole('button', { name: ru['projects.save'] }))
+    expect((await within(form).findByRole('alert')).textContent).toBe('deep/repo: Каталога нет')
+    expect(calls).toEqual([{ method: 'PUT', url: '/api/projects/p1', body: {
+      name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs' } }])
+  })
+
+  it('удаление — со вторым шагом; проект выбран у совета — отказ виден, проект на месте', async () => {
+    open([PROJECT], () => json({ detail: 'Проект выбран у советов: «Уведомления» — сначала выберите им другой' }, 409))
+    const kromka = await card('Кромка')
+    fireEvent.click(within(kromka).getByRole('button', { name: ru['projects.delete'] }))
+    expect(calls).toEqual([])
+    fireEvent.click(within(kromka).getByRole('button', { name: ru['projects.deleteYes'] }))
+    expect((await within(kromka).findByRole('alert')).textContent).toContain('«Уведомления»')
+    expect(calls).toEqual([{ method: 'DELETE', url: '/api/projects/p1', body: undefined }])
+  })
+
+  it('удалённый проект уходит из списка', async () => {
+    open([PROJECT])
+    const kromka = await card('Кромка')
+    fireEvent.click(within(kromka).getByRole('button', { name: ru['projects.delete'] }))
+    fireEvent.click(within(kromka).getByRole('button', { name: ru['projects.deleteYes'] }))
+    expect(await screen.findByText(ru['projects.empty'])).toBeTruthy()
   })
 })

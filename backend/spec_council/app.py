@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from . import api
 from .agents import shutdown
-from .deps import get_store
+from .deps import get_projects, get_store, retired
 from .spa import mount_spa
 
 
@@ -19,6 +19,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # которого здесь не повторить.
     if get_store not in app.dependency_overrides:
         get_store()   # заодно и модели совета: неверно заданные — сервер не поднимется
+    if get_projects not in app.dependency_overrides:
+        get_projects()
+    retired()
     yield
     shutdown()  # идущие ходы моделей сворачиваются, оплаченное остаётся в лотке
 

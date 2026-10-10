@@ -447,7 +447,7 @@ def test_only_an_export_to_this_catalog_makes_its_decisions_the_streams_own(
     approve(council_id, "C", IDEA_C)
     skip(council_id, "C")
     # Поток выгружал ADR-0001 и ADR-0002. В этот каталог — они его, прошлых решений нет; в
-    # другой (COUNCIL_NOTES сменили) — здесь под теми номерами чужие решения, и их отбирают.
+    # другой (папку документации сменили) — здесь под теми номерами чужие решения, и их отбирают.
     record = NotesExport(run="n1", issues="i1", language="Russian", root=str(tmp_path / where),
                          notes=[ExportedNote(key=f"a:{n}", id=f"ADR-000{n}", type="adr",
                                              generated="…", written="…", digest="")

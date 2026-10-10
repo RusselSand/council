@@ -338,10 +338,18 @@ def names(output: bytes) -> list[str]:
 
 
 def located(text: str, base: Path | None) -> Path:
-    """Каталог рабочей копии по тексту человека. С каталогом репозиториев путь — от него и
-    только внутри него; без него — абсолютный."""
+    """Каталог рабочей копии по тексту человека: от каталога репозиториев (placed)."""
     if not text.strip():           # пробелы по краям — часть имени: « repo» — не «repo»
         raise RepositoryError("Укажите путь к рабочей копии репозитория")
+    path = placed(text, base)
+    if not path.is_dir():
+        raise RepositoryError(f"Каталога нет: {path}")
+    return path
+
+
+def placed(text: str, base: Path | None) -> Path:
+    """Путь по тексту человека. С каталогом репозиториев — от него и только внутри него, и
+    по ссылкам тоже; без него — абсолютный. Самого каталога может и не быть."""
     if "\0" in text:              # в пути его не бывает, а resolve() на нём падает
         raise RepositoryError("В пути не может быть символа NUL")
     path = Path(text)
@@ -352,8 +360,6 @@ def located(text: str, base: Path | None) -> Path:
     elif not path.is_absolute():
         raise RepositoryError(
             "Нужен абсолютный путь: каталог репозиториев (COUNCIL_REPOS) не задан")
-    if not path.is_dir():
-        raise RepositoryError(f"Каталога нет: {path}")
     return path.resolve()
 
 

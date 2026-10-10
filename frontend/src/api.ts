@@ -36,6 +36,8 @@ export interface Council {
   /** Каждый участник (хоть один) предлагает свой вариант, не видя чужих; судья выбирает лучший, а единственный проверяет. */
   participants: string[]; judge: string
   updated_at: string
+  /** Проект совета (Project.id): его репозитории подставляются в потоках, его папка — каталог заметок. '' — без проекта. */
+  project: string
   slicing: Slicing | null
   structure: Structure | null
   /** Потоки подтверждённых групп; null — группы ещё не подтверждены. */
@@ -330,7 +332,7 @@ export interface ExportedNote {
 export interface NotesExport { run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[] }
 
 /** Правка с экрана: меняются только присланные поля. */
-export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge'>> & {
+export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge' | 'project'>> & {
   /** Типы фрагментов готовой нарезки, {id: тип}: только изменённые, остальные не трогаются. */
   labels?: Record<number, Label>
   /** К какой нарезке относятся labels: Slicing.run. */
@@ -345,9 +347,32 @@ export interface Settings {
   repositories: string | null
   /** Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать. */
   figma: boolean
-  /** Каталог заметок проекта (COUNCIL_NOTES); null — поток не выгрузить. */
-  notes: string | null
+  /** Проекты: совет на экране берёт свой — его репозитории и папку документации. */
+  projects: Project[]
 }
+
+/**
+ * Проект: рабочие копии и папка документации, которые совет берёт по нему, а не вводит в каждом потоке.
+ * Пути — от каталога репозиториев (COUNCIL_REPOS) или, без него, абсолютные. notes_root — папка документации,
+ * как её находит сервер (по этому пути выгрузка помнит, куда записала); null — папки нет или она больше не
+ * годится, и тогда problem — почему.
+ */
+export interface Project {
+  id: string; name: string; repositories: string[]; notes: string; updated_at: string
+  notes_root: string | null; problem: string | null
+}
+/** Проект, как его сохраняют: название, рабочие копии, папка документации ('' — нет). */
+export type ProjectDraft = Pick<Project, 'name' | 'repositories' | 'notes'>
+/** Рабочие копии git в каталоге репозиториев — из них отмечают репозитории проекта. root null — каталог не задан. */
+export interface WorkingCopies { root: string | null; paths: string[] }
+
+/** Проект совета; нет его (без проекта или удалён) — null. */
+export const projectOf = (council: Council, settings: Settings): Project | null =>
+  (council.project && settings.projects.find(p => p.id === council.project)) || null
+
+/** Каталог заметок совета — папка документации его проекта, как её находит сервер; null — потоки не выгрузить. */
+export const notesOf = (council: Council, settings: Settings): string | null =>
+  projectOf(council, settings)?.notes_root ?? null
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
 export class ApiError extends Error {
@@ -372,6 +397,10 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 }
 
 const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
+const projectUrl = (id: string) => `/api/projects/${encodeURIComponent(id)}`
+const sendProject = (draft: ProjectDraft): RequestInit => ({
+  headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft),
+})
 
 /** К какой раскладке и версии её групп правка: Structure.run и revision. Не та — 409. */
 export interface GroupsVersion { run: string; revision: number }
@@ -502,6 +531,16 @@ export const api = {
       body: JSON.stringify({ run: at.run, revision: at.revision, ...(text === null ? {} : { text }) }),
     }),
   settings: () => request<Settings>('/api/settings'),
+  projects: () => request<Project[]>('/api/projects'),
+  createProject: (draft: ProjectDraft) => request<Project>('/api/projects', { method: 'POST', ...sendProject(draft) }),
+  updateProject: (id: string, draft: ProjectDraft) => request<Project>(projectUrl(id), { method: 'PUT', ...sendProject(draft) }),
+  /** Удалить проект: выбран у советов — 409, сначала выбрать им другой. */
+  deleteProject: async (id: string) => {
+    const res = await fetch(projectUrl(id), { method: 'DELETE' })
+    if (!res.ok) throw new ApiError(res.status, await errorMessage(res))
+  },
+  /** Рабочие копии в каталоге репозиториев: из них отмечают репозитории проекта. */
+  workingCopies: () => request<WorkingCopies>('/api/repositories'),
 }
 
 /**

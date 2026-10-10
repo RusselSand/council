@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
-import { api, councilPath, startOrFollow, type Council, type CouncilPatch, type Settings } from '../api'
+import { Link, useNavigate } from 'react-router'
+import { api, councilPath, projectOf, startOrFollow, type Council, type CouncilPatch, type Settings } from '../api'
 import { ModelCheckbox } from '../components/ModelBadge'
 import { Panel } from '../components/Panel'
 import { SaveStatus } from '../components/SaveStatus'
@@ -15,8 +15,9 @@ export const TYPING_DELAY = 600
 const countWords = (text: string) => text.split(/\s+/).filter(Boolean).length
 
 /**
- * Ввод: мысли в свободной форме, название и состав совета. Каждый участник изолированно
- * предлагает свой вариант, судья выбирает лучший; судья может и не участвовать.
+ * Ввод: мысли в свободной форме, название, проект и состав совета. Каждый участник изолированно
+ * предлагает свой вариант, судья выбирает лучший; судья может и не участвовать. Проект даёт потокам
+ * репозитории для скана и папку документации для заметок.
  */
 export function BriefStage({ council, settings, onChange, onStart, saver }: Readonly<{
   council: Council; settings: Settings
@@ -31,6 +32,9 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
   const nameId = useId()
   const { busy, error, go } = useAction(onStart)
   const { models, min_participants: minimum } = settings
+  const project = projectOf(council, settings)
+  // Проекта совета больше нет среди проектов (файл проекта не прочитался) — он виден, а не подменён первым.
+  const lost = council.project && !project ? [{ value: council.project, label: t('brief.projectMissing') }] : []
 
   const toggle = (alias: string, on: boolean) => {
     const chosen = new Set(council.participants)
@@ -65,6 +69,17 @@ export function BriefStage({ council, settings, onChange, onStart, saver }: Read
           <input id={nameId} className="text-field" value={council.name}
                  placeholder={t('council.untitled')}
                  onChange={e => onChange({ name: e.target.value }, TYPING_DELAY)} />
+        </Panel>
+
+        <Panel title={t('brief.projectTitle')} hint={t('brief.projectHint')}>
+          <SelectField label={t('brief.project')} value={council.project}
+                       options={[{ value: '', label: t('brief.noProject') }, ...lost,
+                                 ...settings.projects.map(p => ({ value: p.id, label: p.name }))]}
+                       onChange={chosen => onChange({ project: chosen }, 0)} />
+          {project && !project.notes_root && (
+            <p className="fragment-note">{project.problem ?? t('brief.projectNoNotes')}</p>
+          )}
+          <p className="brief-projects"><Link to="/projects">{t('brief.projectsLink')}</Link></p>
         </Panel>
 
         <Panel title={t('brief.councilTitle')} hint={t('brief.councilHint')}>

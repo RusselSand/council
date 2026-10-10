@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, Outlet, useNavigate } from 'react-router'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router'
 import { api, councilPath } from './api'
 import { setLanguage } from './i18n'
 
@@ -31,11 +31,12 @@ export function App() {
     <div className="app">
       <header className="header">
         <div className="header-title">
-          <Link to="/" className="brand"><span className="brand-mark" />Spec Council</Link>
+          <Link to="/" className="brand" aria-label="Spec Council"><span className="brand-mark" /><span className="brand-name">Spec Council</span></Link>
           {crumb && <><span className="crumb-sep" aria-hidden="true">/</span><span className="crumb">{crumb}</span></>}
         </div>
         <div className="header-actions">
           {error && <span className="error-text" role="alert">{t('header.createFailed')}</span>}
+          <NavLink to="/projects" className="header-link">{t('header.projects')}</NavLink>
           <button className="btn-lang" onClick={() => setLanguage(otherLanguage)}
                   aria-label={t('header.switchLanguage')} title={t('header.switchLanguage')}>
             {otherLanguage.toUpperCase()}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, isNotFound, searchesOf, seeking,
+  api, ApiError, councilPath, isNotFound, notesOf, searchesOf, seeking,
   type Council, type CouncilPatch, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
@@ -174,7 +174,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       <nav className="stage-bar" aria-label={t('council.stages')}>
         {/* Номер этапа — в цвете светофора; словами то же — для скринридера. */}
         {STAGES.map((s, i) => {
-          const light = state.kind !== 'ok' ? 'idle' : stageLight(state.data[0], s, state.data[1].notes)
+          const light = state.kind !== 'ok' ? 'idle' : stageLight(state.data[0], s, notesOf(state.data[0], state.data[1]))
           return (
             <NavLink key={s} to={councilPath(id, s)} className="tab">
               {({ isActive }) => (

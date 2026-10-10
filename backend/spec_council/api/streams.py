@@ -524,7 +524,7 @@ def catalog_at(notes: Path | None) -> Catalog | None:
 
 def own_ids(stream: Stream, notes: Path | None) -> list[str]:
     """Заметки, которые выгрузил сам поток в этот каталог: его решения ему не «прошлые».
-    Выгрузка в другой каталог (COUNCIL_NOTES сменили) здесь ничего не значит."""
+    Выгрузка в другой каталог (проект или его папку сменили) здесь ничего не значит."""
     record = export_in(stream.notes, notes)
     return [note.id for note in record.notes] if record else []
 

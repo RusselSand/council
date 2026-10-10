@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router'
 import {
@@ -123,7 +124,7 @@ function Result({ slicing, models, onRelabel, saver }: Readonly<{
 }
 
 /** Пометки под фрагментом: где человек не согласился с советом, где модели разошлись, где судья двигал границу. */
-function notesOf(fragment: LabeledFragment, models: Model[], t: ReturnType<typeof useTranslation>['t']): string[] {
+function notesOf(fragment: LabeledFragment, models: Model[], t: TFunction): string[] {
   const labelName = (label: Label) => t(`label.${label}`)
   const notes = []
   if (fragment.label !== fragment.council_label) {

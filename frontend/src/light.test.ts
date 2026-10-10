@@ -11,7 +11,7 @@ const NOTES = '/notes'
 
 const BASE: Council = {
   id: 'c1', name: 'Совет', status: 'brief', brief: 'текст', participants: ['sol', 'fable'], judge: 'fable',
-  updated_at: '2026-10-07T10:00:00Z', slicing: null, structure: null, streams: null,
+  updated_at: '2026-10-07T10:00:00Z', project: '', slicing: null, structure: null, streams: null,
 }
 const fragment = { id: 1, text: 'Хочу воркер.', label: 'idea' as const, reason: '', council_label: 'idea' as const,
                    decided_by: 'agreed' as const, votes: [], slice_note: null }
@@ -228,7 +228,7 @@ describe('светофор', () => {
     expect(attention(council(on(cut('failed'))), NOTES).map(a => a.what)).toEqual(['issuesFailed'])
     expect(attention(council(ready), NOTES).map(a => a.what)).toEqual(['notesWait'])
     expect(attention(council(written), NOTES)).toEqual([])
-    // Каталог сменили (COUNCIL_NOTES): выгрузка в прежний — не выгрузка, поток снова ждёт её.
+    // Каталог сменили (проект или его папку): выгрузка в прежний — не выгрузка, поток снова ждёт её.
     expect(streamLight(written, '/other')).toBe('yours')
     expect(attention(council(written), '/other').map(a => a.what)).toEqual(['notesWait'])
     // Поверх выгрузки собрали новый черновик: его ход важнее прежней выгрузки.

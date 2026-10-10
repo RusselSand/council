@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..agents import AgentRunner
 from ..config import MIN_PARTICIPANTS, AppConfig
-from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, Store, StoreDep
+from ..deps import AgentsDep, ConfigDep, Launcher, LauncherDep, ProjectsDep, Store, StoreDep
 from ..models import (
     STREAM_RUNS,
     Council,
@@ -34,7 +34,8 @@ router = APIRouter(prefix="/councils", tags=["councils"])
 
 MISSING = "Совет не найден"
 NOT_FOUND = {404: {"description": MISSING}}
-INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей"}}
+INVALID_MODELS = {422: {"description": "Участники или судья не из подключённых моделей, "
+                                       "или такого проекта нет"}}
 NOT_RELABELABLE = {409: {"description": "Типы меняются только у готовой и той же нарезки"}}
 CANNOT_START = {
     503: {"description": "Не запущено: сервер останавливается или состав совета меняется"},
@@ -78,9 +79,13 @@ def list_councils(store: StoreDep) -> list[Council]:
 
 
 @router.post("", status_code=201)
-def create_council(store: StoreDep, config: ConfigDep) -> CouncilCreated:
+def create_council(store: StoreDep, config: ConfigDep, projects: ProjectsDep) -> CouncilCreated:
+    """Новый совет — с проектом совета, который трогали последним: обычно работают над одним
+    проектом подряд, и выбирать его каждый раз заново незачем. Проекта того уже нет — без него."""
+    latest = next(iter(store.list_councils()), None)
+    project = latest.project if latest and projects.get_project(latest.project) else ""
     council = store.create_council(
-        participants=config.default_participants, judge=config.default_judge
+        participants=config.default_participants, judge=config.default_judge, project=project
     )
     return CouncilCreated(id=council.id)
 
@@ -95,18 +100,26 @@ def get_council(council_id: str, store: StoreDep) -> Council:
 
 @router.patch("/{council_id}", responses={**NOT_FOUND, **INVALID_MODELS, **NOT_RELABELABLE})
 def update_council(
-    council_id: str, patch: CouncilPatch, store: StoreDep, config: ConfigDep
+    council_id: str, patch: CouncilPatch, store: StoreDep, config: ConfigDep,
+    projects: ProjectsDep,
 ) -> Council:
+    """Правка с экрана. Другой проект ничего в совете не сбрасывает, как и смена каталога
+    заметок: сканы остаются, какие были, отбор решений проекта к другому каталогу устаревает
+    сам, а выгрузка считается только в тот каталог, куда её записали."""
     check_models(patch, config)
     changes = patch.model_dump(exclude_none=True, exclude={"labels", "slicing_run"})
-    if patch.labels is None:
+    if patch.labels is None and patch.project is None:
         council = store.update_council(council_id, changes)
     else:
-        with council_lock:  # типы и запуск нарезки не должны разойтись
+        # Типы и запуск нарезки не должны разойтись, а проект — пропасть, пока его выбирают.
+        with council_lock:
             current = store.get_council(council_id)
             if current is None:
                 raise HTTPException(404, MISSING)
-            changes["slicing"] = relabeled(current.slicing, patch.labels, patch.slicing_run)
+            if patch.project and projects.get_project(patch.project) is None:
+                raise HTTPException(422, "Такого проекта нет — возможно, его удалили")
+            if patch.labels is not None:
+                changes["slicing"] = relabeled(current.slicing, patch.labels, patch.slicing_run)
             council = store.update_council(council_id, changes)
     if council is None:
         raise HTTPException(404, MISSING)

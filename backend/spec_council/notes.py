@@ -360,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m spec_council.notes",
         description="Заметки проекта — только чтение, ответ в JSON.")
-    parser.add_argument("root", help="каталог заметок (COUNCIL_NOTES)")
+    parser.add_argument("root", help="каталог заметок: папка документации проекта")
     commands = parser.add_subparsers(dest="command", required=True)
     for name, helped in (("get", "заметка"), ("chain", "всё, что растёт из IDEA"),
                          ("links", "вышестоящие и нижестоящие заметки")):
