@@ -34,13 +34,13 @@ const result = (more: Partial<Outcome> = {}): Outcome => ({
   id: 'O1', title: 'Итог', behavior: 'Так работает.', adr_ids: [], constraint_ids: [], risk_ids: [],
   acceptance_criteria: ['Видно сразу.'], blocked_by: [], gaps: [], ...more })
 const assembled = (state: OutcomeDiscovery['state'], outcomes: Outcome[] = []): OutcomeDiscovery =>
-  ({ state, run: 'o1', decisions: [], steps: [], outcomes, uncovered_adr_ids: [], error: null })
+  ({ state, run: 'o1', decisions: [], steps: [], outcomes, kept: [], touched: [], uncovered_adr_ids: [], error: null })
 const task = (more: Partial<Issue> = {}): Issue => ({
   id: 'I1', title: 'Задача', user_story: 'As a member, I want it.', main_entry_points: [], current_state: '',
   scope: ['Сделать.'], outcome_ids: ['O1'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: [],
   blocked_by: [], acceptance_criteria: [], ...more })
 const cut = (state: IssueDiscovery['state'], issues: Issue[] = []): IssueDiscovery =>
-  ({ state, run: 'i1', outcomes: 'o1', code: false, sources: [], steps: [], issues, gaps: [],
+  ({ state, run: 'i1', outcomes: 'o1', code: false, sources: [], steps: [], issues, gaps: [], kept: [], cut: {},
      uncovered_outcome_ids: [], error: null })
 /**
  * Поток: approved — идея утверждена; questions — поиск вопросов; chosen — вопросы отобраны;
@@ -51,7 +51,7 @@ const stream = (discovery: IdeaDiscovery | null, approved = false, questions: Qu
                 chosen = false, proposals: ProposalDiscovery | null = null, picked = false,
                 analysis: DecisionAnalysis | null = null, decided = false,
                 outcomes: OutcomeDiscovery | null = null, issues: IssueDiscovery | null = null): Stream => ({
-  group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions, earlier: [],
+  group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions, earlier: [], earlier_outcomes: null, earlier_issues: null,
   // Утверждённая идея — шаги «Репозиторий» и «Дизайн» пропущены: их проверяют свои тесты.
   scan: null, repository: approved ? { by: 'skipped', scan_run: '' } : null,
   design_scan: null, design: approved ? { by: 'skipped', scan_run: '' } : null,

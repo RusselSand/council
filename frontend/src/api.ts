@@ -279,9 +279,15 @@ export interface Outcome {
   acceptance_criteria: string[]; blocked_by: string[]; gaps: OutcomeGap[]
 }
 /** Сборка итогов из решений (decisions — к каким); uncovered_adr_ids — решения, не вошедшие ни в один итог. */
+/** Новое решение задевает закреплённый итог: оставить его как есть или пересобрать — решает человек. */
+export interface OutcomeTouch { outcome_id: string; adr_ids: string[]; reason: string }
 export interface OutcomeDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; decisions: string[]; steps: Step[]
   outcomes: Outcome[]; uncovered_adr_ids: string[]; error: string | null
+  /** Закреплённые итоги: были готовы, их решения те же — их не пересобирали. */
+  kept: string[]
+  /** Какие закреплённые итоги задевают новые решения — ждут решения человека. */
+  touched: OutcomeTouch[]
 }
 /** Пробел нарезки (G1, G2…): без его решения часть работы не начать — материал для нового вопроса. */
 export interface IssueGap { id: string; question: string; reason: string; outcome_ids: string[] }
@@ -304,6 +310,10 @@ export interface IssueDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; outcomes: string; code: boolean; sources: ScannedRepository[]
   steps: Step[]; issues: Issue[]; gaps: IssueGap[]; uncovered_outcome_ids: string[]
   error: string | null
+  /** Задачи, перенесённые из прежней нарезки: их итоги закреплены и те же — они уже в разработке. */
+  kept: string[]
+  /** Каким был каждый итог при нарезке: тот же — его задачи переносятся. */
+  cut: Record<string, string>
 }
 /**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
@@ -323,6 +333,8 @@ export interface Stream {
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
   /** Работа по вопросам до последней правки отбора или выбора: по тем же вопросам и выбору она переносится. */
   earlier: QuestionWork[]
+  /** Последние собранные итоги и нарезанные задачи, пока правка выше их сняла: из них закрепляют готовое. */
+  earlier_outcomes: OutcomeDiscovery | null; earlier_issues: IssueDiscovery | null
   outcomes: OutcomeDiscovery | null; issues: IssueDiscovery | null
   notes_draft: NotesDraft | null; notes: NotesExport | null
 }
@@ -545,6 +557,12 @@ export const api = {
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, outcomes_run: outcomesRun }),
+    }),
+  /** Закреплённый итог, который задевают новые решения: rebuild — пересобрать итоги без него среди закреплённых, иначе — оставить. */
+  settleTouch: (id: string, at: GroupsVersion, group: string, outcomesRun: string, outcomeId: string, rebuild: boolean) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes/touched`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, outcomes_run: outcomesRun, outcome_id: outcomeId, rebuild }),
     }),
   /** Нарезать заново: после сбоя или без подключения к моделям при утверждении. */
   seekIssues: (id: string, group: string) =>

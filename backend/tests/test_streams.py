@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -78,6 +79,11 @@ class Agents:
 
     def __init__(self):
         self.online = {"sol", "fable"}
+        # Сборка итогов говорит, что новые решения задевают закреплённые итоги.
+        self.touching = False
+        # Сборка итогов при закреплённых нового не собирает; новые задачи зависят от перенесённых.
+        self.nothing_new = False
+        self.depending = False
         self.asked = []
         self.prompts = {}
         self.workspaces = {}
@@ -112,9 +118,24 @@ class Agents:
                 "evidence": [{"path": "app.py", "symbol": "main"}]}]})
         found = {"text": OPTION, "reason": "мерило идеи", "constraint_ids": ["F4"]}
         if "-outcome_" in key:
-            return json.dumps(self.outcomes(prompt))
+            found = self.outcomes(prompt)
+            fixed = json.loads(section(prompt, "FIXED OUTCOMES"))
+            if self.nothing_new and fixed:
+                found["outcomes"] = []
+            if self.touching and fixed:
+                adrs = [adr["id"] for adr in json.loads(section(prompt, "ACCEPTED ADRS"))]
+                found["touches"] = [{"outcome_id": outcome["id"],
+                                     "adr_ids": [a for a in adrs if a not in outcome["adr_ids"]],
+                                     "reason": "новое решение меняет поведение"}
+                                    for outcome in fixed]
+            return json.dumps(found)
         if "-issue_" in key:
-            return json.dumps(self.issues(prompt))
+            found = self.issues(prompt)
+            fixed = json.loads(section(prompt, "FIXED ISSUES"))
+            if self.depending and fixed:
+                for n, issue in enumerate(found["issues"], len(fixed) + 1):
+                    issue["id"], issue["depends_on"] = f"I{n}", [one["id"] for one in fixed]
+            return json.dumps(found)
         if "-decision_" in key:
             return json.dumps(self.analysis(prompt, judge="-decision_judge-" in key))
         if "-proposal_discovery-" in key:
@@ -1049,6 +1070,147 @@ def test_another_idea_drops_what_was_kept_from_before(agents):
     # Другая идея — вопросы к ней свои: прежняя работа по вопросам к ней не относится.
     assert approve(council_id, "C", "Совсем другая идея").status_code == 200
     assert streams_of(council_id)["C"].earlier == []
+
+
+# --- готовые итоги закрепляются, их задачи переносятся
+
+ALL_DECIDED = [("Q1", "P1", WHY), ("Q2", "P2", WHY)]
+
+
+def ready_c(council_id):
+    """Поток C: оба вопроса решены — итог готов, утверждён и нарезан на задачу."""
+    chosen_c(council_id, (("Q1", "P1"), ("Q2", "P2")))
+    assert decide(council_id, "C", ALL_DECIDED).status_code == 200
+    assert approves(council_id, "C").status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert [o.id for o in stream.outcomes.outcomes] == ["O1"] and not stream.outcomes.kept
+    assert [i.id for i in stream.issues.issues] == ["I1"]
+    return stream
+
+
+def added_c(council_id):
+    """К отбору добавлен вопрос, выбор и решение по нему — прежние решения те же."""
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    return decide(council_id, "C", [*ALL_DECIDED, ("Q3", "P3", WHY)])
+
+
+def test_a_ready_outcome_with_the_same_decisions_is_kept_and_only_the_rest_is_assembled(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    assert added_c(council_id).status_code == 200
+    stream = streams_of(council_id)["C"]
+    # O1 закреплён как был; модели видели его данностью, новое — дальше по номерам.
+    assert stream.outcomes.kept == ["O1"]
+    assert stream.outcomes.outcomes[0] == before.outcomes.outcomes[0]
+    assert [o.id for o in stream.outcomes.outcomes] == ["O1", "O2"]
+    assert '"id": "O1"' in section(agents.prompts["outcome_discovery"], "FIXED OUTCOMES")
+    # Его задача переносится: режут только новый итог.
+    assert approves(council_id, "C").status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.kept, [i.id for i in issues.issues]) == (["I1"], ["I1", "I2"])
+    assert issues.issues[0] == before.issues.issues[0]
+    cut = json.loads(section(agents.prompts["issue_discovery"], "OUTCOMES"))
+    assert [o["id"] for o in cut] == ["O2"]
+    assert '"id": "I1"' in section(agents.prompts["issue_discovery"], "FIXED ISSUES")
+
+
+def test_an_outcome_whose_decision_changed_is_not_kept(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    # Решение по Q2 — с другим обоснованием: итог на нём уже не тот.
+    assert decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", "Иначе."),
+                                    ("Q3", "P3", WHY)]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert stream.outcomes.kept == [] and [o.id for o in stream.outcomes.outcomes] == ["O1"]
+
+
+def test_a_touched_outcome_waits_for_the_human_who_keeps_it(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.touching = True
+    added_c(council_id)
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert [(t.outcome_id, t.adr_ids) for t in outcomes.touched] == [("O1", ["ADR-3"])]
+    res = approves(council_id, "C")
+    assert res.status_code == 409 and "задевают" in res.json()["detail"]
+    assert settles(council_id, outcomes.run, "O1").status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert stream.outcomes.touched == [] and stream.outcomes.run == outcomes.run
+    assert approves(council_id, "C").status_code == 200
+
+
+def test_a_touched_outcome_the_human_rebuilds_is_assembled_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.touching = True
+    added_c(council_id)
+    outcomes = streams_of(council_id)["C"].outcomes
+    agents.touching = False
+    assert settles(council_id, outcomes.run, "O1", rebuild=True).status_code == 200
+    stream = streams_of(council_id)["C"]
+    # Пересобирают только O1: другой готовый итог с теми же решениями — закреплён.
+    assert stream.outcomes.run != outcomes.run and stream.outcomes.kept == ["O2"]
+    fixed = json.loads(section(agents.prompts["outcome_discovery"], "FIXED OUTCOMES"))
+    assert [o["id"] for o in fixed] == ["O2"]
+    # Задачу прежнего итога не переносят: итог пересобран.
+    assert approves(council_id, "C").status_code == 200
+    assert streams_of(council_id)["C"].issues.kept == []
+
+
+def test_a_new_issue_may_wait_for_a_carried_one(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.depending = True
+    added_c(council_id)
+    assert approves(council_id, "C").status_code == 200
+    run = streams_of(council_id)["C"].issues
+    assert run.state == "done", run.error
+    assert [(i.id, i.depends_on) for i in run.issues] == [("I1", []), ("I2", ["I1"])]
+
+
+def test_outcomes_all_covered_by_carried_issues_are_cut_without_models_at_once(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    agents.nothing_new = True
+    added_c(council_id)
+    assert [o.id for o in streams_of(council_id)["C"].outcomes.outcomes] == ["O1"]
+    calls = len(agents.asked)
+    done = []
+    worker = threading.Thread(target=lambda: done.append(approves(council_id, "C")), daemon=True)
+    worker.start()
+    worker.join(5)
+    assert done and done[0].status_code == 200          # под замком совета не зависает
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.kept, [i.id for i in issues.issues]) == ("done", ["I1"], ["I1"])
+    assert len(agents.asked) == calls
+
+
+def test_an_issue_of_an_outcome_that_got_blocked_is_not_carried(agents):
+    council_id = grouped()
+    confirm(council_id)
+    ready_c(council_id)
+    # Решение по Q2 сняли: итог тот же по тексту, но его держит Q2 — задачу не переносят.
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    assert decide(council_id, "C", DECIDED).status_code == 200
+    assert streams_of(council_id)["C"].outcomes.outcomes[0].blocked_by == ["Q2"]
+    assert approves(council_id, "C").status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert issues.kept == [] and issues.issues[0].blocked_by
+
+
+def settles(council_id, outcomes_run, outcome_id, rebuild=False):
+    return client.post(f"/api/councils/{council_id}/streams/C/outcomes/touched",
+                       json={"run": "g1", "revision": 0, "outcomes_run": outcomes_run,
+                             "outcome_id": outcome_id, "rebuild": rebuild})
 
 
 def test_fixed_decisions_start_the_outcomes_and_an_open_question_blocks(agents):

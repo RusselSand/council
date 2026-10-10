@@ -725,6 +725,15 @@ class Outcome(BaseModel):
     gaps: list[OutcomeGap] = []
 
 
+class OutcomeTouch(BaseModel):
+    """Новое решение задевает закреплённый итог: модели его не переписывают, а говорят — и
+    человек решает, оставить итог как есть или пересобрать его."""
+
+    outcome_id: str
+    adr_ids: list[str] = []
+    reason: str = ""
+
+
 class OutcomeDiscovery(BaseModel):
     """Сборка итогов потока из его решений: участники по отдельности, судья сводит их в
     итоговый набор. Ход по шагам и итог."""
@@ -735,6 +744,11 @@ class OutcomeDiscovery(BaseModel):
     decisions: list[str] = []
     steps: list[Step]
     outcomes: list[Outcome] = []
+    # Закреплённые итоги (их номера): были готовы, и их решения с тех пор те же — их не
+    # пересобирают, модели видят их как данность и собирают только остальное.
+    kept: list[str] = []
+    # Какие закреплённые итоги задевают новые решения — ждут решения человека.
+    touched: list[OutcomeTouch] = []
     # Принятые решения, не вошедшие ни в один итог.
     uncovered_adr_ids: list[str] = []
     error: str | None = None
@@ -885,6 +899,14 @@ class IssueDiscovery(BaseModel):
     steps: list[Step]
     issues: list[Issue] = []
     gaps: list[IssueGap] = []
+    # Задачи, перенесённые из прежней нарезки (их номера): их итоги закреплены и те же — их не
+    # нарезают заново, они уже в разработке.
+    kept: list[str] = []
+    # Каким был каждый итог, когда его нарезали (outcome_print): тот же — его задачи переносят.
+    cut: dict[str, str] = {}
+    # Решения, к которым резали (decisions_key): ADR-n задачи — n-е из них; по ним номера ADR
+    # перенесённой задачи пересчитывают к новому отбору.
+    decisions: list[str] = []
     # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
     uncovered_outcome_ids: list[str] = []
     error: str | None = None
@@ -939,6 +961,10 @@ class Stream(BaseModel):
     asked: int = 0
     outcomes: OutcomeDiscovery | None = None
     issues: IssueDiscovery | None = None
+    # Последние собранные итоги и нарезанные задачи, пока правка выше их сняла: из них
+    # закрепляют готовые итоги и их задачи, а не собирают и не нарезают заново.
+    earlier_outcomes: OutcomeDiscovery | None = None
+    earlier_issues: IssueDiscovery | None = None
     # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:
     # по ней повторная находит свои прежние заметки.
     notes_draft: NotesDraft | None = None
@@ -1177,6 +1203,16 @@ class WorkingCopies(BaseModel):
 
     root: str | None = None
     paths: list[str] = []
+
+
+class SettleTouch(GroupsEdit):
+    """Человек решает о закреплённом итоге, который задевают новые решения: rebuild — пересобрать
+    итоги без него среди закреплённых, иначе — оставить его как есть. outcomes_run — итоги, что
+    были на экране."""
+
+    outcomes_run: str
+    outcome_id: str
+    rebuild: bool = False
 
 
 class Model(BaseModel):

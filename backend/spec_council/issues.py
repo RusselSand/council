@@ -14,7 +14,7 @@ import itertools
 import json
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
 from .ideas import reason_of
@@ -46,6 +46,8 @@ class Context:
     questions: Mapping[str, str] = field(default_factory=dict)
     # Что даёт задаче её итог, по его номеру.
     parents: Mapping[str, Parent] = field(default_factory=dict)
+    # Перенесённые задачи прежней нарезки: новая может от них зависеть, а их номера — не её.
+    fixed: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -242,7 +244,7 @@ def issue_set(data: dict, context: Context) -> Answer:
             problems.append(str(exc))
     if problems and not valid:
         raise BadAnswer(problems[0])
-    issues = linked(valid)
+    issues = linked(valid, context.fixed)
     if cycle := cycle_of(issues):
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
     gaps, issues = placed(gaps, issues)
@@ -257,6 +259,8 @@ def after_blocked(issues: list[Candidate]) -> list[Candidate]:
     held: dict[str, frozenset[str]] = {}
 
     def of(name: str) -> frozenset[str]:
+        if name not in named:
+            return frozenset()        # перенесённую задачу ничто не держит — её бы не перенесли
         if name not in held:
             issue = named[name]
             held[name] = frozenset(issue.blocked_by).union(*map(of, issue.depends_on))
@@ -314,12 +318,14 @@ def placed(gaps: list[Gap], issues: list[Candidate]) -> tuple[list[Gap], list[Ca
         if name in renamed or not GAP_ID.fullmatch(name)))) for issue in issues]
 
 
-def linked(issues: list[Candidate]) -> list[Candidate]:
+def linked(issues: list[Candidate], fixed: frozenset[str] = frozenset()) -> list[Candidate]:
     """Номер, который ответ дал двум задачам, ни одной из них не номер: на него не сослаться.
-    Зависимости — только на задачи ответа с номером, не на себя."""
+    Зависимости — только на задачи ответа с номером, не на себя, и на перенесённые задачи
+    прежней нарезки (fixed): их номер новой задаче не достаётся — ссылка на него — на них."""
     counts = Counter(issue.name for issue in issues)
-    named = [issue if counts[issue.name] == 1 else replace(issue, name="") for issue in issues]
-    known = {issue.name for issue in named if issue.name}
+    named = [issue if counts[issue.name] == 1 and issue.name not in fixed
+             else replace(issue, name="") for issue in issues]
+    known = {issue.name for issue in named if issue.name} | set(fixed)
     return [replace(issue, depends_on=tuple(dict.fromkeys(
         name for name in issue.depends_on if name in known and name != issue.name)))
         for issue in named]
@@ -349,11 +355,11 @@ def cycle_of(issues: list[Candidate]) -> list[str]:
     return []
 
 
-def as_prompt(answer: Answer) -> dict:
+def as_prompt(answer: Answer, fixed: Iterable[str] = ()) -> dict:
     """Задачи для судьи — в той же форме, в какой их просили у участников, и пробелы с их
     номерами: на них ссылается blocked_by. Задача без номера получает номер, которого нет ни у
-    одной другой: иначе судья не отличил бы её от тёзки."""
-    taken = {issue.name for issue in answer.issues if issue.name}
+    одной другой, и ни у перенесённой (fixed): иначе судья не отличил бы её от тёзки."""
+    taken = {issue.name for issue in answer.issues if issue.name} | set(fixed)
     free = (f"I{n}" for n in itertools.count(1) if f"I{n}" not in taken)
     return {
         "issues": [{
@@ -392,9 +398,11 @@ def same_issues(answer: Answer) -> str:
         # Задачи-двойники по содержанию: по содержаниям граф не восстановить (общая ли у них
         # предшественница — не видно), и набор равен лишь буквально такому же — иначе судья.
         return json.dumps({"exact": data}, ensure_ascii=False, sort_keys=True)
-    # Содержания разные — граф и есть рёбра между ними: «эта задача — после этих».
+    # Содержания разные — граф и есть рёбра между ними: «эта задача — после этих». Перенесённой
+    # задачи в ответе нет — она одна и та же для всех: по номеру.
     issues = sorted(json.dumps({"issue": contents[issue["id"]],
-                                "after": sorted(contents[name] for name in issue["depends_on"])},
+                                "after": sorted(contents.get(name, f"fixed {name}")
+                                                for name in issue["depends_on"])},
                                ensure_ascii=False, sort_keys=True) for issue in data["issues"])
     return json.dumps({"issues": issues, "gaps": sorted(gaps.values())}, ensure_ascii=False,
                       sort_keys=True)

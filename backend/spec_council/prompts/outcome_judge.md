@@ -150,6 +150,22 @@ statements, reasons, titles, descriptions, questions, proposals and the like —
 {{language}}. Text that these instructions require to be quoted verbatim stays exactly as in
 the input. JSON keys, IDs and enum values stay exactly as specified below.
 
+## Fixed OUTCOMES
+
+FIXED OUTCOMES below were ready before and none of their ADRs has changed since: they are being
+developed already. They are fixed:
+
+- do not return them, do not change them and do not repeat their behavior in a new OUTCOME;
+- assemble OUTCOMES only for what they do not cover: the accepted ADRs no FIXED OUTCOME lists,
+  and the OPEN QUESTIONS;
+- a new OUTCOME may rely on an ADR a FIXED OUTCOME lists, if it needs that decision too.
+
+If a new ADR — one that no FIXED OUTCOME lists — changes the behavior, the boundaries or the
+acceptance criteria of a FIXED OUTCOME, do not rewrite that OUTCOME: report it in `touches`, with
+the OUTCOME id, the ADRs that touch it and why. The human decides whether to keep the OUTCOME as
+it is or to assemble it again. Do not report a touch when a new ADR only adds something next to a
+FIXED OUTCOME without changing it.
+
 ## Response format
 
 Return only JSON:
@@ -168,6 +184,13 @@ Return only JSON:
       ],
       "blocked_by": ["Q2", "Q3"],
       "gaps": []
+    }
+  ],
+  "touches": [
+    {
+      "outcome_id": "O1",
+      "adr_ids": ["ADR-7"],
+      "reason": "Why the new decision changes the fixed OUTCOME."
     }
   ],
   "coverage": {
@@ -206,6 +229,10 @@ Before answering, check that:
 ## ACCEPTED ADRS
 
 {{accepted_adrs}}
+
+## FIXED OUTCOMES
+
+{{fixed_outcomes}}
 
 ## CONSTRAINTS AND RISKS
 

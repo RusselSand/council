@@ -6,6 +6,10 @@
 вопрос: решённый уже не держит. Пробел — неопределённость, которой нет среди вопросов: пробел,
 совпавший с открытым вопросом отбора, — блокировка им, с решённым — уже ответ. Список итогов
 может быть и пустым: фиктивный итог хуже.
+
+Закреплённые итоги (готовые, с теми же решениями) модели не возвращают: если новое решение их
+задевает, они говорят об этом в touches — какой итог, какие решения и почему. Пометка — только про
+закреплённый итог и только с решениями, которых в нём нет: остальное отбрасывается.
 """
 
 import json
@@ -35,6 +39,25 @@ class Context:
     open_questions: frozenset[str]
     # Вопросы отбора: текст, как его сравнивает same_question, — номер.
     questions: Mapping[str, str] = field(default_factory=dict)
+    # Закреплённые итоги: номер — решения, на которых он стоит.
+    kept: Mapping[str, frozenset[str]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Touch:
+    """Новые решения задевают закреплённый итог."""
+
+    outcome_id: str
+    adr_ids: tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class Assembly:
+    """Ответ сборки: новые итоги и какие закреплённые задевают новые решения."""
+
+    outcomes: tuple[Candidate, ...]
+    touches: tuple[Touch, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,6 +135,11 @@ def candidate_of(item: object, context: Context, what: str) -> Candidate:
 def outcome_list(data: dict, context: Context) -> list[Candidate]:
     """Итоги из ответа участника или судьи. Негодный итог отбрасывается, но если не годится
     ни один — ответ негодный. Пустой список — честное «итогов из этих решений не собрать»."""
+    return list(assembly_of(data, context).outcomes)
+
+
+def assembly_of(data: dict, context: Context) -> Assembly:
+    """Ответ сборки целиком: итоги (как outcome_list) и пометки о закреплённых итогах."""
     raw = data.get("outcomes")
     if not isinstance(raw, list):
         raise BadAnswer("нет списка outcomes")
@@ -123,7 +151,30 @@ def outcome_list(data: dict, context: Context) -> list[Candidate]:
             problems.append(str(exc))
     if problems and not valid:
         raise BadAnswer(problems[0])
-    return valid
+    return Assembly(tuple(valid), touches_of(data.get("touches"), context))
+
+
+def touches_of(value: object, context: Context) -> tuple[Touch, ...]:
+    """Пометки: закреплённый итог и решения, которых в нём нет, — те, что его задевают. Чужой
+    итог или ни одного нового решения — не пометка. Один итог дважды — одна пометка."""
+    found: dict[str, Touch] = {}
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("outcome_id") or "").strip().upper()
+        if name not in context.kept:
+            continue
+        adrs = tuple(adr for adr in adrs_in(item.get("adr_ids"), context.adrs)
+                     if adr not in context.kept[name])
+        if not adrs:
+            continue
+        before = found.get(name)
+        reason = reason_of(item.get("reason"))
+        if before is not None:
+            adrs = tuple(sorted({*before.adr_ids, *adrs}, key=lambda a: int(a.split("-")[1])))
+            reason = "; ".join(text for text in dict.fromkeys((before.reason, reason)) if text)
+        found[name] = Touch(name, adrs, reason)
+    return tuple(found[name] for name in sorted(found, key=lambda n: int(n[1:])))
 
 
 def as_prompt(candidate: Candidate) -> dict:
@@ -135,6 +186,17 @@ def as_prompt(candidate: Candidate) -> dict:
             "acceptance_criteria": list(candidate.criteria),
             "blocked_by": list(candidate.blocked_by),
             "gaps": [{"question": gap.question, "reason": gap.reason} for gap in candidate.gaps]}
+
+
+def same_assembly(assembly: Assembly) -> str:
+    """Ответ сборки для сравнения: итоги (как same_outcomes) и какие закреплённые задеты —
+    разошлись в этом, значит, разошлись."""
+    touched = sorted([touch.outcome_id, list(touch.adr_ids)] for touch in assembly.touches)
+    return json.dumps([same_outcomes(list(assembly.outcomes)), touched], ensure_ascii=False)
+
+
+def touch_prompt(touch: Touch) -> dict:
+    return {"outcome_id": touch.outcome_id, "adr_ids": list(touch.adr_ids), "reason": touch.reason}
 
 
 def same_outcomes(candidates: list[Candidate]) -> str:
