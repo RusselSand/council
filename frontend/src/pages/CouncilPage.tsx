@@ -86,10 +86,17 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
     api.projects().then(projects => update(([c, settings]) => [c, { ...settings, projects }]),
                         () => { /* остаются прежние — следующее действие спросит снова */ })
   }, [update])
+  // Вернулись на вкладку — и проект самого совета могли сменить там же: без хода совета опроса нет, и
+  // шаг «Репозиторий» подставил бы рабочие копии прежнего.
   useEffect(() => {
-    window.addEventListener('focus', refreshProjects)
-    return () => window.removeEventListener('focus', refreshProjects)
-  }, [refreshProjects])
+    const returned = () => {
+      Promise.all([api.council(id), api.projects()]).then(
+        ([fresh, projects]) => update(([c, settings]) => [{ ...c, project: fresh.project }, { ...settings, projects }]),
+        () => { /* остаётся прежнее — следующее действие спросит снова */ })
+    }
+    window.addEventListener('focus', returned)
+    return () => window.removeEventListener('focus', returned)
+  }, [id, update])
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
     acted.current += 1
     update(([c, settings]) => [{

@@ -43,6 +43,8 @@ from .groups import NOT_THESE_GROUPS, current
 from .streams import (
     CHANGING,
     NO_STREAM,
+    changed_choice,
+    expired,
     fragments_of,
     group_of,
     launched_all,
@@ -139,16 +141,19 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
     другой — новые тексты переводит судья, и без подключения к нему черновик записан упавшим.
     Связки заметок («потому что», «Задачи») совет знает по-русски и по-английски: на другом
     языке их доводит тот же перевод, даже если язык заметок — язык работы. Каталог — по совету,
-    прочитанному под замком, как и у записи."""
+    прочитанному под замком, как и у записи. Отмеченные решения проекта с тех пор поменялись или
+    проект сменили, а в его папке есть неотобранные решения, — 409, и поток снова у отбора: его
+    решения принимали без них, и в эту папку им так не лечь."""
     translate = notes_language() != language() or not knows_words(language())
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
-        root_of(notes_of(council))
+        root = root_of(notes_of(council))
         stream = stream_in(council, group)
         cut(stream)
         if running(stream.notes_draft):
             raise HTTPException(409, "Черновик уже собирается")
+        expired(store, council, stream, changed_choice(root, stream))
         return council, translate
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:

@@ -939,6 +939,19 @@ describe('Поток: репозиторий', () => {
     expect(added.checked).toBe(true)
   })
 
+  it('проект совета сменили в другой вкладке — вернулись, и шаг предлагает репозитории нового', async () => {
+    const other: Project = { ...PROJECT, id: 'p2', name: 'Другой', repositories: ['other-api'] }
+    let project = PROJECT.id
+    fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project }),
+                                          settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }) }))
+    renderAt('/councils/demo-1/streams/A')
+    await screen.findByRole('checkbox', { name: 'kromka-api' })
+    project = other.id
+    fireEvent.focus(window)
+    expect(await screen.findByRole('checkbox', { name: 'other-api' })).toBeTruthy()
+    expect(screen.queryByRole('checkbox', { name: 'kromka-api' })).toBeNull()
+  })
+
   it('пересканировать с проектом: отмечено то, что сканировали, а не все его репозитории', async () => {
     const scanned: RepositoryScan = { ...SCANNED, repositories: [{ ...SCANNED.repositories[0], path: 'kromka-front' },
                                                                    { ...SCANNED.repositories[0], path: 'other' }] }

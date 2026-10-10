@@ -20,6 +20,7 @@ from spec_council.deps import (
 from spec_council.models import ExportedNote, NotesDraft, ProjectDraft
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.projects import Projects
+from tests.test_project import put
 from tests.test_streams import (
     TASK,
     Agents,
@@ -174,6 +175,19 @@ def test_a_draft_waiting_for_the_lock_is_built_for_the_folder_it_finds_there(age
         app.dependency_overrides.pop(get_projects)
         app.dependency_overrides.pop(get_repositories)
     assert (tmp_path / "second").exists() and not (tmp_path / "first").exists()
+
+
+def test_a_project_with_unselected_decisions_sends_the_stream_back_before_drafting(
+        agents, notes_dir, tmp_path):
+    council_id = cut_c()                       # вопросы искали без решений: в папке их не было
+    # Совету выбрали проект, в папке которого есть прошлые решения: поток их не отбирал.
+    other = put(tmp_path / "other")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
+    res = drafts(council_id)
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.questions, stream.issues,
+            stream.notes_draft) == ("failed", None, None, None)
 
 
 def test_issues_must_be_cut_before_drafting(agents, notes_dir):
