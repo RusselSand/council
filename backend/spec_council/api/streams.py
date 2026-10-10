@@ -498,10 +498,11 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
             if missing:
                 questions = unconnected(start_questions(
                     council.participants, council.judge, stream.idea.text,
-                    step_key(stream.repository), step_key(step)), missing)
+                    step_key(stream.repository), step_key(step), notes=notes_key(notes)),
+                    missing)
             else:
                 runs = [question_run(council, group, ready.model_copy(
-                    update={"project_decisions": None}), agents, store)]
+                    update={"project_decisions": None}), agents, store, notes)]
                 questions = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DESIGN, "questions": questions}
         return store.update_council(council_id, {
@@ -590,14 +591,25 @@ def unselected(council: Council, stream: Stream, message: str) -> Stream:
 
 def changed_choice(notes: Path | None, stream: Stream) -> str | None:
     """Почему отметка решений проекта не годится ходу ниже вопросов: отмеченные в каталоге
-    поправили, заменили или убрали. Новые решения в каталоге работу ниже не сбрасывают: вопросы
-    к ней уже нашли. Годится — None."""
+    поправили, заменили или убрали — или вопросы искали с другим каталогом (проект или его папку
+    сменили), а в нынешнем есть прошлые решения, которых никто не отбирал. Новые решения в том
+    же каталоге работу ниже не сбрасывают: вопросы к ней уже нашли. Годится — None."""
     chosen = stream.project_decisions or []
     stale = changed_in(catalog_at(notes), own_ids(stream, notes), chosen)
-    if not stale:
-        return None
-    return (f"Решения проекта в каталоге заметок поменялись после отбора ({', '.join(stale)}): "
-            "отберите их заново")
+    if stale:
+        return (f"Решения проекта в каталоге заметок поменялись после отбора "
+                f"({', '.join(stale)}): отберите их заново")
+    questions = stream.questions
+    if (questions is not None and questions.notes != notes_key(notes)
+            and project_catalog(notes, stream) is not None):
+        return ("Проект совета или его папку документации сменили после отбора решений "
+                "проекта, а в новой есть прошлые решения: отберите их заново")
+    return None
+
+
+def notes_key(notes: Path | None) -> str:
+    """Каталог заметок, как его помнят вопросы: путь или пусто — каталога нет."""
+    return str(notes) if notes is not None else ""
 
 
 def refused(message: str | None) -> None:
@@ -684,9 +696,10 @@ def select_decisions(council_id: str, group: str, edit: SelectDecisions, store: 
             if missing:
                 questions = unconnected(start_questions(
                     council.participants, council.judge, stream.idea.text,
-                    step_key(stream.repository), step_key(stream.design), chosen), missing)
+                    step_key(stream.repository), step_key(stream.design), chosen,
+                    notes_key(notes)), missing)
             else:
-                runs = [question_run(council, group, ready, agents, store)]
+                runs = [question_run(council, group, ready, agents, store, notes)]
                 questions = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DECISIONS, "questions": questions}
         return store.update_council(council_id, {
@@ -856,7 +869,7 @@ def start_question_discovery(council_id: str, group: str, store: StoreDep, confi
                            repository=step_key(stream.repository),
                            repository_map=repository_map(stream),
                            design=step_key(stream.design), design_map=design_map(stream),
-                           accepted=stream.project_decisions or ())
+                           accepted=stream.project_decisions or (), notes=notes_key(notes))
 
     expired_before(store, council_id, group, asking(group),
                    lambda council: stale_choice(notes, checked(council)))
@@ -1527,7 +1540,7 @@ def idea_run(council: Council, group: Group, runner: Runner, store: Store) -> Id
 
 
 def question_run(council: Council, group: str, stream: Stream, runner: Runner,
-                 store: Store) -> QuestionRun:
+                 store: Store, notes: Path | None) -> QuestionRun:
     return QuestionRun(council.id, stream.idea.text,
                        fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
@@ -1535,7 +1548,7 @@ def question_run(council: Council, group: str, stream: Stream, runner: Runner,
                        repository=step_key(stream.repository),
                        repository_map=repository_map(stream),
                        design=step_key(stream.design), design_map=design_map(stream),
-                       accepted=stream.project_decisions or ())
+                       accepted=stream.project_decisions or (), notes=notes_key(notes))
 
 
 def proposal_run(council: Council, group: str, stream: Stream, scope: list[OpenQuestion],

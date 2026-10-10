@@ -537,6 +537,34 @@ def test_a_new_scope_with_a_rewritten_decision_is_refused_too(agents, tmp_path):
     assert (stream.project_decisions, stream.scope) == (None, None)
 
 
+def test_another_folder_with_past_decisions_sends_even_none_selected_back(agents, tmp_path):
+    first = put(tmp_path / "first")
+    app.dependency_overrides[get_notes_root] = lambda: first
+    council_id = at_questions()
+    assert picks(council_id, []).status_code == 200                   # ни одного решения
+    assert streams_of(council_id)["C"].questions.notes == str(first)
+    # Проект совета сменили: в его папке свои прошлые решения, их никто не отбирал.
+    other = put(tmp_path / "other")
+    app.dependency_overrides[get_notes_root] = lambda: other
+    res = choose(council_id, "C", ["Q1"])
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.project_decisions, stream.questions,
+            stream.scope) == ("failed", None, None, None)
+
+
+def test_another_folder_without_past_decisions_leaves_the_questions_alone(agents, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    app.dependency_overrides[get_notes_root] = lambda: empty
+    council_id = at_questions()                         # решений не было — вопросы сразу
+    assert streams_of(council_id)["C"].decisions_search is None
+    # Совету выбрали проект с новой, ещё пустой папкой: отбирать нечего.
+    app.dependency_overrides[get_notes_root] = lambda: tmp_path / "bare"
+    assert choose(council_id, "C", ["Q1"]).status_code == 200
+    assert streams_of(council_id)["C"].scope is not None
+
+
 def test_without_models_the_selection_fails_and_the_questions_go_without_it(agents):
     agents.online = set()
     council_id = at_questions()

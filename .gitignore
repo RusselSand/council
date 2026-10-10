@@ -6,8 +6,10 @@ __pycache__/
 .env
 # Каталоги учётных записей по умолчанию для docker compose: токены входа.
 .accounts/
-# Каталог репозиториев для скана по умолчанию для docker compose (COUNCIL_REPOS): чужие рабочие копии.
-.repos/
+# Каталог репозиториев по умолчанию для docker compose (COUNCIL_REPOS): чужие рабочие копии.
+# Сам каталог — в репозитории (.gitkeep), как и .data: docker его не создаёт.
+.repos/*
+!.repos/.gitkeep
 # Советы: по файлу на совет, см. README, «Где хранятся советы». Сам каталог — в репозитории
 # (.gitkeep): на Linux его должен создать checkout от вашего имени, а не docker от root.
 .data/*

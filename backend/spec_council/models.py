@@ -570,6 +570,9 @@ class QuestionDiscovery(BaseModel):
     # Отпечаток отмеченных решений (project.fingerprint): решение с тем же номером переписали —
     # вопросы ищутся заново.
     decisions_seen: str = ""
+    # Каталог заметок, с которым шли к вопросам (пусто — его не было): проект или его папку
+    # сменили, а в новом каталоге есть прошлые решения — их не отбирали, отбор заново.
+    notes: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None

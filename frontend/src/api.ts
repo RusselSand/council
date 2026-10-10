@@ -197,8 +197,10 @@ export interface DecisionsSearch {
 /** Поиск вопросов к утверждённой идее (idea — к какой; repository и design — с какой картой и описанием макета). */
 export interface QuestionDiscovery {
   state: 'running' | 'done' | 'failed'; run: string; idea: string; repository: string; design: string
-  decisions: string[]; decisions_seen: string; steps: Step[]
-  questions: OpenQuestion[]; error: string | null
+  decisions: string[]; decisions_seen: string
+  /** Каталог заметок, с которым искали ('' — его не было): в другом есть неотобранные решения — отбор заново. */
+  notes: string
+  steps: Step[]; questions: OpenQuestion[]; error: string | null
 }
 /**
  * Новый вариант ответа на вопрос, найденный советом (P1, P2… сквозь поток). Варианты из текста —

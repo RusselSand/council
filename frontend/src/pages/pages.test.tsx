@@ -112,7 +112,7 @@ const FOUND: IdeaDiscovery = {
 /** Идея группы A — из текста: F1. */
 const TEXT_IDEA: StreamIdea = { text: 'Хочу воркер.', by: 'text', evidence: [1] }
 const QUESTIONS_SEEKING: QuestionDiscovery = {
-  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', questions: [], error: null,
+  state: 'running', run: 'q1', idea: 'Хочу воркер.', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', notes: '', questions: [], error: null,
   steps: [
     { name: 'question_discovery', state: 'running', runs: [run('sol', 'running'), run('fable', 'done')] },
     { name: 'question_judge', state: 'waiting', runs: [run('fable', 'waiting')] },
