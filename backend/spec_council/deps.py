@@ -16,6 +16,7 @@ from fastapi import Depends, HTTPException
 from .agents import AgentRunner, launch
 from .config import AppConfig, config_of, fitted
 from .figma import Fetcher, Figma
+from .models import Council
 from .projects import FileProjects, ProjectError, Projects, notes_root
 from .store import FileStore, Store
 
@@ -109,14 +110,12 @@ FigmaDep = Annotated[Fetcher | None, Depends(get_figma)]
 ProjectsDep = Annotated[Projects, Depends(get_projects)]
 
 
-def get_notes_root(council_id: str, store: StoreDep, projects: ProjectsDep,
-                   repositories: RepositoriesDep) -> Path | None:
+def council_notes(council: Council, projects: Projects, repositories: Path | None) -> Path | None:
     """Каталог заметок совета — папка документации его проекта, от каталога репозиториев. None —
-    совета нет (ответит сама ручка), он без проекта или у проекта нет папки: поток не выгрузить.
-    Папка больше не годится (каталог репозиториев поменяли) — 422 с причиной: молча работать
-    без прошлых решений проекта нельзя."""
-    council = store.get_council(council_id)
-    project = projects.get_project(council.project) if council and council.project else None
+    совет без проекта или у проекта нет папки: поток не выгрузить. Папка больше не годится
+    (каталог репозиториев поменяли) — 422 с причиной: молча работать без прошлых решений проекта
+    нельзя."""
+    project = projects.get_project(council.project) if council.project else None
     if project is None or not project.notes:
         return None
     try:
@@ -124,6 +123,24 @@ def get_notes_root(council_id: str, store: StoreDep, projects: ProjectsDep,
     except ProjectError as exc:
         raise HTTPException(422, f"Папка документации проекта «{project.name}»: {exc} — "
                                  "поправьте проект") from None
+
+
+NotesOf = Callable[[Council], Path | None]
+
+
+def get_notes_of(projects: ProjectsDep, repositories: RepositoriesDep) -> NotesOf:
+    """Каталог заметок по самому совету: для совета, прочитанного под замком, — проект и его
+    папку могли сменить, пока шёл запрос."""
+    return lambda council: council_notes(council, projects, repositories)
+
+
+NotesOfDep = Annotated[NotesOf, Depends(get_notes_of)]
+
+
+def get_notes_root(council_id: str, store: StoreDep, notes_of: NotesOfDep) -> Path | None:
+    """Каталог заметок совета на начало запроса; совета нет — None (ответит сама ручка)."""
+    council = store.get_council(council_id)
+    return notes_of(council) if council is not None else None
 
 
 NotesDep = Annotated[Path | None, Depends(get_notes_root)]

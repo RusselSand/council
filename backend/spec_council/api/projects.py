@@ -6,16 +6,17 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Response
 
 from ..deps import ProjectsDep, RepositoriesDep, StoreDep
-from ..models import ProjectDraft, ProjectView, WorkingCopies
-from ..projects import ProjectError, checked, viewed, working_copies
+from ..models import ProjectDraft, ProjectEdit, ProjectView, WorkingCopies
+from ..projects import ProjectError, Projects, checked, viewed, working_copies
 from .councils import council_lock
 
 router = APIRouter(tags=["projects"])
 
 MISSING = "Проект не найден"
 NOT_FOUND = {404: {"description": MISSING}}
-INVALID = {422: {"description": "Нет названия, рабочей копии нет, она вне каталога "
-                                "репозиториев или указана дважды, папка документации вне его"}}
+INVALID = {422: {"description": "Нет названия или оно уже у другого проекта, рабочей копии нет, "
+                                "она вне каталога репозиториев или указана дважды, папка "
+                                "документации вне его"}}
 
 
 @router.get("/projects")
@@ -26,17 +27,32 @@ def list_projects(projects: ProjectsDep, repositories: RepositoriesDep) -> list[
 @router.post("/projects", status_code=201, responses=INVALID)
 def create_project(draft: ProjectDraft, projects: ProjectsDep,
                    repositories: RepositoriesDep) -> ProjectView:
-    return viewed(projects.create_project(valid(draft, repositories)), repositories)
+    draft = valid(draft, repositories)
+    with council_lock:
+        unique(draft, projects)
+        project = projects.create_project(draft)
+    return viewed(project, repositories)
 
 
-@router.put("/projects/{project_id}", responses={**NOT_FOUND, **INVALID})
-def update_project(project_id: str, draft: ProjectDraft, projects: ProjectsDep,
+@router.put("/projects/{project_id}",
+            responses={**NOT_FOUND, **INVALID, 409: {"description": "Проект уже поправили"}})
+def update_project(project_id: str, edit: ProjectEdit, projects: ProjectsDep,
                    repositories: RepositoriesDep) -> ProjectView:
     """Правка проекта меняет то, что совет подставит дальше: уже сделанные сканы остаются, какие
-    были, а выгрузка в прежнюю папку документации в новой выгрузкой не считается."""
+    были, а выгрузка в прежнюю папку документации в новой выгрузкой не считается. Под замком
+    советов: запись заметок берёт папку проекта под ним же и не уйдёт в сменённую посреди неё."""
     if projects.get_project(project_id) is None:
         raise HTTPException(404, MISSING)
-    project = projects.update_project(project_id, valid(draft, repositories))
+    draft = valid(edit, repositories)       # git — вне замка: копий до десяти
+    with council_lock:
+        before = projects.get_project(project_id)
+        if before is None:
+            raise HTTPException(404, MISSING)
+        if before.revision != edit.revision:
+            raise HTTPException(409, "Проект уже поправили, например в другой вкладке, — "
+                                     "откройте его заново")
+        unique(draft, projects, project_id)
+        project = projects.update_project(project_id, draft)
     if project is None:
         raise HTTPException(404, MISSING)
     return viewed(project, repositories)
@@ -63,8 +79,17 @@ def list_working_copies(repositories: RepositoriesDep) -> WorkingCopies:
     return working_copies(repositories)
 
 
-def valid(draft: ProjectDraft, repositories: Path | None) -> ProjectDraft:
+def valid[D: ProjectDraft](draft: D, repositories: Path | None) -> D:
     try:
         return checked(draft, repositories)
     except ProjectError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+def unique(draft: ProjectDraft, projects: Projects, project_id: str = "") -> None:
+    """Название — не как у другого проекта, без учёта регистра: в списке на «Вводе» проекты
+    различают только по нему."""
+    name = draft.name.casefold()
+    if any(project.name.casefold() == name and project.id != project_id
+           for project in projects.list_projects()):
+        raise HTTPException(422, f"Проект «{draft.name}» уже есть — назовите этот иначе")

@@ -31,7 +31,7 @@ const SETTINGS: Settings = {
 /** Проект с репозиториями и папкой документации: совет с ним выгружает заметки в notes_root. */
 const PROJECT: Project = {
   id: 'p1', name: 'Кромка', repositories: ['kromka-api', 'kromka-front'], notes: 'kromka-api/docs',
-  updated_at: '2026-10-09T10:00:00Z', notes_root: '/notes', problem: null,
+  updated_at: '2026-10-09T10:00:00Z', revision: 0, notes_root: '/notes', problem: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -2488,7 +2488,7 @@ describe('Проекты', () => {
   })
 
   it('правка: отмечено то, что в проекте, путь не из каталога — полем; отказ сервера — его словами', async () => {
-    open([{ ...PROJECT, repositories: ['kromka-api', 'deep/repo'] }], () => json({ detail: 'deep/repo: Каталога нет' }, 422))
+    open([{ ...PROJECT, repositories: ['kromka-api', 'deep/repo'], revision: 3 }], () => json({ detail: 'deep/repo: Каталога нет' }, 422))
     fireEvent.click(within(await card('Кромка')).getByRole('button', { name: ru['projects.edit'] }))
     const form = screen.getByRole('form', { name: 'Кромка' })
     expect((within(form).getByRole('checkbox', { name: 'kromka-api' }) as HTMLInputElement).checked).toBe(true)
@@ -2497,7 +2497,7 @@ describe('Проекты', () => {
     fireEvent.click(within(form).getByRole('button', { name: ru['projects.save'] }))
     expect((await within(form).findByRole('alert')).textContent).toBe('deep/repo: Каталога нет')
     expect(calls).toEqual([{ method: 'PUT', url: '/api/projects/p1', body: {
-      name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs' } }])
+      name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs', revision: 3 } }])
   })
 
   it('удаление — со вторым шагом; проект выбран у совета — отказ виден, проект на месте', async () => {

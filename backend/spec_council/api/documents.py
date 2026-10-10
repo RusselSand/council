@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, Store, StoreDep
+from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, NotesOfDep, Store, StoreDep
 from ..export import (
     drafted,
     export_in,
@@ -176,13 +176,15 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                         422: {"description": "Каталог не задан, заметки не записать или граф "
                                              "вышел бы не по правилам"}})
 def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
-                notes: NotesDep) -> Council:
+                notes_of: NotesOfDep) -> Council:
     """Записывает черновик, который человек смотрел: с его правками текста и удалением
     отмеченных исчезнувших заметок. Файл, правленный руками после прошлой выгрузки, не
-    трогается. Каталог поменялся, пока смотрели черновик, — 409: номера могли занять."""
-    root = root_of(notes)
+    трогается. Каталог поменялся, пока смотрели черновик, — 409: номера могли занять. Каталог —
+    по совету, прочитанному под замком: проект совета и папку проекта меняют под тем же замком,
+    и запись не уйдёт в папку, которую сменили посреди запроса."""
     with council_lock:
         council = current(council_id, store, edit)
+        root = root_of(notes_of(council))
         stream = stream_in(council, group)
         draft = checked_draft(stream, edit, root)
         catalog = catalog_of(root)

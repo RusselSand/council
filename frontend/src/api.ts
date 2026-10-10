@@ -363,6 +363,8 @@ export interface Settings {
  */
 export interface Project {
   id: string; name: string; repositories: string[]; notes: string; updated_at: string
+  /** Версия: правка несёт ту, что правили; проект с тех пор поправили — 409. */
+  revision: number
   notes_root: string | null; problem: string | null
 }
 /** Проект, как его сохраняют: название, рабочие копии, папка документации ('' — нет). */
@@ -402,7 +404,7 @@ const request = async <T,>(url: string, init?: RequestInit): Promise<T> => {
 
 const councilUrl = (id: string) => `/api/councils/${encodeURIComponent(id)}`
 const projectUrl = (id: string) => `/api/projects/${encodeURIComponent(id)}`
-const sendProject = (draft: ProjectDraft): RequestInit => ({
+const sendProject = (draft: ProjectDraft & { revision?: number }): RequestInit => ({
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft),
 })
 
@@ -537,7 +539,9 @@ export const api = {
   settings: () => request<Settings>('/api/settings'),
   projects: () => request<Project[]>('/api/projects'),
   createProject: (draft: ProjectDraft) => request<Project>('/api/projects', { method: 'POST', ...sendProject(draft) }),
-  updateProject: (id: string, draft: ProjectDraft) => request<Project>(projectUrl(id), { method: 'PUT', ...sendProject(draft) }),
+  /** revision — версия проекта, которую правили: его с тех пор поправили (другая вкладка) — 409. */
+  updateProject: (id: string, draft: ProjectDraft, revision: number) =>
+    request<Project>(projectUrl(id), { method: 'PUT', ...sendProject({ ...draft, revision }) }),
   /** Удалить проект: выбран у советов — 409, сначала выбрать им другой. */
   deleteProject: async (id: string) => {
     const res = await fetch(projectUrl(id), { method: 'DELETE' })

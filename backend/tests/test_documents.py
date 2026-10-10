@@ -3,15 +3,17 @@
 import hashlib
 import json
 import re
+import threading
 
 import pytest
 
 from spec_council.api import documents
+from spec_council.api.councils import council_lock
 from spec_council.app import app
 from spec_council.deps import (
     get_agents,
     get_launcher,
-    get_notes_root,
+    get_notes_of,
     get_projects,
     get_repositories,
 )
@@ -46,9 +48,9 @@ def models():
 @pytest.fixture
 def notes_dir(tmp_path):
     root = tmp_path / "notes"
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     yield root
-    app.dependency_overrides.pop(get_notes_root)
+    app.dependency_overrides.pop(get_notes_of)
 
 
 def drafts(council_id, group="C"):
@@ -124,6 +126,30 @@ def test_notes_go_to_the_documentation_folder_of_the_council_project(agents, tmp
     root = (tmp_path / "app" / "docs").resolve()
     assert streams_of(council_id)["C"].notes.root == str(root)
     assert "IDEA-0001" in Catalog.load(root).notes
+
+
+def test_a_folder_changed_while_the_write_waits_for_the_lock_is_not_written_into(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="first"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    result = []
+    try:
+        council_id = cut_c()
+        client.patch(f"/api/councils/{council_id}", json={"project": project.id})
+        assert drafts(council_id).status_code == 202
+        with council_lock:
+            worker = threading.Thread(target=lambda: result.append(writes(council_id)))
+            worker.start()
+            worker.join(0.3)                                       # запись ждёт замка
+            # А папку проекта тем временем сменили — под тем же замком, что и запись.
+            projects.update_project(project.id, ProjectDraft(name="Кромка", notes="second"))
+        worker.join(10)
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    assert result[0].status_code == 409 and "другой папки" in result[0].json()["detail"]
+    assert not (tmp_path / "first").exists() and not (tmp_path / "second").exists()
 
 
 def test_issues_must_be_cut_before_drafting(agents, notes_dir):
@@ -233,7 +259,7 @@ def test_a_draft_is_not_written_into_another_folder(agents, notes_dir, tmp_path)
     assert streams_of(council_id)["C"].notes_draft.root == str(notes_dir)
     # Папку проекта сменили на другую пустую: номера вышли бы те же, но туда черновик не смотрели.
     other = tmp_path / "other"
-    app.dependency_overrides[get_notes_root] = lambda: other
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
     res = writes(council_id)
     assert res.status_code == 409 and "другой папки документации" in res.json()["detail"]
     assert not other.exists()
@@ -252,7 +278,7 @@ def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes
     path = path_of(other, foreign)
     path.parent.mkdir(parents=True)
     path.write_text(rendered(foreign), encoding="utf-8")
-    app.dependency_overrides[get_notes_root] = lambda: other
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
     drafts(council_id)
     draft = streams_of(council_id)["C"].notes_draft
     assert (draft.notes[0].id, draft.notes[0].action, draft.vanished) == ("IDEA-0002", "create",

@@ -46,7 +46,8 @@ class Projects:
             return self._projects.get(project_id)
 
     def create_project(self, draft: ProjectDraft) -> Project:
-        project = Project(id=uuid4().hex[:8], updated_at=datetime.now(UTC), **draft.model_dump())
+        project = Project(id=uuid4().hex[:8], updated_at=datetime.now(UTC),
+                          **draft.model_dump(include={"name", "repositories", "notes"}))
         with self._lock:
             self._keep(project)
             self._projects[project.id] = project
@@ -54,9 +55,12 @@ class Projects:
 
     def update_project(self, project_id: str, draft: ProjectDraft) -> Project | None:
         with self._lock:
-            if project_id not in self._projects:
+            before = self._projects.get(project_id)
+            if before is None:
                 return None
-            project = Project(id=project_id, updated_at=datetime.now(UTC), **draft.model_dump())
+            project = Project(id=project_id, revision=before.revision + 1,
+                              updated_at=datetime.now(UTC),
+                              **draft.model_dump(include={"name", "repositories", "notes"}))
             self._keep(project)
             self._projects[project_id] = project
             return project
@@ -99,7 +103,7 @@ class FileProjects(Projects):
         (self._folder / f"{project_id}.json").unlink(missing_ok=True)
 
 
-def checked(draft: ProjectDraft, base: Path | None) -> ProjectDraft:
+def checked[D: ProjectDraft](draft: D, base: Path | None) -> D:
     """Проект, каким его сохранить: название без пробелов по краям; каждая рабочая копия есть,
     её корень — внутри каталога репозиториев, и ни одна не указана дважды; папка документации —
     там же. Иначе ProjectError. Пути остаются как их ввели: пробелы по краям — часть имени."""

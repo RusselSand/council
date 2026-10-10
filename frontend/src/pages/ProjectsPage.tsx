@@ -134,6 +134,8 @@ function ProjectForm({ project, copies, onSaved, onCancel }: Readonly<{
   const [paths, setPaths] = useState(() => (project?.repositories ?? [])
     .filter(path => !offered.includes(path)).map(path => listField(path)))
   const [notes, setNotes] = useState(project?.notes ?? '')
+  // Версия, которую открыли: правку к ней, а не к той, что пришла бы с новым списком.
+  const [revision] = useState(project?.revision ?? 0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const ticked = offered.filter(path => picked.has(path))
@@ -149,7 +151,7 @@ function ProjectForm({ project, copies, onSaved, onCancel }: Readonly<{
     const draft: ProjectDraft = { name, repositories, notes }
     setBusy(true); setError(null)
     try {
-      onSaved(project ? await api.updateProject(project.id, draft) : await api.createProject(draft))
+      onSaved(project ? await api.updateProject(project.id, draft, revision) : await api.createProject(draft))
     } catch (e) {
       setError(reason(e, t('projects.saveFailed')))
     } finally {

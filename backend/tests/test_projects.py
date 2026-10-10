@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from spec_council.api.councils import council_lock
 from spec_council.app import app
-from spec_council.deps import get_notes_root, get_projects, get_repositories
+from spec_council.deps import council_notes, get_projects, get_repositories
 from spec_council.models import ProjectDraft
 from spec_council.projects import FileProjects, Projects
 from spec_council.store import FileStore, InMemoryStore
@@ -61,10 +61,35 @@ def test_a_project_keeps_its_working_copies_and_notes_folder(repos, projects):
     assert client.get("/api/settings").json()["projects"] == [project]
 
     res = client.put(f"/api/projects/{project['id']}",
-                     json={"name": "Кромка", "repositories": ["front"], "notes": ""})
+                     json={"name": "Кромка", "repositories": ["front"], "notes": "", "revision": 0})
     assert res.status_code == 200
-    assert (res.json()["repositories"], res.json()["notes"], res.json()["notes_root"]) == (
-        ["front"], "", None)
+    assert (res.json()["repositories"], res.json()["notes"], res.json()["notes_root"],
+            res.json()["revision"]) == (["front"], "", None, 1)
+
+
+def test_an_edit_of_an_older_version_is_refused(repos, projects):
+    project = creates(repositories=["back"], notes="back/docs").json()
+    # Одна вкладка сменила папку…
+    assert client.put(f"/api/projects/{project['id']}", json={
+        "name": "Кромка", "repositories": ["back"], "notes": "front/docs", "revision": 0,
+    }).status_code == 200
+    # …другая, открытая раньше, правит название — и вернула бы прежнюю папку.
+    res = client.put(f"/api/projects/{project['id']}", json={
+        "name": "Кромка 2", "repositories": ["back"], "notes": "back/docs", "revision": 0})
+    assert res.status_code == 409 and "уже поправили" in res.json()["detail"]
+    assert projects.get_project(project["id"]).notes == "front/docs"
+
+
+def test_project_names_differ_in_more_than_case(repos, projects):
+    first = creates(name="Кромка").json()
+    res = creates(name=" КРОМКА ")
+    assert res.status_code == 422 and "уже есть" in res.json()["detail"]
+    other = creates(name="Совет").json()
+    res = client.put(f"/api/projects/{other['id']}", json={"name": "кромка", "revision": 0})
+    assert res.status_code == 422
+    # Себя проект не задевает: то же название с другим регистром — можно.
+    assert client.put(f"/api/projects/{first['id']}",
+                      json={"name": "КРОМКА", "revision": 0}).status_code == 200
 
 
 @pytest.mark.parametrize(("draft", "why"), [
@@ -162,22 +187,22 @@ def test_a_project_chosen_by_a_council_is_not_deleted(repos, projects):
     assert client.delete(f"/api/projects/{project['id']}").status_code == 204
     assert client.get("/api/projects").json() == []
     assert client.delete(f"/api/projects/{project['id']}").status_code == 404
-    assert client.put(f"/api/projects/{project['id']}", json={"name": "Кромка"}).status_code == 404
+    assert client.put(f"/api/projects/{project['id']}",
+                      json={"name": "Кромка", "revision": 0}).status_code == 404
 
 
 def test_the_notes_folder_of_a_council_is_its_projects(tmp_path):
     store, projects = InMemoryStore(), Projects()
     project = projects.create_project(ProjectDraft(name="Кромка", notes="back/docs"))
     council = store.create_council(participants=["sol"], judge="sol", project=project.id)
-    root = get_notes_root(council.id, store, projects, tmp_path)
+    root = council_notes(council, projects, tmp_path)
     assert root == (tmp_path / "back" / "docs").resolve()
     alone = store.create_council(participants=["sol"], judge="sol")
-    assert get_notes_root(alone.id, store, projects, tmp_path) is None
-    assert get_notes_root("nope", store, projects, tmp_path) is None
+    assert council_notes(alone, projects, tmp_path) is None
     # Папка проекта больше не годится — не молча без неё, а отказ с причиной.
     projects.update_project(project.id, ProjectDraft(name="Кромка", notes="../docs"))
     with pytest.raises(HTTPException) as refused:
-        get_notes_root(council.id, store, projects, tmp_path)
+        council_notes(council, projects, tmp_path)
     assert refused.value.status_code == 422 and "«Кромка»" in refused.value.detail
 
 
