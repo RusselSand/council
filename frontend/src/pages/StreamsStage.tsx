@@ -14,7 +14,7 @@ import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
-import { CHAIN, chainLight, currentStep, exported, exportedCount, reachable, streamLight, type ChainStep } from '../light'
+import { CHAIN, chainLight, currentStep, exported, exportedCount, openable, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
 type T = TFunction
@@ -75,7 +75,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
-  const view = CHAIN.indexOf(chosen) <= CHAIN.indexOf(reachable(stream)) ? chosen : currentStep(stream)
+  const view = openable(stream, chosen) ? chosen : currentStep(stream)
   const search = stream.discovery
   const runs = { group: search, repository: stream.scan, design: stream.design_scan,
                  questions: stream.questions ?? stream.decisions_search, options: stream.proposals,
@@ -261,7 +261,6 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
 }>) {
   const { t } = useTranslation()
   const reached = CHAIN.indexOf(currentStep(stream))
-  const open = CHAIN.indexOf(reachable(stream))
   const status = (step: ChainStep, i: number) =>
     stepStatus(stream, group, step, notes, t) ?? t(i === reached ? 'chain.soon' : 'chain.notStarted')
   return (
@@ -295,7 +294,7 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
           const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}${compact ? ' compact' : ''}`
           return (
             <li key={step}>
-              {i <= open
+              {openable(stream, step)
                 ? <button className={className} aria-current={view === step ? 'step' : undefined}
                           onClick={() => onView(step)}>{body}</button>
                 : <div className={className}>{body}</div>}
@@ -316,7 +315,9 @@ function stepStatus(stream: Stream, group: Group, step: ChainStep, notes: string
   if (step === 'options' && stream.scope) return optionsStatus(stream, t)
   if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
   if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
+  if (step === 'outcomes' && stream.saved_outcomes.length > 0) return t('chain.outcomesSaved', { count: stream.saved_outcomes.length })
   if (step === 'issues' && stream.issues) return issuesStatus(stream, t)
+  if (step === 'issues' && stream.saved_issues.length > 0) return t('chain.issuesSaved', { count: stream.saved_issues.length })
   if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, notes, t)
   return null
 }
@@ -2114,8 +2115,9 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
   const found = new Map([...foundOf(stream).values()].flat().map(p => [p.id, p.text]))
   const textOf = (id: string) => (id.startsWith('F') ? fragments.get(Number(id.slice(1)))?.text : found.get(id)) ?? id
   // Решение ADR-n — по n-му вопросу отбора: тот же номер, что у его карточки на шаге «Решения».
+  const known = knownDecisions(stream)
   const adrs = new Map(scope.flatMap((question, n) => {
-    const proposal = stream.decisions?.find(d => d.question_id === question.id)?.proposal
+    const proposal = known.find(d => d.question_id === question.id)?.proposal
     return proposal ? [[`ADR-${n + 1}`, { question: question.id, text: textOf(proposal) }] as const] : []
   }))
   const questions = new Map(scope.map(q => [q.id, q.text]))
@@ -2151,7 +2153,33 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
       throw e
     }
   }, onApproved)
-  if (!stream.decisions) return null
+  // Сохранённые итоги — пока сборки нет (поток до неё не дошёл или её не запускали): закрепятся, если решения
+  // не поменяются. Их видно, но утверждать тут нечего.
+  const saved = run ? [] : stream.saved_outcomes
+  const savedSlides: Slide[] = saved.map(outcome => ({ id: outcome.id, title: outcome.title, light: 'done' }))
+  const savedCards = saved.length > 0 && (
+    <>
+      <p className="fragment-note">{t('outcomes.saved')}</p>
+      <Slider slides={savedSlides} label={t('outcomes.slides')}>
+        {n => (
+          <OutcomeCard key={saved[n].id} outcome={saved[n]} n={n + 1} adrs={adrs} questions={questions}
+                       fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept />
+        )}
+      </Slider>
+    </>
+  )
+  if (!stream.decisions) {
+    return saved.length > 0 ? (
+      <>
+        <section className="card panel" aria-labelledby="step-title">
+          <p className="next-caps">{t('outcomes.savedCaps')}</p>
+          <h2 id="step-title" className="panel-title large">{t('outcomes.title')}</h2>
+          <p className="panel-hint">{t('outcomes.hint')}</p>
+        </section>
+        {savedCards}
+      </>
+    ) : null
+  }
 
   return (
     <>
@@ -2169,6 +2197,7 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
           {retry.error && <p className="error-text" role="alert">{retry.error}</p>}
         </div>
       )}
+      {savedCards}
       {run?.state === 'running' && <p className="muted">{t('outcomes.assembling')} {t('run.note')}</p>}
       {run?.state === 'failed' && (
         <div>
@@ -2230,19 +2259,40 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const found = new Map([...foundOf(stream).values()].flat().map(p => [p.id, p.text]))
   const textOf = (id: string) => (id.startsWith('F') ? fragments.get(Number(id.slice(1)))?.text : found.get(id)) ?? id
+  const known = knownDecisions(stream)
   const adrs = new Map(scope.flatMap((question, n) => {
-    const proposal = stream.decisions?.find(d => d.question_id === question.id)?.proposal
+    const proposal = known.find(d => d.question_id === question.id)?.proposal
     return proposal ? [[`ADR-${n + 1}`, { question: question.id, text: textOf(proposal) }] as const] : []
   }))
   const questions = new Map(scope.map(q => [q.id, q.text]))
-  const outcomes = new Map((stream.outcomes?.outcomes ?? []).map(o => [o.id, o.title]))
+  const outcomes = new Map((stream.outcomes?.outcomes ?? stream.saved_outcomes).map(o => [o.id, o.title]))
   // Решения, не вошедшие ни в один итог, нет и в задачах: их видно и здесь.
   const lost = stream.outcomes?.uncovered_adr_ids ?? []
   // Итоги без критериев готовности: задачи по ним не проверить — это видно и здесь.
   const vague = (stream.outcomes?.outcomes ?? []).filter(o => o.acceptance_criteria.length === 0).map(o => o.id)
   const cut = () => void retry.go(() => startOrFollow(
     () => api.seekIssues(council.id, group.id), council, c => streamOf(c, group.id)?.issues))
-  if (!run) return null
+  if (!run) {
+    // Сохранённые задачи — пока нарезки нет: перенесутся, если их итоги и решения те же. Их ничто не держит.
+    const saved = stream.saved_issues
+    return saved.length > 0 ? (
+      <>
+        <section className="card panel" aria-labelledby="step-title">
+          <p className="next-caps">{t('issues.savedCaps')}</p>
+          <h2 id="step-title" className="panel-title large">{t('issues.title')}</h2>
+          <p className="panel-hint">{t('issues.hint')}</p>
+        </section>
+        <p className="fragment-note">{t('issues.saved')}</p>
+        <Slider slides={saved.map(issue => ({ id: issue.id, title: issue.title, light: 'done' }))}
+                label={t('issues.slides')}>
+          {n => (
+            <IssueCard key={saved[n].id} issue={saved[n]} n={n + 1} adrs={adrs} questions={questions}
+                       outcomes={outcomes} gaps={[]} fragments={fragments} onQuestion={onQuestion} kept />
+          )}
+        </Slider>
+      </>
+    ) : null
+  }
   // Задачу можно брать — готова; её что-то держит — ход за человеком.
   const issueSlides: Slide[] = run.issues.map(issue => ({
     id: issue.id, title: issue.title, light: issueReady(issue) ? 'done' : 'yours',
@@ -2583,6 +2633,16 @@ function earlierChoices(stream: Stream): Choice[] {
     return offered ? [choice] : []
   })
 }
+
+/**
+ * Решения, какие известны сейчас: зафиксированные, а пока их нет — прежние по тем же вопросам к тому же выбору
+ * (выбор ещё не утверждали — к прежнему). Как known_decisions на сервере: по ним видны номера ADR в сохранённом.
+ */
+const knownDecisions = (stream: Stream): Decision[] => stream.decisions ?? (stream.scope ?? []).flatMap(question => {
+  const work = earlierOf(stream, question)
+  const choice = stream.choices?.find(c => c.question_id === question.id)
+  return work?.decision && (!stream.choices || (choice && sameChoice(work.choice, choice))) ? [work.decision] : []
+})
 
 /** Прежние решения — к тому же выбору по тем же вопросам. */
 const earlierDecisions = (stream: Stream): Decision[] => (stream.scope ?? []).flatMap(question => {

@@ -227,6 +227,51 @@ def uncut(stream: Stream, outcomes: list[Outcome], carried: list[Issue]) -> list
             if outcome.id not in covered or outcome.id in lost]
 
 
+def known_decisions(stream: Stream) -> list[Decision]:
+    """Решения, какие известны сейчас: зафиксированные, а пока их нет (после правки отбора или
+    выбора) — прежние по тем же вопросам к тому же выбору; выбор ещё не утверждали — к прежнему."""
+    if stream.decisions is not None:
+        return stream.decisions
+    works = {work.key: work for work in stream.earlier}
+    choices = {choice.question_id: choice for choice in stream.choices or []}
+    known = []
+    for question in stream.scope or []:
+        work = works.get(question_key(question))
+        if work is None or work.decision is None:
+            continue
+        choice = choices.get(question.id)
+        if stream.choices is not None and (
+                choice is None or choice_entry(choice) != choice_entry(work.choice)):
+            continue
+        known.append(work.decision)
+    return known
+
+
+def saved_outcomes_of(stream: Stream) -> list[Outcome]:
+    """Прежние итоги, которые останутся, если решения не поменяются: те, что закрепятся при новой
+    сборке. Пока поток до неё не дошёл (итогов нет) — их видно на шаге «Итоги»; дошёл — шаг
+    показывает свою сборку, а в ней они с самого начала."""
+    if stream.outcomes is not None or stream.scope is None:
+        return []
+    return kept_outcomes(stream, stream.scope, known_decisions(stream))
+
+
+def saved_issues_of(stream: Stream) -> list[Issue]:
+    """Прежние задачи, которые перенесутся, пока поток до нарезки не дошёл: к итогам, какие есть
+    (собранные, в идущей сборке — закреплённые, а пока сборки нет — те, что закрепятся), и
+    решениям, какие известны."""
+    if stream.issues is not None or stream.scope is None:
+        return []
+    if stream.outcomes is None:
+        outcomes = saved_outcomes_of(stream)
+    elif stream.outcomes.state == "done":
+        outcomes = stream.outcomes.outcomes
+    else:
+        outcomes = [o for o in stream.outcomes.outcomes if o.id in stream.outcomes.kept]
+    return carried_issues(stream.model_copy(update={"decisions": known_decisions(stream)}),
+                          outcomes)
+
+
 def cutting_plan(stream: Stream) -> tuple[list[Issue], list[str]]:
     """Что перенести и что нарезать: задачи прежней нарезки тех же итогов и итоги, которые
     ими не покрыты."""

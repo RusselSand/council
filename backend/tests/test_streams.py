@@ -1207,6 +1207,54 @@ def test_an_issue_of_an_outcome_that_got_blocked_is_not_carried(agents):
     assert issues.kept == [] and issues.issues[0].blocked_by
 
 
+def test_saved_outcomes_and_issues_are_seen_while_new_questions_are_worked_out(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    stream = streams_of(council_id)["C"]
+    # До итогов ещё далеко, а готовый итог и его задача видны: решения по ним прежние.
+    assert stream.outcomes is None and stream.issues is None
+    assert stream.saved_outcomes == before.outcomes.outcomes
+    assert stream.saved_issues == before.issues.issues
+    council = client.get(f"/api/councils/{council_id}").json()
+    seen = next(s for s in council["streams"] if s["group"] == "C")
+    assert ([o["id"] for o in seen["saved_outcomes"]], [i["id"] for i in seen["saved_issues"]]) == (
+        ["O1"], ["I1"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    assert [o.id for o in streams_of(council_id)["C"].saved_outcomes] == ["O1"]
+    # Другой выбор по прежнему вопросу — его решения уже нет: итог и задача не сохранятся.
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None), ("Q3", "P3")])
+    stream = streams_of(council_id)["C"]
+    assert stream.saved_outcomes == [] and stream.saved_issues == []
+
+
+def test_kept_outcomes_and_carried_issues_are_there_from_the_start_of_their_run(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    # Моделей нет — сборка не идёт, но закреплённый итог уже в ней.
+    agents.online = set()
+    decide(council_id, "C", [*ALL_DECIDED, ("Q3", "P3", WHY)])
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert (outcomes.state, outcomes.kept) == ("failed", ["O1"])
+    assert outcomes.outcomes == before.outcomes.outcomes
+    agents.online = {"sol", "fable"}
+    assert assembles(council_id, "C").status_code == 202
+    stream = streams_of(council_id)["C"]
+    assert [o.id for o in stream.outcomes.outcomes] == ["O1", "O2"]
+    # Итоги собраны, задачи ещё не резали: перенесённая видна заранее — и с самого начала нарезки.
+    assert stream.saved_issues == before.issues.issues
+    agents.online = set()
+    approves(council_id, "C")
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.kept) == ("failed", ["I1"])
+    assert issues.issues == before.issues.issues
+    assert streams_of(council_id)["C"].saved_issues == []
+
+
 def settles(council_id, outcomes_run, outcome_id, rebuild=False):
     return client.post(f"/api/councils/{council_id}/streams/C/outcomes/touched",
                        json={"run": "g1", "revision": 0, "outcomes_run": outcomes_run,

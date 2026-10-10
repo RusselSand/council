@@ -146,13 +146,13 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
       design_scan: null, design: ideas.A ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null,
+      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null, saved_outcomes: [], saved_issues: [],
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
       design_scan: null, design: ideas.B ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null,
+      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null, saved_outcomes: [], saved_issues: [],
       ...more.B },
   ] satisfies Stream[],
 })
@@ -1475,6 +1475,34 @@ describe('Поток: решения и итоги', () => {
     gaps: [{ id: 'G1', question: 'Где хранить отчёт?', reason: 'нет решения', outcome_ids: ['O2'] }],
     uncovered_outcome_ids: [],
   }
+
+  it('пока уточняют вопросы, сохранённые итоги и задачи видны: их шаги открываются из цепочки', async () => {
+    // Выбор по новым вопросам ещё не утверждали: решение по Q1 — прежнее, из работы до правки отбора.
+    const earlier = [{ key: `Q1: ${QUESTIONS_FOUND.questions[0].text}`, choice: { question_id: 'Q1', proposal: 'F2' },
+                       analysis: CHECKED.analyses[0], decision: FIXED[0] }]
+    openStream(() => deciding({ choices: null, analysis: null, earlier,
+                                saved_outcomes: [ASSEMBLED.outcomes[0]], saved_issues: [CUT.issues[0]] }))
+    const chain = await screen.findByRole('region', { name: /Цепочка/ })
+    expect(within(chain).getByText('сохранено итогов: 1')).toBeTruthy()
+    expect(within(chain).getByText('сохранено задач: 1')).toBeTruthy()
+    fireEvent.click(within(chain).getByRole('button', { name: /Итоги/ }))
+    expect(await screen.findByText(ru['outcomes.savedCaps'])).toBeTruthy()
+    expect(screen.getByText(ru['outcomes.saved'])).toBeTruthy()
+    const outcome = await card('Состояние в файлах')
+    expect(within(outcome).getByText(ru['outcomes.kept'])).toBeTruthy()
+    expect(within(outcome).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()   // ADR-1 — решение по Q1
+    expect(screen.queryByRole('button', { name: ru['outcomes.approve'] })).toBeNull()       // утверждать нечего
+    fireEvent.click(within(chain).getByRole('button', { name: /Задачи/ }))
+    expect(await screen.findByText(ru['issues.savedCaps'])).toBeTruthy()
+    expect(within(await card('Сохранять состояние в файлы')).getByText('Состояние в файлах')).toBeTruthy()   // итог O1
+  })
+
+  it('закреплённый итог виден с самого начала сборки', async () => {
+    const assembling: OutcomeDiscovery = { ...ASSEMBLED, state: 'running', outcomes: [ASSEMBLED.outcomes[0]], kept: ['O1'] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: assembling }))
+    expect(within(await card('Состояние в файлах')).getByText(ru['outcomes.kept'])).toBeTruthy()
+    expect(screen.getByText(ru['outcomes.assembling'], { exact: false })).toBeTruthy()
+  })
 
   it('итоги утверждают — совет нарезает их на задачи, экран переходит к задачам', async () => {
     const cutting: IssueDiscovery = { ...CUT, state: 'running', issues: [], gaps: [] }

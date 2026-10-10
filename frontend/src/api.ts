@@ -337,6 +337,11 @@ export interface Stream {
   earlier_outcomes: OutcomeDiscovery | null; earlier_issues: IssueDiscovery | null
   outcomes: OutcomeDiscovery | null; issues: IssueDiscovery | null
   notes_draft: NotesDraft | null; notes: NotesExport | null
+  /**
+   * Сохранённое, пока поток до него не дошёл (считает сервер): прежние итоги, которые закрепятся, если решения
+   * не поменяются, и задачи, которые перенесутся. Дошёл — шаг показывает свой прогон, а в нём они с начала.
+   */
+  saved_outcomes: Outcome[]; saved_issues: Issue[]
 }
 export type NoteType = 'idea' | 'open_question' | 'proposal' | 'adr' | 'outcome'
 /**

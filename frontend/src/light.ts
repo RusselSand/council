@@ -56,6 +56,12 @@ export const currentStep = (stream: Stream): ChainStep => {
  */
 export const reachable = (stream: Stream): ChainStep => stream.issues?.state === 'done' ? 'notes' : currentStep(stream)
 
+/** Шаг можно открыть: пройденный и текущий, а итоги и задачи — и раньше, если есть сохранённые: их видно. */
+export const openable = (stream: Stream, step: ChainStep): boolean =>
+  CHAIN.indexOf(step) <= CHAIN.indexOf(reachable(stream))
+  || (step === 'outcomes' && stream.saved_outcomes.length > 0)
+  || (step === 'issues' && stream.saved_issues.length > 0)
+
 /**
  * Поток выгружен в заметки — к нынешним задачам и в нынешний каталог (notes — его путь из настроек):
  * нарезали заново или каталог сменили (COUNCIL_NOTES) — выгружать снова.
