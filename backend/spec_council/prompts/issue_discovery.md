@@ -131,6 +131,15 @@ Do not turn ordinary implementation details into a GAP.
 
 An ISSUE that depends on a GAP must be marked as blocked.
 
+The OUTCOMES you are given may already have `gaps` and `blocked_by` — the uncertainties and
+OPEN QUESTIONS found when the OUTCOMES were assembled. They are already known: the system
+carries them into the issues of that OUTCOME by itself and blocks those issues with them. Do not
+return them as a GAP again — not in other words, not more precisely, not narrowed down to one
+issue. Return as a GAP only an uncertainty that is not among them.
+
+If an ISSUE of another OUTCOME depends on such a known gap, copy the gap's question verbatim
+into the ISSUE's `blocked_by`; for a known OPEN QUESTION, put its id (for example, `Q2`).
+
 Independent ISSUES may remain ready for development.
 
 ## Language
