@@ -56,13 +56,22 @@ export const currentStep = (stream: Stream): ChainStep => {
  */
 export const reachable = (stream: Stream): ChainStep => stream.issues?.state === 'done' ? 'notes' : currentStep(stream)
 
+/** Шаг можно открыть: пройденный и текущий, а итоги и задачи — и раньше, если есть сохранённые: их видно. */
+export const openable = (stream: Stream, step: ChainStep): boolean =>
+  CHAIN.indexOf(step) <= CHAIN.indexOf(reachable(stream))
+  || (step === 'outcomes' && stream.saved_outcomes.length > 0)
+  || (step === 'issues' && stream.saved_issues.length > 0)
+
 /**
  * Поток выгружен в заметки — к нынешним задачам и в нынешний каталог (notes — его путь из настроек):
  * нарезали заново или каталог сменили (COUNCIL_NOTES) — выгружать снова.
  */
 export const exported = (stream: Stream, notes: string | null): boolean =>
-  !!stream.notes && !!stream.issues && stream.notes.issues === stream.issues.run && notes !== null
-  && stream.notes.root === notes
+  exportedTo(stream, notes) && !!stream.issues && stream.notes?.issues === stream.issues.run
+
+/** Поток выгружали в нынешний каталог (к каким задачам — неважно): каталог сменили — его выгрузка не там. */
+export const exportedTo = (stream: Stream, notes: string | null): boolean =>
+  !!stream.notes && notes !== null && stream.notes.root === notes
 
 /** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
 export const exportedCount = (stream: Stream): number => stream.notes?.notes.filter(note => !note.kept).length ?? 0

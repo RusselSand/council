@@ -36,6 +36,7 @@ from .models import (
     Stream,
     Structure,
 )
+from .work import with_kept
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +143,10 @@ class FileStore(InMemoryStore):
         super().__init__(sorted(councils, key=lambda council: council.updated_at))
 
     def _keep(self, council: Council) -> None:
-        kept(self._folder, council.id, council.model_dump_json(indent=2))
+        # Вычисляемое (сохранённые итоги потока, правлены ли группы) считается при отдаче заново:
+        # в файл — только то, из чего его считают.
+        kept(self._folder, council.id,
+             council.model_dump_json(indent=2, exclude_computed_fields=True))
 
 
 def kept(folder: Path, name: str, text: str) -> None:
@@ -182,9 +186,10 @@ def writable(folder: Path) -> None:
 def migrated(council: Council) -> Council:
     """Совет, сохранённый до шагов «Репозиторий» или «Дизайн»: у потока, где вопросы уже
     искали, шаг считается пропущенным, и вопросы — найденными без карты или описания макета.
-    Иначе он вернулся бы на этот шаг, а «Пропустить» пересчитало бы всё, что ниже. Менять
-    нечего — тот же совет."""
-    streams = [passed(stream) for stream in council.streams or []]
+    Иначе он вернулся бы на этот шаг, а «Пропустить» пересчитало бы всё, что ниже. Незаконченные
+    сборка и нарезка, сохранённые пустыми, — с закреплённым (work.with_kept). Менять нечего —
+    тот же совет."""
+    streams = [with_kept(passed(stream)) for stream in council.streams or []]
     if streams == (council.streams or []):
         return council
     return council.model_copy(update={"streams": streams})

@@ -43,6 +43,7 @@ from spec_council.pipeline import (
     start_scan,
 )
 from spec_council.repository import Source, inventory, working_copy
+from spec_council.store import migrated
 from tests.figma_fake import LINK, FakeFigma
 
 client = TestClient(app)
@@ -1137,11 +1138,14 @@ def test_a_touched_outcome_waits_for_the_human_who_keeps_it(agents):
     added_c(council_id)
     outcomes = streams_of(council_id)["C"].outcomes
     assert [(t.outcome_id, t.adr_ids) for t in outcomes.touched] == [("O1", ["ADR-3"])]
+    # Пока человек не решил, итог могут пересобрать: его задача — не сохранённая.
+    assert streams_of(council_id)["C"].saved_issues == []
     res = approves(council_id, "C")
     assert res.status_code == 409 and "задевают" in res.json()["detail"]
     assert settles(council_id, outcomes.run, "O1").status_code == 200
     stream = streams_of(council_id)["C"]
     assert stream.outcomes.touched == [] and stream.outcomes.run == outcomes.run
+    assert [issue.id for issue in stream.saved_issues] == ["I1"]
     assert approves(council_id, "C").status_code == 200
 
 
@@ -1205,6 +1209,83 @@ def test_an_issue_of_an_outcome_that_got_blocked_is_not_carried(agents):
     assert approves(council_id, "C").status_code == 200
     issues = streams_of(council_id)["C"].issues
     assert issues.kept == [] and issues.issues[0].blocked_by
+
+
+def test_saved_outcomes_and_issues_are_seen_while_new_questions_are_worked_out(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    stream = streams_of(council_id)["C"]
+    # До итогов ещё далеко, а готовый итог и его задача видны: решения по ним прежние.
+    assert stream.outcomes is None and stream.issues is None
+    assert stream.saved_outcomes == before.outcomes.outcomes
+    assert stream.saved_issues == before.issues.issues
+    council = client.get(f"/api/councils/{council_id}").json()
+    seen = next(s for s in council["streams"] if s["group"] == "C")
+    assert ([o["id"] for o in seen["saved_outcomes"]], [i["id"] for i in seen["saved_issues"]]) == (
+        ["O1"], ["I1"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    assert [o.id for o in streams_of(council_id)["C"].saved_outcomes] == ["O1"]
+    # Другой выбор по прежнему вопросу — его решения уже нет: итог и задача не сохранятся.
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None), ("Q3", "P3")])
+    stream = streams_of(council_id)["C"]
+    assert stream.saved_outcomes == [] and stream.saved_issues == []
+
+
+def test_kept_outcomes_and_carried_issues_are_there_from_the_start_of_their_run(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    # Моделей нет — сборка не идёт, но закреплённый итог уже в ней.
+    agents.online = set()
+    decide(council_id, "C", [*ALL_DECIDED, ("Q3", "P3", WHY)])
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert (outcomes.state, outcomes.kept) == ("failed", ["O1"])
+    assert outcomes.outcomes == before.outcomes.outcomes
+    agents.online = {"sol", "fable"}
+    assert assembles(council_id, "C").status_code == 202
+    stream = streams_of(council_id)["C"]
+    assert [o.id for o in stream.outcomes.outcomes] == ["O1", "O2"]
+    # Итоги собраны, задачи ещё не резали: перенесённая видна заранее — и с самого начала нарезки.
+    assert stream.saved_issues == before.issues.issues
+    agents.online = set()
+    approves(council_id, "C")
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.kept) == ("failed", ["I1"])
+    assert issues.issues == before.issues.issues
+    assert streams_of(council_id)["C"].saved_issues == []
+
+
+def test_runs_saved_before_kept_work_lay_in_them_get_it_on_reading(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    agents.online = set()
+    decide(council_id, "C", [*ALL_DECIDED, ("Q3", "P3", WHY)])
+
+    def legacy(field, emptied):
+        """Совет, каким его сохраняли раньше: сборка или нарезка — без закреплённого."""
+        council = get_store().get_council(council_id)
+        stream = streams_of(council_id)["C"]
+        run = getattr(stream, field).model_copy(update=emptied)
+        return council.model_copy(update={"streams": [
+            stream.model_copy(update={field: run}) if s.group == "C" else s
+            for s in council.streams]})
+
+    read = {s.group: s for s in migrated(legacy("outcomes", {"outcomes": []})).streams}["C"]
+    assert (read.outcomes.state, read.outcomes.outcomes) == ("failed", before.outcomes.outcomes)
+    agents.online = {"sol", "fable"}
+    assert assembles(council_id, "C").status_code == 202
+    agents.online = set()
+    approves(council_id, "C")
+    read = {s.group: s for s in migrated(legacy("issues", {"issues": [], "kept": []})).streams}["C"]
+    assert (read.issues.state, read.issues.kept) == ("failed", ["I1"])
+    assert read.issues.issues == before.issues.issues
 
 
 def settles(council_id, outcomes_run, outcome_id, rebuild=False):
