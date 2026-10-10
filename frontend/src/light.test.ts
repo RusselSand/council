@@ -11,7 +11,7 @@ const NOTES = '/notes'
 
 const BASE: Council = {
   id: 'c1', name: 'Совет', status: 'brief', brief: 'текст', participants: ['sol', 'fable'], judge: 'fable',
-  updated_at: '2026-10-07T10:00:00Z', slicing: null, structure: null, streams: null,
+  updated_at: '2026-10-07T10:00:00Z', project: '', slicing: null, structure: null, streams: null,
 }
 const fragment = { id: 1, text: 'Хочу воркер.', label: 'idea' as const, reason: '', council_label: 'idea' as const,
                    decided_by: 'agreed' as const, votes: [], slice_note: null }
@@ -25,7 +25,7 @@ const structure = (state: Structure['state'], labels: Structure['labels'] = { 1:
 const search = (state: IdeaDiscovery['state']): IdeaDiscovery =>
   ({ state, run: 'i1', steps: [], options: [], proposal: null, error: null })
 const asked = (state: QuestionDiscovery['state']): QuestionDiscovery =>
-  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', steps: [], questions: [], error: null })
+  ({ state, run: 'q1', idea: 'Идея', repository: 'skipped', design: 'skipped', decisions: [], decisions_seen: '', notes: '', steps: [], questions: [], error: null })
 const offered = (state: ProposalDiscovery['state']): ProposalDiscovery =>
   ({ state, run: 'p1', scope: [], steps: [], options: [], error: null })
 const checked = (state: DecisionAnalysis['state']): DecisionAnalysis =>
@@ -221,24 +221,24 @@ describe('светофор', () => {
     const written = { ...ready, notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: [] } }
     expect(streamLight(written, NOTES)).toBe('done')
     expect(streamLight({ ...written, notes: { ...written.notes, issues: 'i0' } }, NOTES)).toBe('yours')   // к прежним задачам
-    expect(chainLight({ ...ready, notes_draft: { state: 'running', run: 'n2', issues: 'i1', language: 'English',
+    expect(chainLight({ ...ready, notes_draft: { state: 'running', run: 'n2', issues: 'i1', language: 'English', root: NOTES,
       steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } }, 'notes', NOTES)).toBe('running')
     const council = (s: Stream) => at({ slicing: slicing('done'), structure: structure('done'), streams: [s] })
     expect(attention(council(blocked), NOTES).map(a => a.what)).toEqual(['issuesWait'])
     expect(attention(council(on(cut('failed'))), NOTES).map(a => a.what)).toEqual(['issuesFailed'])
     expect(attention(council(ready), NOTES).map(a => a.what)).toEqual(['notesWait'])
     expect(attention(council(written), NOTES)).toEqual([])
-    // Каталог сменили (COUNCIL_NOTES): выгрузка в прежний — не выгрузка, поток снова ждёт её.
+    // Каталог сменили (проект или его папку): выгрузка в прежний — не выгрузка, поток снова ждёт её.
     expect(streamLight(written, '/other')).toBe('yours')
     expect(attention(council(written), '/other').map(a => a.what)).toEqual(['notesWait'])
     // Поверх выгрузки собрали новый черновик: его ход важнее прежней выгрузки.
     const redrafted = (state: 'running' | 'failed') => ({ ...written, notes_draft: { state, run: 'n2', issues: 'i1',
-      language: 'English', steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
+      language: 'English', root: NOTES, steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
     expect(chainLight(redrafted('running'), 'notes', NOTES)).toBe('running')
     expect(attention(council(redrafted('failed')), NOTES).map(a => a.what)).toEqual(['notesFailed'])
     // Задачи не все готовы, а документацию уже собирают: её ход виден, а не «задачи ждут».
     const drafting = (state: 'running' | 'failed') => ({ ...blocked, notes_draft: { state, run: 'n1', issues: 'i1',
-      language: 'English', steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
+      language: 'English', root: NOTES, steps: [], notes: [], vanished: [], numbers: [], skipped: [], error: null } })
     expect([currentStep(drafting('running')), streamLight(drafting('running'), NOTES)]).toEqual(['notes', 'running'])
     expect(attention(council(drafting('failed')), NOTES).map(a => a.what)).toEqual(['notesFailed'])
     expect(chainLight(drafting('running'), 'issues', NOTES)).toBe('yours')       // задачи всё так же ждут вас

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, isNotFound, searchesOf, seeking,
+  api, ApiError, councilPath, isNotFound, notesOf, searchesOf, seeking,
   type Council, type CouncilPatch, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
@@ -75,17 +75,36 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
 
-  // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
+  // С сервера берём ходы совета, статус и проект: текст и название могут быть ещё не сохранены, а проект
+  // уходит на сервер сразу (и до запуска нарезки — тоже), и его могли сменить в другой вкладке.
   // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
   // Сколько ответов на действия экран принял: опрос, ушедший раньше последнего, устарел.
   const acted = useRef(0)
+  // Проекты правят на своей странице, бывает — в другой вкладке: папка заметок совета, с которой
+  // сверяются выгрузка и черновик, — по свежим. Дёшево: настройки целиком спрашивают CLI моделей.
+  const refreshProjects = useCallback(() => {
+    api.projects().then(projects => update(([c, settings]) => [c, { ...settings, projects }]),
+                        () => { /* остаются прежние — следующее действие спросит снова */ })
+  }, [update])
+  // Вернулись на вкладку — и проект самого совета могли сменить там же: без хода совета опроса нет, и
+  // шаг «Репозиторий» подставил бы рабочие копии прежнего.
+  useEffect(() => {
+    const returned = () => {
+      Promise.all([api.council(id), api.projects()]).then(
+        ([fresh, projects]) => update(([c, settings]) => [{ ...c, project: fresh.project }, { ...settings, projects }]),
+        () => { /* остаётся прежнее — следующее действие спросит снова */ })
+    }
+    window.addEventListener('focus', returned)
+    return () => window.removeEventListener('focus', returned)
+  }, [id, update])
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
     acted.current += 1
     update(([c, settings]) => [{
-      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams,
+      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams, project: fresh.project,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
     }, settings])
-  }, [update])
+    refreshProjects()
+  }, [update, refreshProjects])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {
@@ -174,7 +193,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       <nav className="stage-bar" aria-label={t('council.stages')}>
         {/* Номер этапа — в цвете светофора; словами то же — для скринридера. */}
         {STAGES.map((s, i) => {
-          const light = state.kind !== 'ok' ? 'idle' : stageLight(state.data[0], s, state.data[1].notes)
+          const light = state.kind !== 'ok' ? 'idle' : stageLight(state.data[0], s, notesOf(state.data[0], state.data[1]))
           return (
             <NavLink key={s} to={councilPath(id, s)} className="tab">
               {({ isActive }) => (

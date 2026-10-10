@@ -284,11 +284,12 @@ def start_decisions(participants: list[str], judge: str, idea: str, repository: 
 
 def start_questions(participants: list[str], judge: str, idea: str,
                     repository: str = SKIPPED, design: str = SKIPPED,
-                    decisions: Sequence[ProjectDecision] = ()) -> QuestionDiscovery:
+                    decisions: Sequence[ProjectDecision] = (),
+                    notes: str = "") -> QuestionDiscovery:
     return QuestionDiscovery(state="running", run=uuid4().hex[:8], idea=idea,
                              repository=repository, design=design,
                              decisions=[decision.adr_id for decision in decisions],
-                             decisions_seen=fingerprint(decisions),
+                             decisions_seen=fingerprint(decisions), notes=notes,
                              steps=steps(participants, judge,
                                          (StepName.question_discovery, StepName.question_judge)))
 
@@ -780,10 +781,10 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
                  report: Callable[[QuestionDiscovery], None], *, repository: str = SKIPPED,
                  repository_map: str = context_prompt(None), design: str = SKIPPED,
                  design_map: str = design_context(None),
-                 accepted: Sequence[ProjectDecision] = ()) -> None:
+                 accepted: Sequence[ProjectDecision] = (), notes: str = "") -> None:
         super().__init__(council_id, participants, judge, runner, report,
                          start_questions(participants, judge, idea, repository, design,
-                                         accepted))
+                                         accepted, notes))
         self.idea = idea
         self.repository = repository_map
         self.design = design_map

@@ -4,18 +4,23 @@
 из теста (app.dependency_overrides[get_store] = ...).
 """
 
+import logging
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Annotated
 
 from agent_workers import Settings
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 
 from .agents import AgentRunner, launch
 from .config import AppConfig, config_of, fitted
 from .figma import Fetcher, Figma
+from .models import Council
+from .projects import FileProjects, ProjectError, Projects, notes_root
 from .store import FileStore, Store
+
+log = logging.getLogger(__name__)
 
 
 @cache
@@ -65,15 +70,23 @@ def get_config() -> AppConfig:
 
 def get_repositories() -> Path | None:
     """Каталог репозиториев для скана: COUNCIL_REPOS из окружения или .env (относительный —
-    от каталога .env). В докере это смонтированный только на чтение /repos. Без него путь к
-    рабочей копии — абсолютный."""
+    от каталога .env). Без него путь к рабочей копии — абсолютный. В докере это смонтированный
+    на запись /repos: в нём и папки документации проектов."""
     return Settings.load().path_of("COUNCIL_REPOS")
 
 
-def get_notes_root() -> Path | None:
-    """Каталог заметок проекта: COUNCIL_NOTES из окружения или .env (относительный — от
-    каталога .env). В докере это смонтированный на запись /notes. Без него поток не выгрузить."""
-    return Settings.load().path_of("COUNCIL_NOTES")
+@cache
+def get_projects() -> Projects:
+    """Проекты — файлами в подкаталоге projects каталога советов. Один на процесс."""
+    return FileProjects(data_folder() / "projects")
+
+
+def retired() -> None:
+    """COUNCIL_NOTES больше не читается: папка документации — у проекта. Задана — предупредить,
+    иначе человек будет ждать заметок там."""
+    if Settings.load().get("COUNCIL_NOTES").strip():
+        log.warning("COUNCIL_NOTES больше не читается: папку документации задайте у проекта — "
+                    "страница «Проекты», см. README")
 
 
 def get_figma() -> Fetcher | None:
@@ -94,7 +107,37 @@ ConfigDep = Annotated[AppConfig, Depends(get_config)]
 AgentsDep = Annotated[AgentRunner, Depends(get_agents)]
 RepositoriesDep = Annotated[Path | None, Depends(get_repositories)]
 FigmaDep = Annotated[Fetcher | None, Depends(get_figma)]
-NotesDep = Annotated[Path | None, Depends(get_notes_root)]
+ProjectsDep = Annotated[Projects, Depends(get_projects)]
+
+
+def council_notes(council: Council, projects: Projects, repositories: Path | None) -> Path | None:
+    """Каталог заметок совета — папка документации его проекта, от каталога репозиториев. None —
+    совет без проекта или у проекта нет папки: поток не выгрузить. Папка больше не годится
+    (каталог репозиториев поменяли) — 422 с причиной: молча работать без прошлых решений проекта
+    нельзя."""
+    project = projects.get_project(council.project) if council.project else None
+    if project is None or not project.notes:
+        return None
+    try:
+        return notes_root(project.notes, repositories)
+    except ProjectError as exc:
+        raise HTTPException(422, f"Папка документации проекта «{project.name}»: {exc} — "
+                                 "поправьте проект") from None
+
+
+NotesOf = Callable[[Council], Path | None]
+
+
+def get_notes_of(projects: ProjectsDep, repositories: RepositoriesDep) -> NotesOf:
+    """Каталог заметок по самому совету. Ручки зовут его для совета, прочитанного под замком
+    советов: проект совета и папку проекта меняют под ним же, и ход не пойдёт с папкой, которую
+    сменили посреди запроса."""
+    return lambda council: council_notes(council, projects, repositories)
+
+
+NotesOfDep = Annotated[NotesOf, Depends(get_notes_of)]
+
+
 
 Launcher = Callable[[Callable[[], object]], None]
 

@@ -3,14 +3,24 @@
 import hashlib
 import json
 import re
+import threading
 
 import pytest
 
 from spec_council.api import documents
+from spec_council.api.councils import council_lock
 from spec_council.app import app
-from spec_council.deps import get_agents, get_launcher, get_notes_root
-from spec_council.models import ExportedNote, NotesDraft
+from spec_council.deps import (
+    get_agents,
+    get_launcher,
+    get_notes_of,
+    get_projects,
+    get_repositories,
+)
+from spec_council.models import ExportedNote, NotesDraft, ProjectDraft
 from spec_council.notes import Catalog, Note, path_of, rendered
+from spec_council.projects import Projects
+from tests.test_project import put
 from tests.test_streams import (
     TASK,
     Agents,
@@ -39,9 +49,9 @@ def models():
 @pytest.fixture
 def notes_dir(tmp_path):
     root = tmp_path / "notes"
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     yield root
-    app.dependency_overrides.pop(get_notes_root)
+    app.dependency_overrides.pop(get_notes_of)
 
 
 def drafts(council_id, group="C"):
@@ -95,9 +105,89 @@ def test_a_cut_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir)
 
 
 def test_without_a_notes_folder_there_is_nothing_to_draft(agents):
-    council_id = cut_c()
+    council_id = cut_c()                                             # совет без проекта
     res = drafts(council_id)
-    assert res.status_code == 422 and "COUNCIL_NOTES" in res.json()["detail"]
+    assert res.status_code == 422 and "Папки документации нет" in res.json()["detail"]
+
+
+def test_notes_go_to_the_documentation_folder_of_the_council_project(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="app/docs"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    try:
+        council_id = cut_c()
+        assert client.patch(f"/api/councils/{council_id}",
+                            json={"project": project.id}).status_code == 200
+        assert drafts(council_id).status_code == 202
+        assert writes(council_id).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    root = (tmp_path / "app" / "docs").resolve()
+    assert streams_of(council_id)["C"].notes.root == str(root)
+    assert "IDEA-0001" in Catalog.load(root).notes
+
+
+def test_a_folder_changed_while_the_write_waits_for_the_lock_is_not_written_into(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="first"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    result = []
+    try:
+        council_id = cut_c()
+        client.patch(f"/api/councils/{council_id}", json={"project": project.id})
+        assert drafts(council_id).status_code == 202
+        with council_lock:
+            worker = threading.Thread(target=lambda: result.append(writes(council_id)))
+            worker.start()
+            worker.join(0.3)                                       # запись ждёт замка
+            # А папку проекта тем временем сменили — под тем же замком, что и запись.
+            projects.update_project(project.id, ProjectDraft(name="Кромка", notes="second"))
+        worker.join(10)
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    assert result[0].status_code == 409 and "другой папки" in result[0].json()["detail"]
+    assert not (tmp_path / "first").exists() and not (tmp_path / "second").exists()
+
+
+def test_a_draft_waiting_for_the_lock_is_built_for_the_folder_it_finds_there(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="first"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    result = []
+    try:
+        council_id = cut_c()
+        client.patch(f"/api/councils/{council_id}", json={"project": project.id})
+        with council_lock:
+            worker = threading.Thread(target=lambda: result.append(drafts(council_id)))
+            worker.start()
+            worker.join(0.3)                                       # сборка ждёт замка
+            projects.update_project(project.id, ProjectDraft(name="Кромка", notes="second"))
+        worker.join(10)
+        assert result[0].status_code == 202
+        assert streams_of(council_id)["C"].notes_draft.root == str((tmp_path / "second").resolve())
+        assert writes(council_id).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    assert (tmp_path / "second").exists() and not (tmp_path / "first").exists()
+
+
+def test_a_project_with_unselected_decisions_sends_the_stream_back_before_drafting(
+        agents, notes_dir, tmp_path):
+    council_id = cut_c()                       # вопросы искали без решений: в папке их не было
+    # Совету выбрали проект, в папке которого есть прошлые решения: поток их не отбирал.
+    other = put(tmp_path / "other")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
+    res = drafts(council_id)
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.questions, stream.issues,
+            stream.notes_draft) == ("failed", None, None, None)
 
 
 def test_issues_must_be_cut_before_drafting(agents, notes_dir):
@@ -201,17 +291,32 @@ def test_numbers_of_another_streams_export_are_not_given_again(agents, notes_dir
     assert (draft.notes[0].id, [n.id for n in draft.numbers]) == ("IDEA-0002", ["ISS-0002"])
 
 
+def test_a_draft_is_not_written_into_another_folder(agents, notes_dir, tmp_path):
+    council_id = cut_c()
+    drafts(council_id)
+    assert streams_of(council_id)["C"].notes_draft.root == str(notes_dir)
+    # Папку проекта сменили на другую пустую: номера вышли бы те же, но туда черновик не смотрели.
+    other = tmp_path / "other"
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
+    res = writes(council_id)
+    assert res.status_code == 409 and "другой папки документации" in res.json()["detail"]
+    assert not other.exists()
+    assert drafts(council_id).status_code == 202
+    assert writes(council_id).status_code == 200
+    assert streams_of(council_id)["C"].notes.root == str(other)
+
+
 def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes_dir, tmp_path):
     council_id = cut_c()
     drafts(council_id)
     assert writes(council_id).status_code == 200
-    # COUNCIL_NOTES сменили: в новом каталоге под IDEA-0001 — чужая идея.
+    # Папку документации сменили: в новом каталоге под IDEA-0001 — чужая идея.
     other = tmp_path / "other"
     foreign = Note("IDEA-0001", "idea", "Чужая идея.")
     path = path_of(other, foreign)
     path.parent.mkdir(parents=True)
     path.write_text(rendered(foreign), encoding="utf-8")
-    app.dependency_overrides[get_notes_root] = lambda: other
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
     drafts(council_id)
     draft = streams_of(council_id)["C"].notes_draft
     assert (draft.notes[0].id, draft.notes[0].action, draft.vanished) == ("IDEA-0002", "create",
@@ -312,6 +417,3 @@ def test_without_models_a_translated_draft_is_recorded_failed(notes_dir, transla
     assert writes(council_id).status_code == 409
 
 
-def test_settings_tell_where_the_notes_go(agents, notes_dir):
-    assert client.get("/api/settings").json()["notes"] == str(notes_dir)
-    assert get_store() is not None

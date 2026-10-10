@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import councils, documents, groups, settings, streams
+from . import councils, documents, groups, projects, settings, streams
 
 API_PREFIX = "/api"
 
@@ -12,3 +12,4 @@ router.include_router(groups.router)
 router.include_router(settings.router)
 router.include_router(streams.router)
 router.include_router(documents.router)
+router.include_router(projects.router)

@@ -17,7 +17,6 @@ os.environ["FIGMA_TOKEN"] = ""
 # Язык работы — по умолчанию, что бы ни стояло в .env.
 os.environ["COUNCIL_LANGUAGE"] = ""
 os.environ["COUNCIL_NOTES_LANGUAGE"] = ""
-os.environ["COUNCIL_NOTES"] = ""
 
 from spec_council.app import app  # noqa: E402
 from spec_council.deps import get_agents  # noqa: E402

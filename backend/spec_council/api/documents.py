@@ -1,4 +1,4 @@
-"""Шаг «Документация»: выгрузка потока в заметки проекта (COUNCIL_NOTES).
+"""Шаг «Документация»: выгрузка потока в заметки — в папку документации проекта совета.
 
 Сначала черновик: какие заметки лягут, под какими номерами, с каким текстом и что с ними будет;
 язык документации другой — судья переводит. Потом запись того, что человек подтвердил, с его
@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, Store, StoreDep
+from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesOfDep, Store, StoreDep
 from ..export import (
     drafted,
     export_in,
@@ -43,6 +43,8 @@ from .groups import NOT_THESE_GROUPS, current
 from .streams import (
     CHANGING,
     NO_STREAM,
+    changed_choice,
+    expired,
     fragments_of,
     group_of,
     launched_all,
@@ -55,7 +57,8 @@ from .streams import (
 
 router = APIRouter(prefix="/councils", tags=["notes"])
 
-NO_NOTES = "Каталог заметок не задан: впишите COUNCIL_NOTES в .env и перезапустите сервер"
+NO_NOTES = ("Папки документации нет: выберите совету проект на «Вводе» или задайте проекту "
+            "папку на странице «Проекты»")
 
 
 class WriteNotes(GroupsEdit):
@@ -115,7 +118,8 @@ def draft_of(council: Council, group: str, stream: Stream, root: Path, catalog: 
     notes, vanished, numbers, skipped = drafted_for(council, group, stream, root, catalog,
                                                     store)
     return NotesDraft(state="running", run=uuid4().hex[:8], issues=cut(stream),
-                      language=notes_language(), steps=translating(council.judge), notes=notes,
+                      language=notes_language(), root=str(root), steps=translating(council.judge),
+                      notes=notes,
                       vanished=vanished, numbers=numbers, skipped=skipped)
 
 
@@ -131,25 +135,30 @@ def drafting(group: str):
                                              "или поток в него не выгрузить"}})
 def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                 config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                notes: NotesDep) -> Council:
+                notes_of: NotesOfDep) -> Council:
     """Черновик выгрузки потока в заметки: что ляжет в каталог, под какими номерами и что
     будет с каждой заметкой. Язык документации тот же, что у работы, — черновик готов сразу;
     другой — новые тексты переводит судья, и без подключения к нему черновик записан упавшим.
     Связки заметок («потому что», «Задачи») совет знает по-русски и по-английски: на другом
-    языке их доводит тот же перевод, даже если язык заметок — язык работы."""
-    root = root_of(notes)
+    языке их доводит тот же перевод, даже если язык заметок — язык работы. Каталог — по совету,
+    прочитанному под замком, как и у записи. Отмеченные решения проекта с тех пор поменялись или
+    проект сменили, а в его папке есть неотобранные решения, — 409, и поток снова у отбора: его
+    решения принимали без них, и в эту папку им так не лечь."""
     translate = notes_language() != language() or not knows_words(language())
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
+        root = root_of(notes_of(council))
         stream = stream_in(council, group)
         cut(stream)
         if running(stream.notes_draft):
             raise HTTPException(409, "Черновик уже собирается")
+        expired(store, council, stream, changed_choice(root, stream))
         return council, translate
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
+        root = root_of(notes_of(council))
         catalog = catalog_of(root)
         draft = draft_of(council, group, stream, root, catalog, store)
         runs: list[CouncilRun] = []
@@ -174,15 +183,17 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                         422: {"description": "Каталог не задан, заметки не записать или граф "
                                              "вышел бы не по правилам"}})
 def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
-                notes: NotesDep) -> Council:
+                notes_of: NotesOfDep) -> Council:
     """Записывает черновик, который человек смотрел: с его правками текста и удалением
     отмеченных исчезнувших заметок. Файл, правленный руками после прошлой выгрузки, не
-    трогается. Каталог поменялся, пока смотрели черновик, — 409: номера могли занять."""
-    root = root_of(notes)
+    трогается. Каталог поменялся, пока смотрели черновик, — 409: номера могли занять. Каталог —
+    по совету, прочитанному под замком: проект совета и папку проекта меняют под тем же замком,
+    и запись не уйдёт в папку, которую сменили посреди запроса."""
     with council_lock:
         council = current(council_id, store, edit)
+        root = root_of(notes_of(council))
         stream = stream_in(council, group)
-        draft = checked_draft(stream, edit)
+        draft = checked_draft(stream, edit, root)
         catalog = catalog_of(root)
         fresh, vanished, numbers, _ = drafted_for(council, group, stream, root, catalog,
                                                   store)
@@ -221,7 +232,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
     return council
 
 
-def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
+def checked_draft(stream: Stream, edit: WriteNotes, root: Path) -> NotesDraft:
     draft = stream.notes_draft
     if draft is None or draft.run != edit.draft:
         raise HTTPException(409, "Черновик уже другой — посмотрите на нынешний")
@@ -229,6 +240,11 @@ def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
         raise HTTPException(409, "Черновик ещё не готов или не собрался — соберите заново")
     if stream.issues is None or draft.issues != stream.issues.run:
         raise HTTPException(409, "Задачи нарезали заново — соберите черновик заново")
+    # Проект совета или его папку сменили после сборки: в новую папку черновик не смотрели,
+    # пусть даже номера там вышли бы те же.
+    if draft.root != str(root):
+        raise HTTPException(409, f"Черновик собран для другой папки документации — теперь она "
+                                 f"{root}: соберите его заново")
     # Язык заметок сменили (COUNCIL_NOTES_LANGUAGE) после сборки: тексты черновика — на прежнем.
     if draft.language != notes_language():
         raise HTTPException(409, f"Язык заметок теперь {notes_language()}, а черновик — на "

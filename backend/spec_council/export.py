@@ -365,7 +365,7 @@ def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: s
 
 
 def export_in(record: NotesExport | None, root: Path | None) -> NotesExport | None:
-    """Выгрузка потока — если она в этот каталог. В другой (COUNCIL_NOTES сменили) — её
+    """Выгрузка потока — если она в этот каталог. В другой (проект или его папку сменили) — её
     номера здесь ничего не значат: под ними тут чужие заметки."""
     if record is None or root is None or record.root != str(root):
         return None

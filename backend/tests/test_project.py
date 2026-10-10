@@ -9,7 +9,7 @@ from spec_council.app import app
 from spec_council.deps import (
     get_agents,
     get_launcher,
-    get_notes_root,
+    get_notes_of,
     get_repositories,
     get_store,
 )
@@ -38,12 +38,16 @@ from spec_council.project import (
 )
 from spec_council.slicing import BadAnswer
 from tests.test_streams import (
+    DECIDED,
     IDEA_C,
     Agents,
     approve,
+    approves,
     choose,
+    chosen_c,
     client,
     confirm,
+    decide,
     grouped,
     passes,
     scans,
@@ -189,7 +193,7 @@ def test_only_the_issue_lines_of_an_outcome_declare_its_issues(tmp_path):
 def test_a_catalog_changed_while_the_models_are_probed_still_sends_the_selection_back(
         agents, tmp_path, monkeypatch):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     probe = streams.offline
 
@@ -297,9 +301,9 @@ def agents(tmp_path):
     fake = Agents()
     app.dependency_overrides[get_agents] = lambda: fake
     app.dependency_overrides[get_launcher] = lambda: lambda job: job()
-    app.dependency_overrides[get_notes_root] = lambda: put(tmp_path / "notes")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: put(tmp_path / "notes")
     yield fake
-    for dependency in (get_agents, get_launcher, get_notes_root):
+    for dependency in (get_agents, get_launcher, get_notes_of):
         app.dependency_overrides.pop(dependency)
 
 
@@ -353,7 +357,7 @@ def test_past_decisions_are_selected_before_the_questions(agents):
 def test_a_catalog_that_appears_later_leaves_the_found_questions_alone(agents, tmp_path):
     root = tmp_path / "later"
     root.mkdir()
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     stream = streams_of(council_id)["C"]
     assert stream.decisions_search is None and stream.questions.state == "done"
@@ -366,7 +370,7 @@ def test_a_catalog_that_appears_later_leaves_the_found_questions_alone(agents, t
 
 def test_a_decision_changed_in_the_catalog_meanwhile_sends_the_selection_back(agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     # Пока смотрели отбор, ADR-0001 переписали в каталоге.
     adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
@@ -393,7 +397,7 @@ def test_a_decision_not_from_the_selection_is_refused(agents):
 
 def test_a_decision_added_to_the_catalog_meanwhile_sends_even_none_back(agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     first = streams_of(council_id)["C"].decisions_search.run
     newer = Note("ADR-0003", "adr", "Счета шлёт бот по расписанию.", ("PRO-0002",))
@@ -406,7 +410,7 @@ def test_a_decision_added_to_the_catalog_meanwhile_sends_even_none_back(agents, 
 
 def test_a_selected_decision_rewritten_in_the_catalog_finds_the_questions_anew(agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     assert picks(council_id, ["ADR-0001"]).status_code == 200
     first = streams_of(council_id)["C"].questions.run
@@ -423,7 +427,7 @@ def test_a_selected_decision_rewritten_in_the_catalog_finds_the_questions_anew(a
 
 def test_a_stale_selection_waits_for_the_run_below_it(agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     assert picks(council_id, ["ADR-0001"]).status_code == 200
     store = get_store()
@@ -441,13 +445,13 @@ def test_a_stale_selection_waits_for_the_run_below_it(agents, tmp_path):
 def test_only_an_export_to_this_catalog_makes_its_decisions_the_streams_own(
         agents, tmp_path, where, searched):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = grouped()
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
     skip(council_id, "C")
     # Поток выгружал ADR-0001 и ADR-0002. В этот каталог — они его, прошлых решений нет; в
-    # другой (COUNCIL_NOTES сменили) — здесь под теми номерами чужие решения, и их отбирают.
+    # другой (папку документации сменили) — здесь под теми номерами чужие решения, и их отбирают.
     record = NotesExport(run="n1", issues="i1", language="Russian", root=str(tmp_path / where),
                          notes=[ExportedNote(key=f"a:{n}", id=f"ADR-000{n}", type="adr",
                                              generated="…", written="…", digest="")
@@ -464,7 +468,7 @@ def test_only_an_export_to_this_catalog_makes_its_decisions_the_streams_own(
 def test_a_retry_of_the_questions_after_the_catalog_changed_goes_back_to_the_selection(
         agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     agents.online = set()
     assert picks(council_id, ["ADR-0001"]).status_code == 200         # вопросы — упали
@@ -485,7 +489,7 @@ def test_a_retry_of_the_questions_after_the_catalog_changed_goes_back_to_the_sel
 
 def test_a_retry_of_the_questions_offers_decisions_that_appeared_meanwhile(agents, tmp_path):
     root = tmp_path / "later"
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = grouped()
     confirm(council_id)
     approve(council_id, "C", IDEA_C)
@@ -506,7 +510,7 @@ def test_a_retry_of_the_questions_offers_decisions_that_appeared_meanwhile(agent
 def test_a_selected_decision_rewritten_before_the_options_sends_back_to_the_selection(
         agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     assert picks(council_id, ["ADR-0001"]).status_code == 200
     # Новое решение в каталоге работу ниже не сбрасывает: вопросы к ней уже нашли.
@@ -527,7 +531,7 @@ def test_a_selected_decision_rewritten_before_the_options_sends_back_to_the_sele
 
 def test_a_new_scope_with_a_rewritten_decision_is_refused_too(agents, tmp_path):
     root = put(tmp_path / "fixed")
-    app.dependency_overrides[get_notes_root] = lambda: root
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: root
     council_id = at_questions()
     assert picks(council_id, ["ADR-0001"]).status_code == 200
     adr = Note("ADR-0001", "adr", "Ищем в чате, потому что там всё.", ("PRO-0001",))
@@ -535,6 +539,79 @@ def test_a_new_scope_with_a_rewritten_decision_is_refused_too(agents, tmp_path):
     assert choose(council_id, "C", ["Q1"]).status_code == 409
     stream = streams_of(council_id)["C"]
     assert (stream.project_decisions, stream.scope) == (None, None)
+
+
+def test_another_folder_with_past_decisions_sends_even_none_selected_back(agents, tmp_path):
+    first = put(tmp_path / "first")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: first
+    council_id = at_questions()
+    assert picks(council_id, []).status_code == 200                   # ни одного решения
+    assert streams_of(council_id)["C"].questions.notes == str(first)
+    # Проект совета сменили: в его папке свои прошлые решения, их никто не отбирал.
+    other = put(tmp_path / "other")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: other
+    res = choose(council_id, "C", ["Q1"])
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.project_decisions, stream.questions,
+            stream.scope) == ("failed", None, None, None)
+
+
+def test_another_folder_without_past_decisions_leaves_the_questions_alone(agents, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: empty
+    council_id = at_questions()                         # решений не было — вопросы сразу
+    assert streams_of(council_id)["C"].decisions_search is None
+    # Совету выбрали проект с новой, ещё пустой папкой: отбирать нечего.
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: tmp_path / "bare"
+    assert choose(council_id, "C", ["Q1"]).status_code == 200
+    assert streams_of(council_id)["C"].scope is not None
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_outcomes_are_not_cut_past_a_project_with_unselected_decisions(agents, tmp_path, retry):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: empty
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    assert decide(council_id, "C", DECIDED).status_code == 200              # итоги собраны
+    if retry:
+        agents.online = set()
+        assert approves(council_id, "C").status_code == 200             # нарезка — упала
+        agents.online = {"sol", "fable"}
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: put(tmp_path / "other")
+    res = (client.post(f"/api/councils/{council_id}/streams/C/issues/discovery") if retry
+           else approves(council_id, "C"))
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.questions, stream.outcomes,
+            stream.issues) == ("failed", None, None, None)
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_decisions_are_not_fixed_or_assembled_past_a_project_with_unselected_decisions(
+        agents, tmp_path, retry):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: empty
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)                                     # выбор проверен без решений проекта
+    if retry:
+        agents.online = set()
+        assert decide(council_id, "C", DECIDED).status_code == 200      # итоги — упали
+        agents.online = {"sol", "fable"}
+    # Совету выбрали проект, в папке которого есть прошлые решения: их никто не отбирал.
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: put(tmp_path / "other")
+    res = (client.post(f"/api/councils/{council_id}/streams/C/outcomes/discovery") if retry
+           else decide(council_id, "C", DECIDED))
+    assert res.status_code == 409 and "сменили" in res.json()["detail"]
+    stream = streams_of(council_id)["C"]
+    assert (stream.decisions_search.state, stream.questions, stream.decisions,
+            stream.outcomes) == ("failed", None, None, None)
 
 
 def test_without_models_the_selection_fails_and_the_questions_go_without_it(agents):

@@ -570,6 +570,9 @@ class QuestionDiscovery(BaseModel):
     # Отпечаток отмеченных решений (project.fingerprint): решение с тем же номером переписали —
     # вопросы ищутся заново.
     decisions_seen: str = ""
+    # Каталог заметок, с которым шли к вопросам (пусто — его не было): проект или его папку
+    # сменили, а в новом каталоге есть прошлые решения — их не отбирали, отбор заново.
+    notes: str = ""
     steps: list[Step]
     questions: list[OpenQuestion] = []
     error: str | None = None
@@ -812,6 +815,8 @@ class NotesDraft(BaseModel):
     run: str = ""
     issues: str = ""
     language: str = ""
+    # Каталог, для которого собран: номера и действия — его. Записать в другой — 409.
+    root: str = ""
     steps: list[Step] = []
     notes: list[NotePlan] = []
     vanished: list[VanishedNote] = []
@@ -935,6 +940,9 @@ class Council(BaseModel):
     judge: str
     # Момент, а не дата: две правки за один день должны различаться порядком в списке.
     updated_at: datetime
+    # Проект совета (Project.id): его репозитории шаг «Репозиторий» подставляет в каждом
+    # потоке, а его папка документации — каталог заметок потоков. Пусто — без проекта.
+    project: str = ""
     slicing: Slicing | None = None
     structure: Structure | None = None
     # Потоки подтверждённых групп, по их порядку. None — группы ещё не подтверждены.
@@ -956,6 +964,8 @@ class CouncilPatch(BaseModel):
     brief: str | None = None
     participants: list[str] | None = None
     judge: str | None = None
+    # Проект совета (Project.id); пустая строка — без проекта.
+    project: str | None = None
     # Типы фрагментов готовой нарезки: {id: тип}. Только изменённые, остальные не трогаются.
     labels: dict[int, Label] | None = None
     # К какой нарезке относятся labels: Slicing.run. Обязателен вместе с ними.
@@ -1093,6 +1103,61 @@ class ApproveOutcomes(GroupsEdit):
     outcomes_run: str
 
 
+# Сколько символов в названии проекта: его выбирают из списка на «Вводе».
+PROJECT_NAME_MAX = 100
+
+
+class ProjectDraft(BaseModel):
+    """Проект, как его задаёт человек. Пути — как у скана: от каталога репозиториев
+    (COUNCIL_REPOS) или, без него, абсолютные."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=PROJECT_NAME_MAX)
+    repositories: list[str] = Field(default=[], max_length=REPOSITORIES_MAX)
+    notes: str = ""
+
+
+class ProjectEdit(ProjectDraft):
+    """Правка проекта: revision — версия, которую человек правил. Проект с тех пор поправили
+    (другая вкладка) — 409: целиком присланная форма молча вернула бы прежнее."""
+
+    revision: int
+
+
+class Project(BaseModel):
+    """Проект: рабочие копии и папка документации, которые совет берёт по нему, а не вводит в
+    каждом потоке заново."""
+
+    id: str
+    name: str
+    # Сколько раз проект правили: правка несёт версию, к которой сделана.
+    revision: int = 0
+    # Рабочие копии: шаг «Репозиторий» подставляет их все, лишние в потоке снимают.
+    repositories: list[str] = []
+    # Папка документации: туда шаг «Документация» выгружает заметки потоков, оттуда «Решения
+    # проекта» берут прошлые решения. Пусто — папки нет, и потоки не выгрузить.
+    notes: str = ""
+    updated_at: datetime
+
+
+class ProjectView(Project):
+    """Проект на экране. notes_root — папка документации, как её находит сервер: по этому пути
+    выгрузка помнит, куда записала. None — папки у проекта нет или путь больше не годится
+    (problem — почему: например, каталог репозиториев поменяли)."""
+
+    notes_root: str | None = None
+    problem: str | None = None
+
+
+class WorkingCopies(BaseModel):
+    """Рабочие копии git в каталоге репозиториев — прямо в нём и он сам: из них отмечают
+    репозитории проекта. root None — каталог не задан, пути абсолютные и вводятся руками."""
+
+    root: str | None = None
+    paths: list[str] = []
+
+
 class Model(BaseModel):
     alias: str
     short_name: str
@@ -1108,8 +1173,8 @@ class Settings(BaseModel):
     repositories: str | None = None
     # Задан ли токен Figma (FIGMA_TOKEN): без него макет не сканировать.
     figma: bool = False
-    # Каталог заметок проекта (COUNCIL_NOTES): без него поток не выгрузить.
-    notes: str | None = None
+    # Проекты: их репозитории и папки документации — совет на экране берёт свой.
+    projects: list[ProjectView] = []
     min_participants: int
     default_participants: list[str]
     default_judge: str

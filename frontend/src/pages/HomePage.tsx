@@ -1,14 +1,14 @@
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
-import { api, councilPath, type Council } from '../api'
+import { api, councilPath, notesOf, type Council, type Settings } from '../api'
 import { formatDate, formatToday } from '../i18n'
 import { attention, councilLight } from '../light'
 import { useLoad } from '../useLoad'
 
 /**
  * Сводка: сколько советов в каком состоянии — светофором, что ждёт вас или упало, и все
- * советы. Состояние совета — самое важное из его этапов. Настройки — ради каталога заметок:
- * выгрузка в другой каталог потока не завершает.
+ * советы. Состояние совета — самое важное из его этапов. Настройки — ради проектов: каталог заметок совета —
+ * папка документации его проекта, и выгрузка в другой каталог потока не завершает.
  */
 export function HomePage() {
   const { t } = useTranslation()
@@ -28,7 +28,7 @@ export function HomePage() {
       {state.kind === 'ok' && state.data[0].length === 0 && (
         <div className="card muted section-gap">{t('home.empty')}</div>
       )}
-      {state.kind === 'ok' && state.data[0].length > 0 && <Summary councils={state.data[0]} notes={state.data[1].notes} />}
+      {state.kind === 'ok' && state.data[0].length > 0 && <Summary councils={state.data[0]} settings={state.data[1]} />}
     </main>
   )
 }
@@ -36,13 +36,13 @@ export function HomePage() {
 /** Плитки «Общей картины»: зелёная — идёт или готово, белая — черновики, жёлтая, красная. */
 const TILES = ['go', 'idle', 'yours', 'failed'] as const
 
-function Summary({ councils, notes }: Readonly<{ councils: Council[]; notes: string | null }>) {
+function Summary({ councils, settings }: Readonly<{ councils: Council[]; settings: Settings }>) {
   const { t } = useTranslation()
-  const lights = councils.map(council => councilLight(council, notes))
+  const lights = councils.map(council => councilLight(council, notesOf(council, settings)))
   const tile = (kind: (typeof TILES)[number]) =>
     lights.filter(light => (kind === 'go' ? light === 'running' || light === 'done' : light === kind)).length
   const streams = councils.reduce((sum, council) => sum + (council.streams?.length ?? 0), 0)
-  const pending = councils.flatMap(council => attention(council, notes).map(item => ({ ...item, council })))
+  const pending = councils.flatMap(council => attention(council, notesOf(council, settings)).map(item => ({ ...item, council })))
 
   return (
     <>

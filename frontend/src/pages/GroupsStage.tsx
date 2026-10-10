@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router'
 import {
@@ -359,7 +360,7 @@ function MergeMenu({ others, busy, merge }: Readonly<{
 }
 
 /** Связь с точки зрения этой группы: «зависит от A», «от неё зависит B», «связана с C». */
-function relationTag(relation: GroupRelation, group: Group, t: ReturnType<typeof useTranslation>['t']): string {
+function relationTag(relation: GroupRelation, group: Group, t: TFunction): string {
   const outgoing = relation.source === group.id
   const other = outgoing ? relation.target : relation.source
   if (relation.type === 'related') return t('groups.relatedTo', { group: other })

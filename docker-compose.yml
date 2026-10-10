@@ -17,7 +17,9 @@ x-paths: &paths
   # Язык работы совета и язык заметок проекта (пусто — русский и он же), см. README.
   COUNCIL_LANGUAGE: ${COUNCIL_LANGUAGE:-}
   COUNCIL_NOTES_LANGUAGE: ${COUNCIL_NOTES_LANGUAGE:-}
-  COUNCIL_NOTES: /notes
+  # Больше не читается — папка документации у проекта. Передаётся, только чтобы сервер
+  # предупредил, если она всё ещё задана в .env.
+  COUNCIL_NOTES: ${COUNCIL_NOTES:-}
   HOME: /tmp
   # Пределы хода моделей (agent-workers), если заданы в .env. Без значения здесь: не задан —
   # переменной в контейнере нет, и действует умолчание; пустая строка сняла бы предел.
@@ -57,20 +59,14 @@ services:
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
         bind: { create_host_path: false }
-      # Репозитории для скана (COUNCIL_REPOS в .env) — только на чтение: модели их читают, но
-      # не меняют. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      # Репозитории проектов (COUNCIL_REPOS в .env) — на запись: в них и папки документации
+      # проектов, куда шаг «Документация» кладёт заметки. Модели читают не сами рабочие копии, а их
+      # снимок. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      # Каталог не создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не записал бы
+      # туда заметки. .repos есть в репозитории, свой каталог у вас уже есть.
       - type: bind
         source: ${COUNCIL_REPOS:-./.repos}
         target: /repos
-        read_only: true
-        bind: { create_host_path: true }
-      # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
-      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне. Каталог не
-      # создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не смог бы туда писать.
-      # .notes есть в репозитории, свой путь создайте заранее.
-      - type: bind
-        source: ${COUNCIL_NOTES:-./.notes}
-        target: /notes
         bind: { create_host_path: false }
     environment:
       <<: *paths
@@ -123,20 +119,14 @@ services:
         source: ${COUNCIL_DATA:-./.data}
         target: /data/councils
         bind: { create_host_path: false }
-      # Репозитории для скана (COUNCIL_REPOS в .env) — только на чтение: модели их читают, но
-      # не меняют. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      # Репозитории проектов (COUNCIL_REPOS в .env) — на запись: в них и папки документации
+      # проектов, куда шаг «Документация» кладёт заметки. Модели читают не сами рабочие копии, а их
+      # снимок. Без настройки — пустой .repos в корне: сканировать нечего, пока не укажете.
+      # Каталог не создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не записал бы
+      # туда заметки. .repos есть в репозитории, свой каталог у вас уже есть.
       - type: bind
         source: ${COUNCIL_REPOS:-./.repos}
         target: /repos
-        read_only: true
-        bind: { create_host_path: true }
-      # Заметки проекта (COUNCIL_NOTES в .env) — на запись: шаг «Документация» кладёт туда
-      # IDEA, вопросы, варианты, решения и итоги. Без настройки — .notes в корне. Каталог не
-      # создаём, как и .data: на Linux от root бэкенд под COUNCIL_UID не смог бы туда писать.
-      # .notes есть в репозитории, свой путь создайте заранее.
-      - type: bind
-        source: ${COUNCIL_NOTES:-./.notes}
-        target: /notes
         bind: { create_host_path: false }
     environment: *paths
 
