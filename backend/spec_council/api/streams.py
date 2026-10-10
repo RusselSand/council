@@ -1254,12 +1254,14 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
                         423: {"description": "Совет ещё нарезает прежние итоги на задачи"}})
 def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: StoreDep,
                      config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                     repositories: RepositoriesDep) -> Council:
+                     repositories: RepositoriesDep, notes_of: NotesOfDep) -> Council:
     """Человек утверждает итоги потока — и совет нарезает их на задачи для coding agents.
     Итоги с блокировками утвердить тоже можно: задачи, которым не хватает решения, нарезка так
     и пометит. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же рабочей
     копии заново: её читают сейчас, и если её не прочитать — 422. Утвердить те же итоги ещё
-    раз — ничего не меняется; итоги — те, что были на экране: собрали заново — 409."""
+    раз — ничего не меняется; итоги — те, что были на экране: собрали заново — 409. Решения
+    проекта с тех пор поменялись или проект сменили — 409, поток снова у отбора, как и на шагах
+    выше: задачи по решениям, принятым без них, не нарезают."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -1269,6 +1271,8 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
             raise HTTPException(423, "Совет ещё нарезает прежние итоги — дождитесь его")
         if anew and outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        if anew:
+            expired(store, council, stream, changed_choice(notes_of(council), stream))
         return council, anew
 
     # Сначала дешёвое: лишний запрос не должен ждать git на большой рабочей копии ради 409.
@@ -1302,11 +1306,12 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
                         422: {"description": "Рабочую копию утверждённого скана не прочитать"}})
 def start_issue_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
                           agents: AgentsDep, launch: LauncherDep,
-                          repositories: RepositoriesDep) -> Council:
+                          repositories: RepositoriesDep, notes_of: NotesOfDep) -> Council:
     """Нарезает утверждённые итоги на задачи заново: после сбоя или если при утверждении не
     было подключения к моделям. Код читается заново; тот же код — повтор не платит второй раз
-    за уже данные ответы. Нарезанные задачи он не трогает: заново их нарежут по другим итогам."""
-    def ready(council: Council) -> None:
+    за уже данные ответы. Нарезанные задачи он не трогает: заново их нарежут по другим итогам.
+    Решения проекта с тех пор поменялись или проект сменили — 409, как и при утверждении итогов."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.issues is None:
             raise HTTPException(409, "Сначала утвердите итоги")
@@ -1316,7 +1321,13 @@ def start_issue_discovery(council_id: str, group: str, store: StoreDep, config: 
             raise HTTPException(409, "Задачи уже нарезаны — заново их нарежут по другим итогам")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
 
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes_of(council), checked(council)))
+
+    expired_before(store, council_id, group, cutting(group),
+                   lambda council: changed_choice(notes_of(council), checked(council)))
     # Сначала дешёвое, потом git: запрос, которому всё равно откажут, рабочую копию не читает.
     council = store.get_council(council_id)
     if council is None:
