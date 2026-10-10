@@ -209,7 +209,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
           )
         })}
       </nav>
-      <main className="main">
+      <main className={stage === 'streams' ? 'main wide' : 'main'}>
         <h1 className="sr-only">{title ?? t('common.loading')}</h1>
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
         {state.kind === 'ok' && stage === 'brief' && (

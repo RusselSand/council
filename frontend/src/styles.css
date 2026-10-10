@@ -218,7 +218,7 @@ a.card:hover { box-shadow: 0 0 0 1.5px var(--fg) }
 }
 
 /* Этап «Потоки»: слева потоки и цепочка, по центру шаг, справа ход работы. */
-.streams-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 260px; gap: 20px; align-items: start }
+.streams-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr) 300px; gap: 20px; align-items: start }
 .streams-nav, .streams-side, .streams-main { display: grid; gap: 16px; align-content: start; min-width: 0 }
 .side-caps { margin: 0 0 8px 4px; color: var(--fg-muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase }
 .stream-nav { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none }
@@ -478,3 +478,45 @@ section > .option-note { margin: 8px 0 0 18px }
 /* Закреплённый итог, который задевают новые решения: оставить или пересобрать. */
 .outcome-touch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px }
 .outcome-touch-actions { display: flex; flex-wrap: wrap; gap: 8px }
+
+/* Потоки на широком экране (1600–1920): три колонки рядом, боковые не уезжают при прокрутке. */
+.main.wide { max-width: 1880px }
+@media (min-width: 1201px) {
+  .streams-nav, .streams-side { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto }
+}
+/* Цепочка: не текущий и не открытый шаг — одной строкой. */
+.chain-step.compact { align-items: center; padding: 5px 8px }
+.chain-step.compact .chain-body { flex-direction: row; align-items: baseline; gap: 8px }
+.chain-step.compact .chain-name { flex: none }
+.chain-step.compact .chain-status { overflow: hidden; margin-bottom: 0; text-overflow: ellipsis; white-space: nowrap }
+
+/* Плашка открытого шага: чего ждём — цветом, значком и словами. */
+.banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border: 1px solid transparent; border-radius: 12px; font-size: 13.5px }
+.banner.running { border-color: var(--go); background: var(--go-soft); color: var(--go-text) }
+.banner.yours { border-color: var(--wait); background: var(--wait-soft); color: var(--wait-text) }
+.banner.failed { border-color: var(--stop); background: var(--stop-soft); color: var(--stop-text) }
+.banner-icon { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 800 }
+.banner.running .banner-icon { background: var(--go) }
+.banner.yours .banner-icon { background: var(--wait); color: var(--wait-ink) }
+.banner.failed .banner-icon { background: var(--stop) }
+.banner-note { opacity: .85 }
+@media (prefers-reduced-motion: no-preference) {
+  .banner.running .banner-icon { animation: working 1.6s ease-in-out infinite }
+}
+
+/* Слайдер карточек: фишки с состоянием, счёт готовых, ← →. */
+.slider { display: grid; gap: 12px; min-width: 0 }
+.slider-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px }
+.slider-chips { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 6px; min-width: 0 }
+.slider-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface); color: var(--fg-soft); font-size: 12.5px; font-weight: 600 }
+.slider-chip:hover { border-color: var(--fg-faint) }
+.slider-chip.active { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); color: var(--fg) }
+.slider-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.slider-count { color: var(--fg-muted); font-size: 12.5px; white-space: nowrap }
+.slider-nav { display: flex; gap: 6px }
+.slider-nav .btn-secondary { padding: 4px 12px }
+.slider-panel { min-width: 0 }
+/* «Сейчас» на широком экране: подписи шагов — уже в цепочке слева, здесь только полоски и названия. */
+@media (min-width: 1201px) {
+  .segment-sub { display: none }
+}
