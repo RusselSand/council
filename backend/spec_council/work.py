@@ -265,7 +265,10 @@ def saved_issues_of(stream: Stream) -> list[Issue]:
     if stream.outcomes is None:
         outcomes = saved_outcomes_of(stream)
     elif stream.outcomes.state == "done":
-        outcomes = stream.outcomes.outcomes
+        # Итог, который задевают новые решения, ещё могут пересобрать: его задачи не сохранены,
+        # пока человек не оставил его как есть.
+        touched = {touch.outcome_id for touch in stream.outcomes.touched}
+        outcomes = [o for o in stream.outcomes.outcomes if o.id not in touched]
     else:
         outcomes = [o for o in stream.outcomes.outcomes if o.id in stream.outcomes.kept]
     return carried_issues(stream.model_copy(update={"decisions": known_decisions(stream)}),

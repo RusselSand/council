@@ -1138,11 +1138,14 @@ def test_a_touched_outcome_waits_for_the_human_who_keeps_it(agents):
     added_c(council_id)
     outcomes = streams_of(council_id)["C"].outcomes
     assert [(t.outcome_id, t.adr_ids) for t in outcomes.touched] == [("O1", ["ADR-3"])]
+    # Пока человек не решил, итог могут пересобрать: его задача — не сохранённая.
+    assert streams_of(council_id)["C"].saved_issues == []
     res = approves(council_id, "C")
     assert res.status_code == 409 and "задевают" in res.json()["detail"]
     assert settles(council_id, outcomes.run, "O1").status_code == 200
     stream = streams_of(council_id)["C"]
     assert stream.outcomes.touched == [] and stream.outcomes.run == outcomes.run
+    assert [issue.id for issue in stream.saved_issues] == ["I1"]
     assert approves(council_id, "C").status_code == 200
 
 
