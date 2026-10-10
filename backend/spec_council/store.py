@@ -36,6 +36,7 @@ from .models import (
     Stream,
     Structure,
 )
+from .work import with_kept
 
 log = logging.getLogger(__name__)
 
@@ -185,9 +186,10 @@ def writable(folder: Path) -> None:
 def migrated(council: Council) -> Council:
     """Совет, сохранённый до шагов «Репозиторий» или «Дизайн»: у потока, где вопросы уже
     искали, шаг считается пропущенным, и вопросы — найденными без карты или описания макета.
-    Иначе он вернулся бы на этот шаг, а «Пропустить» пересчитало бы всё, что ниже. Менять
-    нечего — тот же совет."""
-    streams = [passed(stream) for stream in council.streams or []]
+    Иначе он вернулся бы на этот шаг, а «Пропустить» пересчитало бы всё, что ниже. Незаконченные
+    сборка и нарезка, сохранённые пустыми, — с закреплённым (work.with_kept). Менять нечего —
+    тот же совет."""
+    streams = [with_kept(passed(stream)) for stream in council.streams or []]
     if streams == (council.streams or []):
         return council
     return council.model_copy(update={"streams": streams})

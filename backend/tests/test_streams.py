@@ -43,6 +43,7 @@ from spec_council.pipeline import (
     start_scan,
 )
 from spec_council.repository import Source, inventory, working_copy
+from spec_council.store import migrated
 from tests.figma_fake import LINK, FakeFigma
 
 client = TestClient(app)
@@ -1253,6 +1254,35 @@ def test_kept_outcomes_and_carried_issues_are_there_from_the_start_of_their_run(
     assert (issues.state, issues.kept) == ("failed", ["I1"])
     assert issues.issues == before.issues.issues
     assert streams_of(council_id)["C"].saved_issues == []
+
+
+def test_runs_saved_before_kept_work_lay_in_them_get_it_on_reading(agents):
+    council_id = grouped()
+    confirm(council_id)
+    before = ready_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2"), ("Q3", "P3")])
+    agents.online = set()
+    decide(council_id, "C", [*ALL_DECIDED, ("Q3", "P3", WHY)])
+
+    def legacy(field, emptied):
+        """Совет, каким его сохраняли раньше: сборка или нарезка — без закреплённого."""
+        council = get_store().get_council(council_id)
+        stream = streams_of(council_id)["C"]
+        run = getattr(stream, field).model_copy(update=emptied)
+        return council.model_copy(update={"streams": [
+            stream.model_copy(update={field: run}) if s.group == "C" else s
+            for s in council.streams]})
+
+    read = {s.group: s for s in migrated(legacy("outcomes", {"outcomes": []})).streams}["C"]
+    assert (read.outcomes.state, read.outcomes.outcomes) == ("failed", before.outcomes.outcomes)
+    agents.online = {"sol", "fable"}
+    assert assembles(council_id, "C").status_code == 202
+    agents.online = set()
+    approves(council_id, "C")
+    read = {s.group: s for s in migrated(legacy("issues", {"issues": [], "kept": []})).streams}["C"]
+    assert (read.issues.state, read.issues.kept) == ("failed", ["I1"])
+    assert read.issues.issues == before.issues.issues
 
 
 def settles(council_id, outcomes_run, outcome_id, rebuild=False):

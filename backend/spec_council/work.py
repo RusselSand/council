@@ -272,6 +272,27 @@ def saved_issues_of(stream: Stream) -> list[Issue]:
                           outcomes)
 
 
+def with_kept(stream: Stream) -> Stream:
+    """Поток, сохранённый, пока сборка и нарезка начинались пустыми (у сборки — только номера
+    закреплённых): незаконченная получает закреплённые итоги и перенесённые задачи, как теперь
+    начинается любая, — иначе их не видно, пока её не запустят снова. Менять нечего — тот же."""
+    changes: dict[str, OutcomeDiscovery | IssueDiscovery] = {}
+    run = stream.outcomes
+    if (run is not None and run.state != "done" and run.kept and not run.outcomes
+            and stream.scope is not None and stream.decisions is not None):
+        changes["outcomes"] = run.model_copy(update={"outcomes": [
+            outcome for outcome in kept_outcomes(stream, stream.scope, stream.decisions)
+            if outcome.id in run.kept]})
+    cut = stream.issues
+    if (cut is not None and cut.state != "done" and not cut.issues
+            and stream.outcomes is not None and stream.outcomes.state == "done"):
+        carried = carried_issues(stream, stream.outcomes.outcomes)
+        if carried:
+            changes["issues"] = cut.model_copy(update={
+                "issues": carried, "kept": [issue.id for issue in carried]})
+    return stream.model_copy(update=changes) if changes else stream
+
+
 def cutting_plan(stream: Stream) -> tuple[list[Issue], list[str]]:
     """Что перенести и что нарезать: задачи прежней нарезки тех же итогов и итоги, которые
     ими не покрыты."""
