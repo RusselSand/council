@@ -14,7 +14,9 @@ import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
-import { CHAIN, chainLight, currentStep, exported, exportedCount, openable, streamLight, type ChainStep } from '../light'
+import {
+  CHAIN, chainLight, currentStep, exported, exportedBefore, exportedCount, openable, streamLight, type ChainStep,
+} from '../light'
 import { useAction } from '../useAction'
 
 type T = TFunction
@@ -2251,8 +2253,14 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
 }>) {
   const { t } = useTranslation()
   const run = stream.issues
-  // Номера задач на весь проект — у выгруженного к этим задачам потока.
-  const numbers = new Map(exported(stream, notes) ? (stream.notes?.numbers ?? []).map(n => [n.issue_id, n.id]) : [])
+  // Номера задач на весь проект — у выгруженного к этим задачам потока. Перенесённые и сохранённые задачи — те же,
+  // что в прежней нарезке, и, может, уже в работе: у них номер из её выгрузки. Новые — без номера, пока не выгрузят.
+  const carried = new Set(run ? run.kept : stream.saved_issues.map(issue => issue.id))
+  let numbered = exported(stream, notes) ? stream.notes?.numbers ?? [] : []
+  if (!exported(stream, notes) && exportedBefore(stream, notes)) {
+    numbered = (stream.notes?.numbers ?? []).filter(number => carried.has(number.issue_id))
+  }
+  const numbers = new Map(numbered.map(n => [n.issue_id, n.id]))
   const retry = useAction(onChange)
   const stale = structureIsStale(council)
   const scope = stream.scope ?? []
@@ -2287,7 +2295,8 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
                 label={t('issues.slides')}>
           {n => (
             <IssueCard key={saved[n].id} issue={saved[n]} n={n + 1} adrs={adrs} questions={questions}
-                       outcomes={outcomes} gaps={[]} fragments={fragments} onQuestion={onQuestion} kept />
+                       outcomes={outcomes} gaps={[]} fragments={fragments} onQuestion={onQuestion}
+                       number={numbers.get(saved[n].id)} kept />
           )}
         </Slider>
       </>
@@ -2564,7 +2573,9 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps,
 function foundOf(stream: Stream): Map<string, { id: string; text: string }[]> {
   const found = new Map((stream.proposals?.options ?? []).map(o => [
     o.question_id, o.proposals.map(p => ({ id: p.id, text: p.text }))]))
-  for (const { question_id, proposal, text } of stream.choices ?? []) {
+  // Свои варианты — из утверждённого выбора, а пока его нет (после правки отбора) — из прежней работы: на них
+  // держатся прежние решения, а с ними и сохранённые итоги.
+  for (const { question_id, proposal, text } of stream.choices ?? stream.earlier.map(work => work.choice)) {
     if (proposal && text) found.set(question_id, [...(found.get(question_id) ?? []), { id: proposal, text }])
   }
   return found
