@@ -51,7 +51,7 @@ const stream = (discovery: IdeaDiscovery | null, approved = false, questions: Qu
                 chosen = false, proposals: ProposalDiscovery | null = null, picked = false,
                 analysis: DecisionAnalysis | null = null, decided = false,
                 outcomes: OutcomeDiscovery | null = null, issues: IssueDiscovery | null = null): Stream => ({
-  group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions,
+  group: 'A', discovery, idea: approved ? { text: 'Идея', by: 'human', evidence: [] } : null, questions, earlier: [],
   // Утверждённая идея — шаги «Репозиторий» и «Дизайн» пропущены: их проверяют свои тесты.
   scan: null, repository: approved ? { by: 'skipped', scan_run: '' } : null,
   design_scan: null, design: approved ? { by: 'skipped', scan_run: '' } : null,

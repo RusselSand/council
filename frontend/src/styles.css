@@ -470,3 +470,7 @@ section > .option-note { margin: 8px 0 0 18px }
 .project-copies .decision-pick { margin: 4px 0 0 }
 .project-extra { display: flex; margin-top: 8px }
 .project-mono { font-family: var(--mono); font-size: 13px }
+
+/* Пробелы, отнесённые в вопросы из итогов и задач: сколько их и переход к отбору. */
+.pending-questions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px }
+.pending-text { margin: 0; font-size: 13px }

@@ -683,6 +683,18 @@ class Decision(BaseModel):
     rationale_by: Literal["ai", "human"] | None = None
 
 
+class QuestionWork(BaseModel):
+    """Что сделано по вопросу отбора: выбор человека, проверка этого выбора советом и решение по
+    нему. Отбор или выбор поправили — всё по тому же вопросу (тот же номер и формулировка, key)
+    и тому же выбору берётся отсюда: модели не спрашивают второй раз, человек не выбирает и не
+    обосновывает заново."""
+
+    key: str
+    choice: Choice
+    analysis: QuestionAnalysis | None = None
+    decision: Decision | None = None
+
+
 class OutcomeGap(BaseModel):
     """Неопределённость, которой нет среди вопросов потока: материал для нового поиска
     вопросов, а не ответ на неё."""
@@ -916,6 +928,9 @@ class Stream(BaseModel):
     choices: list[Choice] | None = None
     analysis: DecisionAnalysis | None = None
     decisions: list[Decision] | None = None
+    # Работа по вопросам до последней правки отбора или выбора: по тем же вопросам и тому же
+    # выбору она переносится, а не делается заново.
+    earlier: list[QuestionWork] = []
     outcomes: OutcomeDiscovery | None = None
     issues: IssueDiscovery | None = None
     # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:

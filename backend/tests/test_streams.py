@@ -891,6 +891,144 @@ def assembles(council_id, group):
 DECIDED = [("Q1", "P1", WHY), ("Q2", None, None)]
 
 
+# --- вопросы, добавленные после решений: работа по прежним переносится
+
+GAP = "Сколько хранить треды?"
+
+
+def asked(agents, step):
+    """Сколько раз модели спросили на шаге step."""
+    return len([key for key in agents.asked if f"-{step}-" in key])
+
+
+def fixed_c(council_id):
+    """Поток C: выбор проверен, решения зафиксированы, итоги собраны."""
+    chosen_c(council_id)
+    assert decide(council_id, "C", DECIDED).status_code == 200
+
+
+def test_a_question_added_after_the_decisions_is_the_only_one_worked_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    fixed_c(council_id)
+    before = streams_of(council_id)["C"]
+    proposals, analyses = asked(agents, "proposal_discovery"), asked(agents, "decision_analysis")
+
+    assert choose(council_id, "C", ["Q1", "Q2"], [GAP]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    # Варианты — только к новому вопросу: по участнику на него, прежние перенесены как есть.
+    assert asked(agents, "proposal_discovery") - proposals == 2
+    assert GAP in agents.prompts["proposal_discovery"]
+    assert [(o.question_id, [p.id for p in o.proposals]) for o in stream.proposals.options] == [
+        ("Q1", ["P1"]), ("Q2", ["P2"]), ("Q3", ["P3"])]
+    assert stream.proposals.options[:2] == before.proposals.options
+    # Выбор и решения сняты, но помнятся — по вопросу, с проверкой и решением.
+    assert (stream.choices, stream.decisions, stream.outcomes) == (None, None, None)
+    assert {w.key: (w.choice.proposal, w.decision.proposal if w.decision else "—",
+                    w.analysis is not None) for w in stream.earlier} == {
+        f"Q1: {MEASURE}": ("P1", "P1", True), f"Q2: {before.scope[1].text}": (None, None, True)}
+
+    # Выбор по прежним — тот же: проверяется только новый.
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None), ("Q3", "P3")]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert asked(agents, "decision_analysis") - analyses == 2
+    assert stream.analysis.state == "done"
+    assert {a.question_id for a in stream.analysis.analyses} == {"Q1", "Q2", "Q3"}
+    assert [a for a in stream.analysis.analyses if a.question_id != "Q3"] == (
+        before.analysis.analyses)
+    assert decide(council_id, "C", [*DECIDED, ("Q3", "P3", WHY)]).status_code == 200
+    assert streams_of(council_id)["C"].outcomes.decisions[-1] == f"Q3: P3: {WHY}"
+
+
+def test_a_changed_choice_is_the_only_one_checked_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    fixed_c(council_id)
+    analyses = asked(agents, "decision_analysis")
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2")]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert asked(agents, "decision_analysis") - analyses == 2              # только Q2
+    # Решение по Q1 — к тому же выбору: его помнят, чтобы подставить.
+    q1 = next(w for w in stream.earlier if w.key.startswith("Q1: "))
+    assert (q1.decision.proposal, q1.decision.rationale) == ("P1", WHY)
+
+
+def test_a_removed_question_needs_no_model_at_all(agents):
+    council_id = grouped()
+    confirm(council_id)
+    fixed_c(council_id)
+    calls = len(agents.asked)
+    agents.online = set()                     # без моделей — и не нужны: всё перенесено
+    assert choose(council_id, "C", ["Q1"]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert stream.proposals.state == "done" and stream.proposals.steps == []
+    assert chose(council_id, "C", [("Q1", "P1")]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    assert (stream.analysis.state, stream.analysis.steps) == ("done", [])
+    assert len(agents.asked) == calls
+
+
+def test_an_own_option_keeps_its_number_and_new_ones_come_after_it(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None, "Своё")]).status_code == 200
+    assert streams_of(council_id)["C"].choices[1].proposal == "P3"
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    stream = streams_of(council_id)["C"]
+    assert [p.id for p in stream.proposals.options[2].proposals] == ["P4"]   # не занять P3
+    assert chose(council_id, "C", [("Q1", "P1"), ("Q2", None, "Своё"),
+                                   ("Q3", None, "Ещё своё")]).status_code == 200
+    choices = streams_of(council_id)["C"].choices
+    assert [c.proposal for c in choices] == ["P1", "P3", "P5"]
+    # Проверка своего варианта по Q2 перенесена: тот же текст — тот же номер, тот же выбор.
+    assert {a.question_id for a in streams_of(council_id)["C"].analysis.analyses} == {
+        "Q1", "Q2", "Q3"}
+
+
+def test_a_failed_search_keeps_what_it_found_and_the_retry_asks_only_the_rest(agents):
+    council_id = grouped()
+    confirm(council_id)
+    fixed_c(council_id)
+    agents.online = set()
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    stream = streams_of(council_id)["C"]
+    assert stream.proposals.state == "failed"
+    assert [o.question_id for o in stream.proposals.options] == ["Q1", "Q2"]
+    agents.online = {"sol", "fable"}
+    proposals = asked(agents, "proposal_discovery")
+    assert proposes(council_id, "C").status_code == 202
+    assert asked(agents, "proposal_discovery") - proposals == 2
+    assert [o.question_id for o in streams_of(council_id)["C"].proposals.options] == [
+        "Q1", "Q2", "Q3"]
+
+
+def test_an_own_question_keeps_its_number_when_another_is_removed(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], ["Первый свой?", GAP])
+    assert [q.id for q in streams_of(council_id)["C"].scope] == ["Q1", "Q2", "Q3", "Q4"]
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    stream = streams_of(council_id)["C"]
+    assert [(q.id, q.text) for q in stream.scope][-1] == ("Q4", GAP)
+    assert [o.question_id for o in stream.proposals.options] == ["Q1", "Q2", "Q4"]
+    # Новый свой вопрос — дальше всех номеров, а не на место убранного.
+    choose(council_id, "C", ["Q1", "Q2"], [GAP, "Ещё один?"])
+    assert streams_of(council_id)["C"].scope[-1].id == "Q5"
+
+
+def test_another_idea_drops_what_was_kept_from_before(agents):
+    council_id = grouped()
+    confirm(council_id)
+    fixed_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    assert streams_of(council_id)["C"].earlier
+    # Другая идея — вопросы к ней свои: прежняя работа по вопросам к ней не относится.
+    assert approve(council_id, "C", "Совсем другая идея").status_code == 200
+    assert streams_of(council_id)["C"].earlier == []
+
+
 def test_fixed_decisions_start_the_outcomes_and_an_open_question_blocks(agents):
     council_id = grouped()
     confirm(council_id)

@@ -3,9 +3,9 @@ import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf, REPOSITORIES_MAX,
-  runningFrom, startOrFollow,
-  streamOf, structureIsStale, type Council, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
+  api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf,
+  REPOSITORIES_MAX, runningFrom, sameChoice, startOrFollow,
+  streamOf, structureIsStale, type Choice, type Council, type Decision, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
   type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
@@ -62,8 +62,15 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
   const cutting = useAction(onChange, 'outcomes.approveFailed')
   // Открытый вопрос, к которому вернулись из итогов: шаг «Решения» прокрутит к нему.
   const [focus, setFocus] = useState<string | null>(null)
-  // Пробел из итога, который человек понёс в вопросы: шаг «Вопросы» добавит его в отбор.
-  const [gap, setGap] = useState<string | null>(null)
+  // Черновик отбора вопросов — здесь, а не в шаге «Вопросы»: за пробелами уходят в «Итоги» и «Задачи» и
+  // возвращаются, и добавленное не теряется, пока отбор не утвердили. К другому поиску вопросов — заново.
+  const [kept, setDraft] = useState<ScopeDraft | null>(null)
+  const draft = kept?.run === (stream.questions?.run ?? '') ? kept : draftOf(stream)
+  const gaps: Gaps = {
+    has: question => inDraft(draft, stream, question),
+    add: question => setDraft(withQuestion(draft, stream, question)),
+  }
+  const pending = pendingOf(draft, stream)
   const group = structure.groups.find(g => g.id === stream.group)
   if (!group) return null  // поток без группы не бывает: состав меняют, только сняв подтверждение
   // Открыть можно пройденный шаг и текущий: дальше — нечего.
@@ -75,7 +82,6 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
   const run = runs[view]
   const open = (step: ChainStep) => {
     setFocus(null)
-    setGap(null)
     setView(step)
   }
 
@@ -87,6 +93,12 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
       </aside>
       <div className="streams-main">
         <Now stream={stream} group={group} notes={notes} />
+        {(view === 'outcomes' || view === 'issues') && pending > 0 && (
+          <section className="card panel pending-questions" aria-label={t('gaps.title')}>
+            <p className="pending-text">{t('gaps.pending', { count: pending })}</p>
+            <button className="btn-primary" onClick={() => open('questions')}>{t('gaps.toQuestions')}</button>
+          </section>
+        )}
         {structureIsStale(council) && (
           <p className="fragment-note">
             {t('streams.stale')}{' '}
@@ -115,8 +127,9 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'questions' && (
           // Новый поиск вопросов — и отбор заново, к его вопросам.
           <QuestionsStep key={stream.questions?.run ?? ''} council={council} structure={structure}
-                         stream={stream} group={group} notes={notes} onChange={onChange} approve={choosing} proposed={gap}
-                         onBack={() => open('group')} onApproved={() => open('options')} />
+                         stream={stream} group={group} notes={notes} onChange={onChange} approve={choosing}
+                         draft={draft} onDraft={setDraft}
+                         onBack={() => open('group')} onApproved={() => { setDraft(null); open('options') }} />
         )}
         {view === 'options' && (
           // Новый поиск вариантов — и выбор заново, к его вариантам.
@@ -133,8 +146,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'outcomes' && (
           <OutcomesStep council={council} structure={structure} stream={stream} group={group} onChange={onChange}
                         approve={cutting} onBack={() => open('decisions')} onApproved={() => open('issues')}
-                        onQuestion={question => { setFocus(question); setView('decisions') }}
-                        onGap={question => { setGap(question); setView('questions') }} />
+                        onQuestion={question => { setFocus(question); setView('decisions') }} gaps={gaps} />
         )}
         {view === 'notes' && (
           // Новый черновик — и правки заново, к его заметкам.
@@ -144,8 +156,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'issues' && (
           <IssuesStep council={council} stream={stream} group={group} notes={notes} onChange={onChange}
                       onBack={() => open('outcomes')} onNext={() => open('notes')}
-                      onQuestion={question => { setFocus(question); setView('decisions') }}
-                      onGap={question => { setGap(question); setView('questions') }} />
+                      onQuestion={question => { setFocus(question); setView('decisions') }} gaps={gaps} />
         )}
       </div>
       <aside className="streams-side">
@@ -1384,25 +1395,23 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
  * убирает лишние, добавляет свои и утверждает, какие вопросы потоку решать. Ответы здесь не
  * выбирают. Черновик отбора — к нынешнему поиску; утверждённый отбор — его начало.
  */
-function QuestionsStep({ council, structure, stream, group, notes, onChange, approve, proposed, onBack, onApproved }: Readonly<{
+function QuestionsStep({ council, structure, stream, group, notes, onChange, approve, draft: scopeDraft, onDraft, onBack,
+  onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group; notes: string | null
   onChange: (council: Council) => void; approve: ReturnType<typeof useAction>
-  /** Пробел из итогов: его добавить в отбор своим вопросом, если такого там ещё нет. */
-  proposed: string | null
+  /** Черновик отбора — что убрано из найденных и какие свои добавлены (и пробелы из итогов): он живёт на странице потока. */
+  draft: ScopeDraft; onDraft: (draft: ScopeDraft) => void
   onBack: () => void; onApproved: () => void
 }>) {
   const { t } = useTranslation()
   const search = stream.questions
   const found = search?.questions ?? []
-  const scope = stream.scope
-  const [removed, setRemoved] = useState<ReadonlySet<string>>(
-    () => new Set(scope ? found.filter(q => !scope.some(s => s.id === q.id)).map(q => q.id) : []))
-  const [added, setAdded] = useState<string[]>(() => {
-    const own = scope?.filter(q => q.source === 'added').map(q => q.text) ?? []
-    const there = [...found.filter(q => !scope || scope.some(s => s.id === q.id)).map(q => q.text), ...own]
-    const gap = squash(proposed ?? '')
-    return gap && !there.some(text => sameQuestion(text) === sameQuestion(gap)) ? [...own, gap] : own
-  })
+  const removed = new Set(scopeDraft.removed)
+  const added = scopeDraft.added
+  const setRemoved = (next: ReadonlySet<string>) => onDraft({ ...scopeDraft, removed: [...next] })
+  const setAdded = (next: string[]) => onDraft({ ...scopeDraft, added: next })
+  // Своих вопросов, которых ещё нет в утверждённом отборе: по ним — варианты, выбор и решения, по остальным всё на месте.
+  const fresh = stream.scope ? added.filter(text => !stream.scope?.some(q => sameQuestion(q.text) === sameQuestion(text))) : []
   const [draft, setDraft] = useState('')
   const [twice, setTwice] = useState(false)   // свой вопрос совпал с тем, что уже в отборе
   const retry = useAction(onChange)
@@ -1418,11 +1427,11 @@ function QuestionsStep({ council, structure, stream, group, notes, onChange, app
   const idea = stream.idea
   if (!idea) return null
 
-  const toggle = (id: string) => setRemoved(before => {
-    const next = new Set(before)
+  const toggle = (id: string) => {
+    const next = new Set(removed)
     if (!next.delete(id)) next.add(id)
-    return next
-  })
+    setRemoved(next)
+  }
   const add = (event: FormEvent) => {
     event.preventDefault()
     const text = squash(draft)
@@ -1512,7 +1521,7 @@ function QuestionsStep({ council, structure, stream, group, notes, onChange, app
         </button>
       </form>
       {twice && <p className="fragment-note question-twice">{t('questions.twice')}</p>}
-      {proposed && added.includes(squash(proposed)) && <p className="fragment-note">{t('questions.fromGap')}</p>}
+      {fresh.length > 0 && <p className="fragment-note">{t('questions.pending', { count: fresh.length })}</p>}
     </>
   )
 
@@ -1603,12 +1612,15 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const { t } = useTranslation()
   const search = stream.proposals
   const scope = stream.scope ?? []
+  // Выбор, с которого начать: утверждённый, а после правки отбора — прежний по тем же вопросам (если его вариант
+  // у вопроса ещё есть): выбирать остаётся только новое.
+  const [start] = useState(() => stream.choices ?? earlierChoices(stream))
   // Выбор по вопросу: id варианта, OWN — свой, null — unresolved; нет ключа — ещё не выбран.
   const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(
-    () => new Map(stream.choices?.map(c => [c.question_id, c.text ? OWN : c.proposal]) ?? []))
+    () => new Map(start.map(c => [c.question_id, c.text ? OWN : c.proposal])))
   // Свой вариант по вопросу: выбрали другой — текст остаётся, вернулись — он на месте.
   const [owned, setOwned] = useState<ReadonlyMap<string, string>>(
-    () => new Map(stream.choices?.flatMap(c => c.text ? [[c.question_id, c.text] as const] : []) ?? []))
+    () => new Map(start.flatMap(c => c.text ? [[c.question_id, c.text] as const] : [])))
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = search?.state === 'running'
@@ -1797,12 +1809,17 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
   const { t } = useTranslation()
   const analysis = stream.analysis
   const scope = stream.scope ?? []
-  // Решение по вопросу: id варианта, null — открыт. Сначала — зафиксированное, иначе — выбор.
-  const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(() => new Map(scope.map(q => [
-    q.id, (stream.decisions ?? stream.choices)?.find(d => d.question_id === q.id)?.proposal ?? null])))
+  // С чего начать: зафиксированные решения, а после правки отбора или выбора — прежние решения к тому же выбору
+  // по тем же вопросам: решать и обосновывать остаётся только новое.
+  const [start] = useState(() => stream.decisions ?? earlierDecisions(stream))
+  // Решение по вопросу: id варианта, null — открыт. Сначала — зафиксированное или прежнее, иначе — выбор.
+  const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(() => new Map(scope.map(q => {
+    const before = start.find(d => d.question_id === q.id)
+    return [q.id, before ? before.proposal : stream.choices?.find(c => c.question_id === q.id)?.proposal ?? null]
+  })))
   // Обоснование — своё у каждой пары «вопрос — вариант»: переключились и вернулись — правка на месте.
   const [written, setWritten] = useState<ReadonlyMap<string, string>>(() => new Map(
-    (stream.decisions ?? []).filter(d => d.proposal).map(d => [`${d.question_id}:${d.proposal}`, d.rationale ?? ''])))
+    start.filter(d => d.proposal).map(d => [`${d.question_id}:${d.proposal}`, d.rationale ?? ''])))
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = analysis?.state === 'running'
@@ -2016,12 +2033,12 @@ function consequences(said: QuestionAnalysis, t: T): string {
  * которому не хватает решения открытого вопроса, заблокирован им, а не додуман: из него можно
  * вернуться к вопросу. Человеку здесь утверждать нечего — менять можно решения.
  */
-function OutcomesStep({ council, structure, stream, group, onChange, approve, onBack, onApproved, onQuestion, onGap }: Readonly<{
+function OutcomesStep({ council, structure, stream, group, onChange, approve, onBack, onApproved, onQuestion, gaps }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group; onChange: (council: Council) => void
   approve: ReturnType<typeof useAction>; onBack: () => void; onApproved: () => void
   onQuestion: (question: string) => void
-  /** Пробел — в вопросы: его добавляют в отбор, и цепочка ниже идёт заново. */
-  onGap: (question: string) => void
+  /** Пробелы — в черновик отбора вопросов: сколько угодно, потом к вопросам — одним переходом. */
+  gaps: Gaps
 }>) {
   const { t } = useTranslation()
   const run = stream.outcomes
@@ -2084,7 +2101,7 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
       {run?.state === 'done' && run.outcomes.length === 0 && <p className="muted">{t('outcomes.none')}</p>}
       {run?.outcomes.map((outcome, n) => (
         <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
-                     fragments={fragments} onQuestion={onQuestion} onGap={onGap} />
+                     fragments={fragments} onQuestion={onQuestion} gaps={gaps} />
       ))}
       {run && run.uncovered_adr_ids.length > 0 && (
         <p className="fragment-note">{t('outcomes.uncovered', { ids: run.uncovered_adr_ids.join(', ') })}</p>
@@ -2105,9 +2122,9 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
  * Задачи: утверждённые итоги, нарезанные на задачи для coding agents. Задачу, которой не хватает
  * решения, держит пробел или открытый вопрос: пробел несут в вопросы, к вопросу возвращаются.
  */
-function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, onQuestion, onGap }: Readonly<{
+function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, onQuestion, gaps }: Readonly<{
   council: Council; stream: Stream; group: Group; notes: string | null; onChange: (council: Council) => void
-  onBack: () => void; onNext: () => void; onQuestion: (question: string) => void; onGap: (question: string) => void
+  onBack: () => void; onNext: () => void; onQuestion: (question: string) => void; gaps: Gaps
 }>) {
   const { t } = useTranslation()
   const run = stream.issues
@@ -2175,7 +2192,7 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
                 <span className="fragment-id">{gap.id}</span> {gap.reason ? `${gap.question} — ${gap.reason}` : gap.question}
                 {gap.outcome_ids.length > 0 && <span className="muted"> · {t('issues.gapOutcomes', { ids: gap.outcome_ids.join(', ') })}</span>}
               </span>
-              <button className="btn-link" onClick={() => onGap(gap.question)}>{t('issues.toQuestions')}</button>
+              <GapButton question={gap.question} gaps={gaps} label={t('issues.toQuestions')} />
             </li>
           ))}</ul>
         </section>
@@ -2291,10 +2308,10 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
 }
 
 /** Итог: что меняется, на каких решениях стоит, что соблюдать, когда готово — и чего не хватает. */
-function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap }: Readonly<{
+function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps }: Readonly<{
   outcome: Outcome; n: number; adrs: Map<string, { question: string; text: string }>
   questions: Map<string, string>; fragments: Map<number, LabeledFragment>
-  onQuestion: (question: string) => void; onGap: (question: string) => void
+  onQuestion: (question: string) => void; gaps: Gaps
 }>) {
   const { t } = useTranslation()
   const name = `outcome-${outcome.id}`
@@ -2357,7 +2374,7 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, onGap
               <ul>{outcome.gaps.map(gap => (
                 <li key={gap.question} className="outcome-gap">
                   <span>{gap.reason ? `${gap.question} — ${gap.reason}` : gap.question}</span>
-                  <button className="btn-link" onClick={() => onGap(gap.question)}>{t('outcomes.toQuestions')}</button>
+                  <GapButton question={gap.question} gaps={gaps} label={t('outcomes.toQuestions')} />
                 </li>
               ))}</ul>
             </dd>
@@ -2387,6 +2404,68 @@ function offeredBy(search: IdeaDiscovery | null): { idea: string; evidence: numb
 
 /** Текст идеи без лишних пробелов — так его сравнивает и сервер. */
 const squash = (text: string) => text.trim().split(/\s+/).join(' ')
+
+/** Черновик отбора вопросов: к какому поиску, какие найденные убраны, какие свои добавлены. */
+interface ScopeDraft { run: string; removed: string[]; added: string[] }
+
+/** Пробелы из итогов и задач — в черновик отбора: has — он уже там, add — добавить. */
+interface Gaps { has: (question: string) => boolean; add: (question: string) => void }
+
+/** Черновик, каким его видно, пока его не трогали: утверждённый отбор (или ещё ничего не убрано и не добавлено). */
+function draftOf(stream: Stream): ScopeDraft {
+  const found = stream.questions?.questions ?? []
+  const scope = stream.scope
+  return {
+    run: stream.questions?.run ?? '',
+    removed: scope ? found.filter(q => !scope.some(s => s.id === q.id)).map(q => q.id) : [],
+    added: scope?.filter(q => q.source === 'added').map(q => q.text) ?? [],
+  }
+}
+
+/** Вопросы черновика: оставленные найденные и свои. */
+const draftTexts = (draft: ScopeDraft, stream: Stream) => [
+  ...(stream.questions?.questions ?? []).filter(q => !draft.removed.includes(q.id)).map(q => q.text), ...draft.added]
+
+/** Такой вопрос в черновике уже есть — так их сравнивает сервер. */
+const inDraft = (draft: ScopeDraft, stream: Stream, question: string) =>
+  draftTexts(draft, stream).some(text => sameQuestion(text) === sameQuestion(question))
+
+const withQuestion = (draft: ScopeDraft, stream: Stream, question: string): ScopeDraft =>
+  inDraft(draft, stream, question) ? draft : { ...draft, added: [...draft.added, squash(question)] }
+
+/** Сколько вопросов черновика ещё не в утверждённом отборе. */
+const pendingOf = (draft: ScopeDraft, stream: Stream) => {
+  const approved = (stream.scope ?? []).map(q => sameQuestion(q.text))
+  return draftTexts(draft, stream).filter(text => !approved.includes(sameQuestion(text))).length
+}
+
+/** Прежний выбор по тем же вопросам отбора — если его вариант у вопроса ещё есть. */
+function earlierChoices(stream: Stream): Choice[] {
+  const found = foundOf(stream)
+  return (stream.scope ?? []).flatMap(question => {
+    const choice = earlierOf(stream, question)?.choice
+    if (!choice) return []
+    const offered = choice.proposal === null || choice.text
+      || question.proposal_ids.some(id => `F${id}` === choice.proposal)
+      || (found.get(question.id) ?? []).some(p => p.id === choice.proposal)
+    return offered ? [choice] : []
+  })
+}
+
+/** Прежние решения — к тому же выбору по тем же вопросам. */
+const earlierDecisions = (stream: Stream): Decision[] => (stream.scope ?? []).flatMap(question => {
+  const work = earlierOf(stream, question)
+  const choice = stream.choices?.find(c => c.question_id === question.id)
+  return work?.decision && choice && sameChoice(work.choice, choice) ? [work.decision] : []
+})
+
+/** Пробел — в вопросы: в черновик отбора, без перехода; уже там — так и сказано. */
+function GapButton({ question, gaps, label }: Readonly<{ question: string; gaps: Gaps; label: string }>) {
+  const { t } = useTranslation()
+  return gaps.has(question)
+    ? <span className="pill ready">{t('gaps.added')}</span>
+    : <button className="btn-link" onClick={() => gaps.add(question)}>{label}</button>
+}
 
 /** Один и тот же вопрос — как считает сервер: без лишних пробелов, регистра и знака в конце. */
 const sameQuestion = (text: string) => squash(text).replace(/[.?!]+$/, '').toLowerCase()
