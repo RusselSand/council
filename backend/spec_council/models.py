@@ -970,8 +970,8 @@ class Stream(BaseModel):
     notes_draft: NotesDraft | None = None
     notes: NotesExport | None = None
 
-    # Сохранённое видно, пока поток до него не дошёл. Считается при отдаче, не хранится: при
-    # чтении из файла лишние поля пропускаются. Импорт — здесь: work сам импортирует модели.
+    # Сохранённое видно, пока поток до него не дошёл. Считается при отдаче, в файл не пишется
+    # (store: exclude_computed_fields). Импорт — здесь: work сам импортирует модели.
     @computed_field
     @property
     def saved_outcomes(self) -> list[Outcome]:
