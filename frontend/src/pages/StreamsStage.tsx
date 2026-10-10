@@ -1244,7 +1244,9 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
   const at = { run: structure.run, revision: structure.revision }
   const building = draft?.state === 'running'
   const stale = !!draft && stream.issues?.run !== draft.issues
-  const ready = draft?.state === 'done' && !stale
+  // Проект совета или его папку сменили после сборки: черновик — к прежней папке.
+  const moved = !!draft && draft.state === 'done' && !!root && draft.root !== root
+  const ready = draft?.state === 'done' && !stale && !moved
   const written = !!draft && stream.notes?.run === draft.run && exported(stream, root)
   // Записанное — с правками человека: они есть только в выгрузке, черновик их не знает.
   const wrote = new Map(written ? stream.notes?.notes.map(note => [note.key, note.written]) : [])
@@ -1289,6 +1291,7 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
         {building && <p className="muted">{t('notes.translating', { language: draft.language })} {t('run.note')}</p>}
         {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
         {stale && <p className="fragment-note">{t('notes.stale')}</p>}
+        {moved && !stale && <p className="fragment-note">{t('notes.moved')}</p>}
         {ready && (
           <>
             <p className="repo-summary">{t('notes.language', { language: draft.language })}</p>

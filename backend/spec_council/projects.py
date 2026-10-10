@@ -126,15 +126,17 @@ def checked(draft: ProjectDraft, base: Path | None) -> ProjectDraft:
 def notes_root(text: str, base: Path | None) -> Path:
     """Папка документации по тексту человека — как путь к рабочей копии: от каталога
     репозиториев и внутри него, без него — абсолютная. Её может ещё не быть: первая выгрузка её
-    создаст. Но если она есть, это каталог."""
+    создаст. Но то, что от неё уже есть, — каталог: и она сама, и ближайший существующий её
+    родитель (docs/reasoning, где docs — файл, не создать)."""
     if not text.strip():
         raise ProjectError("Укажите папку документации или оставьте поле пустым")
     try:
         path = placed(text, base)
     except RepositoryError as exc:
         raise ProjectError(str(exc)) from None
-    if path.exists() and not path.is_dir():
-        raise ProjectError(f"Это не папка: {path}")
+    existing = next(folder for folder in (path, *path.parents) if folder.exists())
+    if not existing.is_dir():
+        raise ProjectError(f"Это не папка: {existing}")
     return path
 
 

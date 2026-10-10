@@ -812,6 +812,8 @@ class NotesDraft(BaseModel):
     run: str = ""
     issues: str = ""
     language: str = ""
+    # Каталог, для которого собран: номера и действия — его. Записать в другой — 409.
+    root: str = ""
     steps: list[Step] = []
     notes: list[NotePlan] = []
     vanished: list[VanishedNote] = []

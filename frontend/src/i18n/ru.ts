@@ -657,6 +657,7 @@ export const ru = {
   'notes.rebuild': 'Собрать заново',
   'notes.translating': 'ИИ переводит заметки: {{language}}.',
   'notes.stale': 'Черновик — к прежним задачам: соберите заново.',
+  'notes.moved': 'Черновик собран для другой папки документации — проект или его папку сменили: соберите заново.',
   'notes.language': 'Язык заметок: {{language}}',
   'notes.type.idea': 'Идея',
   'notes.type.open_question': 'Вопросы',

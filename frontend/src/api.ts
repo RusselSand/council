@@ -321,6 +321,8 @@ export interface IssueNumber { key: string; id: string; issue_id: string; title:
 /** Черновик выгрузки потока в заметки — к нарезанным задачам (issues); язык другой — переводит судья. */
 export interface NotesDraft {
   state: 'running' | 'done' | 'failed'; run: string; issues: string; language: string; steps: Step[]
+  /** Каталог заметок, для которого черновик собран: в другой его не записать. */
+  root: string
   notes: NotePlan[]; vanished: VanishedNote[]; numbers: IssueNumber[]; skipped: string[]; error: string | null
 }
 export interface ExportedNote {

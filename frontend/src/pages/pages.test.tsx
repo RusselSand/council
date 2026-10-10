@@ -1432,7 +1432,7 @@ describe('Поток: решения и итоги', () => {
   const atStart = () => confirmed()
 
   const DRAFT: NotesDraft = {
-    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', steps: [], error: null,
+    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', steps: [], error: null,
     notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', text: 'Хочу воркер.', generated: 'Хочу воркер.', links: [],
         action: 'create', current: null },
@@ -1472,6 +1472,15 @@ describe('Поток: решения и итоги', () => {
       { group: 'A', action: 'notes', body: { run: 'g1', revision: 0, draft: 'n1',
                                              edits: { idea: 'Воркер не теряет результат.' }, delete: ['ADR-0003'] } }])
     expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('черновик к прежней папке документации (проект сменили) — не записать, собрать заново', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/old' } }),
+             () => json(atStart()))
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.moved'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
+    expect((screen.getByRole('button', { name: ru['notes.rebuild'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('документация без каталога заметок — подсказка, собрать нельзя', async () => {

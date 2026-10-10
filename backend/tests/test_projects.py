@@ -1,11 +1,13 @@
 """Проекты: рабочие копии и папка документации, которые совет берёт по проекту."""
 
 import subprocess
+import threading
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from spec_council.api.councils import council_lock
 from spec_council.app import app
 from spec_council.deps import get_notes_root, get_projects, get_repositories
 from spec_council.models import ProjectDraft
@@ -80,9 +82,10 @@ def test_a_project_with_wrong_paths_is_not_saved(repos, projects, draft, why):
     assert projects.list_projects() == []
 
 
-def test_the_notes_folder_is_a_folder(repos, projects):
+@pytest.mark.parametrize("notes", ["docs/notes.md", "docs/notes.md/reasoning"])
+def test_the_notes_folder_is_a_folder(repos, projects, notes):
     (repos / "docs" / "notes.md").write_text("", encoding="utf-8")
-    res = creates(notes="docs/notes.md")
+    res = creates(notes=notes)
     assert res.status_code == 422 and "Это не папка" in res.json()["detail"]
 
 
@@ -128,6 +131,17 @@ def test_a_new_council_takes_the_project_of_the_latest_one(repos, projects):
     client.patch(f"/api/councils/{second}", json={"project": ""})
     third = client.post("/api/councils").json()["id"]
     assert client.get(f"/api/councils/{third}").json()["project"] == ""
+
+
+def test_a_new_council_takes_its_project_under_the_councils_lock(repos, projects):
+    created = []
+    with council_lock:
+        worker = threading.Thread(target=lambda: created.append(client.post("/api/councils")))
+        worker.start()
+        worker.join(0.3)
+        assert worker.is_alive() and created == []     # ждёт замка: удаление проекта — под ним же
+    worker.join(5)
+    assert created[0].status_code == 201
 
 
 def test_a_council_takes_only_an_existing_project(projects):

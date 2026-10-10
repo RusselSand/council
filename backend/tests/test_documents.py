@@ -227,6 +227,21 @@ def test_numbers_of_another_streams_export_are_not_given_again(agents, notes_dir
     assert (draft.notes[0].id, [n.id for n in draft.numbers]) == ("IDEA-0002", ["ISS-0002"])
 
 
+def test_a_draft_is_not_written_into_another_folder(agents, notes_dir, tmp_path):
+    council_id = cut_c()
+    drafts(council_id)
+    assert streams_of(council_id)["C"].notes_draft.root == str(notes_dir)
+    # Папку проекта сменили на другую пустую: номера вышли бы те же, но туда черновик не смотрели.
+    other = tmp_path / "other"
+    app.dependency_overrides[get_notes_root] = lambda: other
+    res = writes(council_id)
+    assert res.status_code == 409 and "другой папки документации" in res.json()["detail"]
+    assert not other.exists()
+    assert drafts(council_id).status_code == 202
+    assert writes(council_id).status_code == 200
+    assert streams_of(council_id)["C"].notes.root == str(other)
+
+
 def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes_dir, tmp_path):
     council_id = cut_c()
     drafts(council_id)

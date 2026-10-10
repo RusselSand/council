@@ -82,11 +82,13 @@ def list_councils(store: StoreDep) -> list[Council]:
 def create_council(store: StoreDep, config: ConfigDep, projects: ProjectsDep) -> CouncilCreated:
     """Новый совет — с проектом совета, который трогали последним: обычно работают над одним
     проектом подряд, и выбирать его каждый раз заново незачем. Проекта того уже нет — без него."""
-    latest = next(iter(store.list_councils()), None)
-    project = latest.project if latest and projects.get_project(latest.project) else ""
-    council = store.create_council(
-        participants=config.default_participants, judge=config.default_judge, project=project
-    )
+    # Под замком: проект не удалят между тем, как его нашли, и тем, как совет его запомнил.
+    with council_lock:
+        latest = next(iter(store.list_councils()), None)
+        project = latest.project if latest and projects.get_project(latest.project) else ""
+        council = store.create_council(
+            participants=config.default_participants, judge=config.default_judge,
+            project=project)
     return CouncilCreated(id=council.id)
 
 

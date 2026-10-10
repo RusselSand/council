@@ -661,6 +661,7 @@ export const en: Dict = {
   'notes.rebuild': 'Build again',
   'notes.translating': 'The AI is translating the notes: {{language}}.',
   'notes.stale': 'The draft is for earlier issues: build it again.',
+  'notes.moved': 'The draft was built for another documentation folder — the project or its folder changed: build it again.',
   'notes.language': 'Notes language: {{language}}',
   'notes.type.idea': 'Idea',
   'notes.type.open_question': 'Open questions',

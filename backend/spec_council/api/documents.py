@@ -116,7 +116,8 @@ def draft_of(council: Council, group: str, stream: Stream, root: Path, catalog: 
     notes, vanished, numbers, skipped = drafted_for(council, group, stream, root, catalog,
                                                     store)
     return NotesDraft(state="running", run=uuid4().hex[:8], issues=cut(stream),
-                      language=notes_language(), steps=translating(council.judge), notes=notes,
+                      language=notes_language(), root=str(root), steps=translating(council.judge),
+                      notes=notes,
                       vanished=vanished, numbers=numbers, skipped=skipped)
 
 
@@ -183,7 +184,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
     with council_lock:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
-        draft = checked_draft(stream, edit)
+        draft = checked_draft(stream, edit, root)
         catalog = catalog_of(root)
         fresh, vanished, numbers, _ = drafted_for(council, group, stream, root, catalog,
                                                   store)
@@ -222,7 +223,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
     return council
 
 
-def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
+def checked_draft(stream: Stream, edit: WriteNotes, root: Path) -> NotesDraft:
     draft = stream.notes_draft
     if draft is None or draft.run != edit.draft:
         raise HTTPException(409, "Черновик уже другой — посмотрите на нынешний")
@@ -230,6 +231,11 @@ def checked_draft(stream: Stream, edit: WriteNotes) -> NotesDraft:
         raise HTTPException(409, "Черновик ещё не готов или не собрался — соберите заново")
     if stream.issues is None or draft.issues != stream.issues.run:
         raise HTTPException(409, "Задачи нарезали заново — соберите черновик заново")
+    # Проект совета или его папку сменили после сборки: в новую папку черновик не смотрели,
+    # пусть даже номера там вышли бы те же.
+    if draft.root != str(root):
+        raise HTTPException(409, f"Черновик собран для другой папки документации — теперь она "
+                                 f"{root}: соберите его заново")
     # Язык заметок сменили (COUNCIL_NOTES_LANGUAGE) после сборки: тексты черновика — на прежнем.
     if draft.language != notes_language():
         raise HTTPException(409, f"Язык заметок теперь {notes_language()}, а черновик — на "
