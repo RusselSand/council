@@ -75,7 +75,8 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const { t } = useTranslation()
   const { state, retry, update } = useLoad(() => loadCouncil(id), [id])
 
-  // С сервера берём ходы совета и статус: текст и название могут быть ещё не сохранены.
+  // С сервера берём ходы совета, статус и проект: текст и название могут быть ещё не сохранены, а проект
+  // уходит на сервер сразу (и до запуска нарезки — тоже), и его могли сменить в другой вкладке.
   // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
   // Сколько ответов на действия экран принял: опрос, ушедший раньше последнего, устарел.
   const acted = useRef(0)
@@ -92,7 +93,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
     acted.current += 1
     update(([c, settings]) => [{
-      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams,
+      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams, project: fresh.project,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
     }, settings])
     refreshProjects()

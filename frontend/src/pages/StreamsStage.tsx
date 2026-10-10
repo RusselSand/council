@@ -100,8 +100,9 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
                      onApproved={() => open('repository')} />
         )}
         {view === 'repository' && (
-          // Новый скан — и путь заново, из него.
-          <RepositoryStep key={stream.scan?.run ?? ''} council={council} structure={structure} stream={stream}
+          // Новый скан или другие рабочие копии проекта (поправили в другой вкладке) — отметки и пути заново.
+          <RepositoryStep key={JSON.stringify([stream.scan?.run ?? '', known])} council={council} structure={structure}
+                          stream={stream}
                           group={group} repositories={repositories} known={known} onChange={onChange} approve={passing}
                           onApproved={() => open('design')} />
         )}

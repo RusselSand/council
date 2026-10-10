@@ -927,6 +927,18 @@ describe('Поток: репозиторий', () => {
     expect(streamCalls[0].body).toMatchObject({ paths: ['kromka-api', 'shared/lib'] })
   })
 
+  it('репозитории проекта поправили в другой вкладке — вернулись, и новый уже отмечен', async () => {
+    let project = PROJECT
+    fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }),
+                                          settings: () => ({ ...SETTINGS, projects: [project] }) }))
+    renderAt('/councils/demo-1/streams/A')
+    await screen.findByRole('group', { name: ru['repository.known'] })
+    project = { ...PROJECT, repositories: [...PROJECT.repositories, 'kromka-worker'], revision: 1 }
+    fireEvent.focus(window)
+    const added = await screen.findByRole('checkbox', { name: 'kromka-worker' }) as HTMLInputElement
+    expect(added.checked).toBe(true)
+  })
+
   it('пересканировать с проектом: отмечено то, что сканировали, а не все его репозитории', async () => {
     const scanned: RepositoryScan = { ...SCANNED, repositories: [{ ...SCANNED.repositories[0], path: 'kromka-front' },
                                                                    { ...SCANNED.repositories[0], path: 'other' }] }
@@ -1323,7 +1335,12 @@ describe('Поток: решения и итоги', () => {
 
   /** Совет с проектом; notes — его папка документации, как её находит сервер (null — папки нет). */
   const openWith = (council: () => Council, stream: () => Promise<Response>, notes: string | null = '/notes') => {
-    fetchMock.mockImplementation(server({ council: () => ({ ...council(), project: PROJECT.id }), stream,
+    // Сервер отвечает советом целиком — и с его проектом.
+    const withProject = async () => {
+      const res = await stream()
+      return json({ ...await res.json(), project: PROJECT.id }, res.status)
+    }
+    fetchMock.mockImplementation(server({ council: () => ({ ...council(), project: PROJECT.id }), stream: withProject,
                                           settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: notes }] }) }))
     renderAt('/councils/demo-1/streams/A')
   }
@@ -1481,7 +1498,8 @@ describe('Поток: решения и итоги', () => {
       council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
       stream: () => {
         root = '/new'                         // пока экран был открыт, папку проекта поменяли
-        return json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }))
+        return json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }),
+                      project: PROJECT.id })
       },
       settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: root }] }),
     }))
@@ -1491,6 +1509,21 @@ describe('Поток: решения и итоги', () => {
     expect(await screen.findByRole('button', { name: ru['notes.write'] })).toBeTruthy()
     expect(screen.queryByText(ru['notes.moved'])).toBeNull()
     expect(screen.getByText('Каталог заметок: /new')).toBeTruthy()
+  })
+
+  it('проект совета сменили в другой вкладке — экран берёт его из ответа на действие', async () => {
+    const other: Project = { ...PROJECT, id: 'p2', name: 'Другой', notes_root: '/other' }
+    fetchMock.mockImplementation(server({
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
+      stream: () => json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+                                         notes_draft: { ...DRAFT, root: '/other' } }), project: other.id }),
+      settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }),
+    }))
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
+    expect(await screen.findByRole('button', { name: ru['notes.write'] })).toBeTruthy()
+    expect(screen.getByText('Каталог заметок: /other')).toBeTruthy()
   })
 
   it('черновик к прежней папке документации (проект сменили) — не записать, собрать заново', async () => {
