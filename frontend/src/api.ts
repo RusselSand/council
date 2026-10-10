@@ -245,6 +245,23 @@ export interface DecisionAnalysis {
  * Решение человека по вопросу — ADR: вариант и почему он; proposal null — вопрос оставлен открытым.
  * rationale_by: ai — обоснование совета, подтверждённое как есть; human — своё или поправленное.
  */
+/**
+ * Что сделано по вопросу отбора: выбор, проверка этого выбора и решение по нему. Вопрос тот же (key — номер и
+ * формулировка) и выбор тот же — всё это подставляется снова, а не делается заново.
+ */
+export interface QuestionWork { key: string; choice: Choice; analysis: QuestionAnalysis | null; decision: Decision | null }
+
+/** Вопрос, как его узнают после правки отбора: номер и формулировка. */
+export const questionKey = (question: { id: string; text: string }) => `${question.id}: ${question.text}`
+
+/** Выбор по вопросу, как его сравнивает сервер: вариант, а у своего — и текст. */
+export const sameChoice = (a: Choice, b: Choice) =>
+  a.question_id === b.question_id && a.proposal === b.proposal && (a.text ?? null) === (b.text ?? null)
+
+/** Прежняя работа по вопросу отбора — если он тот же. */
+export const earlierOf = (stream: Stream, question: { id: string; text: string }): QuestionWork | undefined =>
+  stream.earlier.find(work => work.key === questionKey(question))
+
 export interface Decision {
   question_id: string; proposal: string | null; rationale: string | null; rationale_by: 'ai' | 'human' | null
 }
@@ -304,6 +321,8 @@ export interface Stream {
   questions: QuestionDiscovery | null; scope: OpenQuestion[] | null
   proposals: ProposalDiscovery | null; choices: Choice[] | null
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
+  /** Работа по вопросам до последней правки отбора или выбора: по тем же вопросам и выбору она переносится. */
+  earlier: QuestionWork[]
   outcomes: OutcomeDiscovery | null; issues: IssueDiscovery | null
   notes_draft: NotesDraft | null; notes: NotesExport | null
 }

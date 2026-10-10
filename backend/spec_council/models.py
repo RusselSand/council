@@ -618,6 +618,9 @@ class ProposalDiscovery(BaseModel):
     run: str = ""
     # К какому отбору вопросов искали (id и формулировки): отобрали другие — ищут заново.
     scope: list[str] = []
+    # С какого номера этот поиск нумерует новые варианты: все меньшие поток уже давал — и тем,
+    # что потом ушли вместе с убранным вопросом. Следующий поиск — не ниже.
+    first: int = 1
     steps: list[Step]
     # По вопросу, по мере готовности.
     options: list[QuestionOptions] = []
@@ -681,6 +684,18 @@ class Decision(BaseModel):
     rationale: str | None = None
     # ai — обоснование совета, человек подтвердил его как есть; human — своё или поправленное.
     rationale_by: Literal["ai", "human"] | None = None
+
+
+class QuestionWork(BaseModel):
+    """Что сделано по вопросу отбора: выбор человека, проверка этого выбора советом и решение по
+    нему. Отбор или выбор поправили — всё по тому же вопросу (тот же номер и формулировка, key)
+    и тому же выбору берётся отсюда: модели не спрашивают второй раз, человек не выбирает и не
+    обосновывает заново."""
+
+    key: str
+    choice: Choice
+    analysis: QuestionAnalysis | None = None
+    decision: Decision | None = None
 
 
 class OutcomeGap(BaseModel):
@@ -916,6 +931,12 @@ class Stream(BaseModel):
     choices: list[Choice] | None = None
     analysis: DecisionAnalysis | None = None
     decisions: list[Decision] | None = None
+    # Работа по вопросам до последней правки отбора или выбора: по тем же вопросам и тому же
+    # выбору она переносится, а не делается заново.
+    earlier: list[QuestionWork] = []
+    # Самый большой номер вопроса, какой отбор уже давал: свой новый вопрос — дальше, даже если
+    # прежний с этим номером убрали, — номер не достанется другому вопросу.
+    asked: int = 0
     outcomes: OutcomeDiscovery | None = None
     issues: IssueDiscovery | None = None
     # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:

@@ -6,11 +6,12 @@
 из них решать, и добавляет свои, — и совет сразу ищет к ним новые варианты ответа. Человек
 выбирает по варианту на вопрос или оставляет его unresolved — и совет сразу проверяет выбор, а
 для unresolved подбирает вариант из тех, что есть. Человек фиксирует решения — и совет сразу
-собирает из них итоги. Каждый шаг утверждают заново — то, что ниже по цепочке, ищется заново."""
+собирает из них итоги. Каждый шаг утверждают заново — то, что ниже по цепочке, ищется заново;
+но работа по тем же вопросам и тому же выбору переносится (work.py), а не делается снова."""
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from itertools import count
 from pathlib import Path
 from uuid import uuid4
@@ -65,6 +66,7 @@ from ..models import (
     ProjectDecision,
     Proposal,
     ProposalDiscovery,
+    QuestionAnalysis,
     QuestionDiscovery,
     RepositoryScan,
     RepositoryStep,
@@ -114,6 +116,7 @@ from ..repository import (
     sources_of,
     working_copy,
 )
+from ..work import carried_analyses, carried_options, earlier_choices, kept_work, last_used
 from .councils import (
     CANNOT_START,
     MISSING,
@@ -141,7 +144,8 @@ NO_REPOSITORY = "Сначала пройдите шаг «Репозиторий
 RESLICED = "Типы фрагментов поменялись после раскладки — сначала разложите заново"
 # Всё, что ниже отбора решений проекта: другой отбор это сбрасывает.
 BELOW_DECISIONS = {"questions": None, "scope": None, "proposals": None, "choices": None,
-                   "analysis": None, "decisions": None, "outcomes": None, "issues": None}
+                   "analysis": None, "decisions": None, "outcomes": None, "issues": None,
+                   "earlier": [], "asked": 0}
 # Всё, что ниже шагов «Репозиторий» и «Дизайн»: другой скан, другой выбор на шаге или другая
 # идея это сбрасывает — и отбор решений проекта тоже.
 BELOW_DESIGN = {"decisions_search": None, "project_decisions": None, **BELOW_DECISIONS}
@@ -893,10 +897,12 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
                   notes_of: NotesOfDep) -> Council:
     """Человек утверждает, какие вопросы потоку решать: оставленные из найденных и свои, — и
     совет сразу ищет к ним новые варианты ответа. Ответы он здесь не выбирает. Утвердить
-    заново — поменять отбор: варианты к прежнему и выбор по ним ищутся заново; тот же отбор
-    их не трогает. Если поиск вопросов упал, можно утвердить и одни свои вопросы. Отбор — к
-    тому поиску, что был на экране: нашли заново — 409, экран покажет новые вопросы.
-    Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают заново."""
+    заново — поменять отбор: варианты ищутся только к новым вопросам, а выбор, его проверка и
+    решения по прежним переносятся (work.py) — человек выбирает и решает только новое, а итоги
+    собираются заново из всех решений; тот же отбор ничего не трогает. Если поиск вопросов
+    упал, можно утвердить и одни свои вопросы. Отбор — к тому поиску, что был на экране: нашли
+    заново — 409, экран покажет новые вопросы. Отмеченные решения проекта в каталоге с тех пор
+    поменялись — 409, их отбирают заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -907,22 +913,31 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
                 423, "Совет ещё работает с прежним отбором — дождитесь его")
         if anew:
             expired(store, council, stream, changed_choice(notes_of(council), stream))
-        return council, anew
+        # Модели нужны, только если есть новые вопросы: варианты прежних переносятся.
+        return council, anew and len(carried_options(stream.proposals, scope)) < len(scope)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
         scope = scope_for(stream, edit)
-        changes: dict = {"scope": scope}
+        changes: dict = {"scope": scope, "asked": asked_after(stream, scope)}
         runs: list[CouncilRun] = []
         if proposes_anew(stream, scope):
-            if missing:
-                proposals = unconnected(
-                    start_proposals(council.participants, council.judge, scope), missing)
+            carried = carried_options(stream.proposals, scope)
+            first = last_used(stream) + 1
+            if len(carried) == len(scope):
+                proposals = start_proposals(council.participants, council.judge, scope,
+                                            carried.values(), first).model_copy(
+                    update={"state": "done", "steps": []})
+            elif missing:
+                proposals = unconnected(start_proposals(
+                    council.participants, council.judge, scope, carried.values(), first),
+                    missing)
             else:
                 runs = [proposal_run(council, group, stream, scope, agents, store)]
                 proposals = runs[0].state.model_copy(deep=True)
             changes |= {"proposals": proposals, "choices": None, "analysis": None,
-                        "decisions": None, "outcomes": None, "issues": None}
+                        "decisions": None, "outcomes": None, "issues": None,
+                        "earlier": kept_work(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -938,7 +953,8 @@ def scope_for(stream: Stream, edit: ApproveScope) -> list[OpenQuestion]:
         raise HTTPException(409, "Совет ещё ищет вопросы — дождитесь его")
     if search.run != edit.questions_run:
         raise HTTPException(409, "Вопросы уже нашли заново — отбор был к прежним")
-    return scoped(search, edit.keep, edit.added)
+    return scoped(search, edit.keep, edit.added, stream.scope or [],
+                  [work.key for work in stream.earlier], stream.asked)
 
 
 def proposes_anew(stream: Stream, scope: list[OpenQuestion]) -> bool:
@@ -969,11 +985,14 @@ def start_proposal_discovery(council_id: str, group: str, store: StoreDep, confi
 
     def build(council: Council, report: Callable) -> ProposalRun:
         stream = stream_in(council, group)
+        # Что упавший поиск уже нашёл, остаётся: ищут только оставшиеся вопросы.
         return ProposalRun(council.id, stream.idea.text, stream.scope,
                            fragments_of(council, group_of(council, group)),
                            council.participants, council.judge, agents, report,
                            repository=repository_map(stream), design=design_map(stream),
-                           accepted=stream.project_decisions or ())
+                           accepted=stream.project_decisions or (),
+                           carried=carried_options(stream.proposals, stream.scope),
+                           first=last_used(stream) + 1)
 
     expired_before(store, council_id, group, proposing(group),
                    lambda council: changed_choice(notes_of(council), checked(council)))
@@ -995,20 +1014,23 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
     (Fn), найденный советом (Pn) или свой текстом, либо None — пока не решает, вопрос уходит как
     unresolved. И совет сразу проверяет выбор, а для unresolved подбирает вариант из тех, что
     есть.
-    Утвердить заново — поменять выбор: проверка прежнего и решения по ней уже ни к чему; тот
-    же выбор их не трогает. Выбор — к тому поиску вариантов, что был на экране: нашли заново —
-    409. Если поиск упал, выбирать можно из того, что есть: предложений группы и уже
-    найденного. Отмеченные решения проекта в каталоге с тех пор поменялись — 409, их отбирают
-    заново."""
+    Утвердить заново — поменять выбор: проверяется только поменявшийся и новый, проверка того
+    же выбора по тем же вопросам переносится, как и решения по нему (их человек увидит
+    заполненными); итоги — заново; тот же выбор ничего не трогает. Выбор — к тому поиску
+    вариантов, что был на экране: нашли заново — 409. Если поиск упал, выбирать можно из того,
+    что есть: предложений группы и уже найденного. Отмеченные решения проекта в каталоге с тех
+    пор поменялись — 409, их отбирают заново."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
-        anew = analyzes_anew(stream, choices_for(council, group, stream, edit))
+        choices = choices_for(council, group, stream, edit)
+        anew = analyzes_anew(stream, choices)
         if anew and below_running(stream, "analysis"):
             raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
         if anew:
             expired(store, council, stream, changed_choice(notes_of(council), stream))
-        return council, anew
+        # Модели нужны, только если есть что проверять: проверка того же выбора переносится.
+        return council, anew and len(carried_analyses(stream, choices)) < len(choices)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
@@ -1016,15 +1038,20 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
         changes: dict = {"choices": choices}
         runs: list[CouncilRun] = []
         if analyzes_anew(stream, choices):
-            if missing:
-                analysis = unconnected(
-                    start_analysis(council.participants, council.judge, choices), missing)
+            carried = carried_analyses(stream, choices)
+            if len(carried) == len(choices):
+                analysis = start_analysis(council.participants, council.judge, choices,
+                                          carried.values()).model_copy(
+                    update={"state": "done", "steps": []})
+            elif missing:
+                analysis = unconnected(start_analysis(
+                    council.participants, council.judge, choices, carried.values()), missing)
             else:
                 runs = [decision_run(council, group, stream.model_copy(
-                    update={"choices": choices}), agents, store)]
+                    update={"choices": choices}), agents, store, carried)]
                 analysis = runs[0].state.model_copy(deep=True)
             changes |= {"analysis": analysis, "decisions": None, "outcomes": None,
-                        "issues": None}
+                        "issues": None, "earlier": kept_work(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1042,7 +1069,7 @@ def choices_for(council: Council, group: str, stream: Stream,
     if search.run != edit.proposals_run:
         raise HTTPException(409, "Варианты уже нашли заново — выбор был к прежним")
     return chosen(stream.scope, search, fragments_of(council, group_of(council, group)),
-                  edit.choices)
+                  edit.choices, earlier_choices(stream), last_used(stream))
 
 
 def analyzes_anew(stream: Stream, choices: list[Choice]) -> bool:
@@ -1051,15 +1078,20 @@ def analyzes_anew(stream: Stream, choices: list[Choice]) -> bool:
 
 
 def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
-           fragments: list[LabeledFragment], choices: list[Choice]) -> list[Choice]:
+           fragments: list[LabeledFragment], choices: list[Choice],
+           before: dict[str, Choice] | None = None, taken: int = 0) -> list[Choice]:
     """Выбор — по одному на каждый отобранный вопрос, в порядке отбора; вариант — из тех, что
     у этого вопроса есть: его предложения из текста и найденные к нему советом, — или свой
-    текст. Свой вариант получает номер дальше найденных советом, по порядку отбора; совпавший
-    с вариантом вопроса — это он и есть."""
+    текст. Свой вариант получает номер дальше найденных советом и всех, какие поток уже давал
+    (taken), по порядку отбора; совпавший с вариантом вопроса — это он и есть. Тот же свой
+    вариант по тому же вопросу, что и прежде (before), сохраняет прежний номер: на нём стоят его
+    проверка и решение, которые переносятся."""
     given = per_question(scope, choices, "выбора")
     found = found_by_question(search)
     texts = {fragment.id: fragment.text for fragment in fragments}
-    numbers = count(last_number(search) + 1)
+    kept = kept_numbers(scope, given, before or {}, found)
+    numbers = count(max([last_number(search), taken,
+                         *(int(proposal[1:]) for proposal in kept.values())]) + 1)
     result = []
     for question in scope:
         choice = given[question.id]
@@ -1080,9 +1112,27 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
         same = next((proposal for proposal, other in known.items()
                      if same_question(other) == same_question(text)), None)
         result.append(Choice(question_id=question.id, proposal=same) if same is not None
-                      else Choice(question_id=question.id, proposal=f"P{next(numbers)}",
+                      else Choice(question_id=question.id,
+                                  proposal=kept.get(question.id) or f"P{next(numbers)}",
                                   text=text))
     return result
+
+
+def kept_numbers(scope: list[OpenQuestion], given: dict[str, Choice], before: dict[str, Choice],
+                 found: dict[str, list[Proposal]]) -> dict[str, str]:
+    """Номера своих вариантов, которые остаются: тот же текст по тому же вопросу, что и прежде,
+    и номер не занят найденным советом."""
+    offered = {proposal.id for proposals in found.values() for proposal in proposals}
+    kept: dict[str, str] = {}
+    for question in scope:
+        new, old = given[question.id], before.get(question.id)
+        if (new.text is None or new.proposal is not None or old is None or old.text is None
+                or old.proposal is None or old.proposal in offered
+                or old.proposal in kept.values()):
+            continue
+        if same_question(old.text) == same_question(" ".join(new.text.split())):
+            kept[question.id] = old.proposal
+    return kept
 
 
 def per_question[T: (Choice, DecisionDraft)](scope: list[OpenQuestion], items: list[T],
@@ -1131,11 +1181,13 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
 
     def build(council: Council, report: Callable) -> DecisionRun:
         stream = stream_in(council, group)
+        # Что упавшая проверка уже проверила, остаётся: проверяют только оставшийся выбор.
         return DecisionRun(council.id, stream.idea.text, stream.scope, stream.choices,
                            stream.proposals, fragments_of(council, group_of(council, group)),
                            council.participants, council.judge, agents, report,
                            repository=repository_map(stream), design=design_map(stream),
-                           accepted=stream.project_decisions or ())
+                           accepted=stream.project_decisions or (),
+                           carried=carried_analyses(stream, stream.choices))
 
     expired_before(store, council_id, group, checking(group),
                    lambda council: changed_choice(notes_of(council), checked(council)))
@@ -1427,9 +1479,15 @@ def decided(scope: list[OpenQuestion], found: dict[str, list[Proposal]],
     return decisions
 
 
-def scoped(search: QuestionDiscovery, keep: list[str], added: list[str]) -> list[OpenQuestion]:
+def scoped(search: QuestionDiscovery, keep: list[str], added: list[str],
+           before: Sequence[OpenQuestion] = (), earlier: Sequence[str] = (),
+           asked: int = 0) -> list[OpenQuestion]:
     """Отобранные вопросы: оставленные — в порядке совета, свои — следом, с номерами дальше.
-    Свой вопрос, совпавший с оставленным или другим своим, — тот же вопрос."""
+    Свой вопрос, совпавший с оставленным или другим своим, — тот же вопрос. Свой вопрос, который
+    уже был в отборе (before), сохраняет номер — по нему узнают его работу; новый получает
+    номер дальше всех, какие поток давал (и в прежней работе, earlier, и вопросам, которые потом
+    убрали, — asked), а не первый свободный: убрали свой вопрос — номер следующего не сдвигается
+    и не достаётся другому."""
     found = {question.id: question for question in search.questions}
     unknown = [question_id for question_id in keep if question_id not in found]
     if unknown:
@@ -1448,9 +1506,19 @@ def scoped(search: QuestionDiscovery, keep: list[str], added: list[str]) -> list
             own.append(text)
     if not kept and not own:
         raise HTTPException(422, "Оставьте или добавьте хотя бы один вопрос")
-    start = len(search.questions) + 1
-    return [*kept, *(OpenQuestion(id=f"Q{n}", text=text, source="added")
-                     for n, text in enumerate(own, start))]
+    was = {same_question(question.text): question.id
+           for question in before if question.source == "added"}
+    taken = [question.id for question in [*search.questions, *before]]
+    taken += [key.split(": ", 1)[0] for key in earlier]
+    numbers = count(max([asked, *(int(i[1:]) for i in taken if i[1:].isdigit())]) + 1)
+    return [*kept, *(OpenQuestion(id=was.get(same_question(text)) or f"Q{next(numbers)}",
+                                  text=text, source="added") for text in own)]
+
+
+def asked_after(stream: Stream, scope: list[OpenQuestion]) -> int:
+    """Самый большой номер вопроса, какой отбор давал, — и с этим отбором."""
+    ids = [question.id for question in [*(stream.scope or []), *scope]]
+    return max([stream.asked, *(int(i[1:]) for i in ids if i[1:].isdigit())])
 
 
 def seen_idea(stream: Stream,
@@ -1581,22 +1649,26 @@ def question_run(council: Council, group: str, stream: Stream, runner: Runner,
 
 def proposal_run(council: Council, group: str, stream: Stream, scope: list[OpenQuestion],
                  runner: Runner, store: Store) -> ProposalRun:
+    """Поиск вариантов к отбору scope: к вопросам, найденным раньше (те же номер и формулировка),
+    варианты переносятся, новые нумеруются дальше всех номеров потока."""
     return ProposalRun(council.id, stream.idea.text, scope,
                        fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, proposing(group)),
                        repository=repository_map(stream), design=design_map(stream),
-                       accepted=stream.project_decisions or ())
+                       accepted=stream.project_decisions or (),
+                       carried=carried_options(stream.proposals, scope),
+                       first=last_used(stream) + 1)
 
 
 def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
-                 store: Store) -> DecisionRun:
+                 store: Store, carried: dict[str, QuestionAnalysis]) -> DecisionRun:
     return DecisionRun(council.id, stream.idea.text, stream.scope, stream.choices,
                        stream.proposals, fragments_of(council, group_of(council, group)),
                        council.participants, council.judge, runner,
                        reporter(store, council.id, checking(group)),
                        repository=repository_map(stream), design=design_map(stream),
-                       accepted=stream.project_decisions or ())
+                       accepted=stream.project_decisions or (), carried=carried)
 
 
 def outcome_run(council: Council, group: str, stream: Stream, runner: Runner,

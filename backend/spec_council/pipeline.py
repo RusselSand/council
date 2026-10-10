@@ -40,13 +40,15 @@ Figma через REST API, модели читают снимок:
 2. question_judge — судья сводит списки в канонический (question_judge.md); если списки
    совпали, он не нужен.
 
-Варианты потока (ProposalRun) — к отобранным вопросам, по вопросу за раз:
+Варианты потока (ProposalRun) — к отобранным вопросам, по вопросу за раз; к вопросу, который
+был в отборе и раньше (тот же номер и формулировка), варианты не ищут заново — их переносят:
 1. proposal_discovery — каждый участник ищет новые варианты ответа, которых ещё нет среди
    предложений группы (proposal_discovery.md);
 2. proposal_judge — если новые варианты есть, судья сводит их и решает, что показать:
    одну рекомендацию, равноправные альтернативы или ничего (proposal_judge.md).
 
-Проверка выбора (DecisionRun) — по вопросу за раз:
+Проверка выбора (DecisionRun) — по вопросу за раз; тот же выбор по тому же вопросу заново не
+проверяют — анализ переносят:
 1. decision_analysis — каждый участник проверяет выбранный человеком вариант, а у unresolved
    сравнивает варианты вопроса и, если один обоснованно лучше, рекомендует его
    (decision_analysis.md);
@@ -72,7 +74,7 @@ import hashlib
 import json
 import logging
 import tempfile
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
@@ -294,26 +296,42 @@ def start_questions(participants: list[str], judge: str, idea: str,
                                          (StepName.question_discovery, StepName.question_judge)))
 
 
+def question_key(question: OpenQuestion) -> str:
+    """Вопрос, как его узнают после правки отбора: тот же номер и та же формулировка."""
+    return f"{question.id}: {question.text}"
+
+
 def scope_key(scope: list[OpenQuestion]) -> list[str]:
     """Отбор вопросов, как его помнит поиск вариантов: поменялся — искать заново."""
-    return [f"{question.id}: {question.text}" for question in scope]
+    return [question_key(question) for question in scope]
 
 
-def start_proposals(participants: list[str], judge: str,
-                    scope: list[OpenQuestion]) -> ProposalDiscovery:
+def start_proposals(participants: list[str], judge: str, scope: list[OpenQuestion],
+                    carried: Iterable[QuestionOptions] = (), first: int = 1) -> ProposalDiscovery:
+    """carried — варианты вопросов, которые были в отборе и раньше: их не ищут, они уже здесь;
+    first — с какого номера нумеровать новые."""
     return ProposalDiscovery(state="running", run=uuid4().hex[:8], scope=scope_key(scope),
+                             options=list(carried), first=first,
                              steps=steps(participants, judge,
                                          (StepName.proposal_discovery, StepName.proposal_judge)))
 
 
+def choice_entry(choice: Choice) -> str:
+    """Выбор по вопросу, как его помнит проверка: «Q1: P2», свой — и с текстом."""
+    return (f"{choice.question_id}: {choice.proposal or '-'}"
+            + (f": {choice.text}" if choice.text is not None else ""))
+
+
 def choices_key(choices: list[Choice]) -> list[str]:
     """Выбор, как его помнит проверка: поменялся — и свой вариант тоже — проверять заново."""
-    return [f"{choice.question_id}: {choice.proposal or '-'}"
-            + (f": {choice.text}" if choice.text is not None else "") for choice in choices]
+    return [choice_entry(choice) for choice in choices]
 
 
-def start_analysis(participants: list[str], judge: str, choices: list[Choice]) -> DecisionAnalysis:
+def start_analysis(participants: list[str], judge: str, choices: list[Choice],
+                   carried: Iterable[QuestionAnalysis] = ()) -> DecisionAnalysis:
+    """carried — проверка того же выбора по тем же вопросам: её не повторяют, она уже здесь."""
     return DecisionAnalysis(state="running", run=uuid4().hex[:8], choices=choices_key(choices),
+                            analyses=list(carried),
                             steps=steps(participants, judge,
                                         (StepName.decision_analysis, StepName.decision_judge)))
 
@@ -828,7 +846,11 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
     Вопрос модели видят вместе с другими вопросами потока (other_open_questions): без них не
     указать, от какого вопроса вариант зависит. Повтор предложения группы, как бы его ни
     написали, — не новый вариант: он отсеивается и у участников, и у судьи. Модель, упавшая
-    на одном вопросе, так и числится упавшей, хоть следующие она и ответила."""
+    на одном вопросе, так и числится упавшей, хоть следующие она и ответила.
+
+    carried — варианты вопросов, которые были в отборе и раньше: их не ищут заново, хоть соседи
+    и поменялись, — иначе каждый добавленный вопрос стоил бы поиска по всем. Новые варианты
+    нумеруются с first: номера раньше заняты перенесёнными и своими вариантами человека."""
 
     what = "поиск вариантов"
 
@@ -837,9 +859,12 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
                  runner: Runner, report: Callable[[ProposalDiscovery], None], *,
                  repository: str = context_prompt(None),
                  design: str = design_context(None),
-                 accepted: Sequence[ProjectDecision] = ()) -> None:
+                 accepted: Sequence[ProjectDecision] = (),
+                 carried: Mapping[str, QuestionOptions] | None = None, first: int = 1) -> None:
+        self.carried = dict(carried or {})
+        self.first = first
         super().__init__(council_id, participants, judge, runner, report,
-                         start_proposals(participants, judge, scope))
+                         start_proposals(participants, judge, scope, self.carried.values(), first))
         self.idea = idea
         self.repository = repository
         self.design = design
@@ -850,10 +875,13 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
     def work(self) -> dict[str, Any]:
         limits = [f for f in self.fragments.values() if f.label in ("constraint", "risk")]
         known = as_json([{"id": f"F{f.id}", "type": f.label, "text": f.text} for f in limits])
-        numbers = iter(range(1, 10_000))
+        numbers = iter(range(self.first, self.first + 10_000))
         failures: dict[str, list[str]] = {}
-        judged = False
+        judged = asked = False
         for question in self.scope:
+            if question.id in self.carried:
+                continue
+            asked = True
             context = Context(
                 frozenset(f.id for f in limits if f.label == "constraint"),
                 frozenset(f.id for f in limits if f.label == "risk"),
@@ -894,6 +922,8 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
             with self._lock:
                 self.state.options.append(options_of(question, verdict, numbers))
                 self._publish()
+        if not asked:
+            self._skip(StepName.proposal_discovery)
         if not judged:
             self._skip(StepName.proposal_judge)
         return {"options": self.state.options}
@@ -930,7 +960,10 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
 
     Модели видят и другие вопросы потока — что по ним выбрано и какие unresolved: без этого не
     сказать, от какого нерешённого вопроса зависит выбор. Одинаковые анализы судья видит
-    одним: число согласных — не довод."""
+    одним: число согласных — не довод.
+
+    carried — проверка того же выбора по тем же вопросам: её не повторяют, хоть выбор по
+    соседним и поменялся, — проверяют только новое."""
 
     what = "проверка выбора"
 
@@ -940,9 +973,11 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                  runner: Runner, report: Callable[[DecisionAnalysis], None], *,
                  repository: str = context_prompt(None),
                  design: str = design_context(None),
-                 accepted: Sequence[ProjectDecision] = ()) -> None:
+                 accepted: Sequence[ProjectDecision] = (),
+                 carried: Mapping[str, QuestionAnalysis] | None = None) -> None:
+        self.carried = dict(carried or {})
         super().__init__(council_id, participants, judge, runner, report,
-                         start_analysis(participants, judge, choices))
+                         start_analysis(participants, judge, choices, self.carried.values()))
         self.idea = idea
         self.repository = repository
         self.design = design
@@ -958,6 +993,8 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
         failures: dict[str, list[str]] = {}
         asked = False
         for question in self.scope:
+            if question.id in self.carried:
+                continue
             offered = self._offered(question)
             selected = self.choices.get(question.id)
             if not offered and selected is None:

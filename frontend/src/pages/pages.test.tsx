@@ -146,13 +146,13 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
       design_scan: null, design: ideas.A ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null,
+      issues: null, earlier: [],
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
       design_scan: null, design: ideas.B ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null,
+      issues: null, earlier: [],
       ...more.B },
   ] satisfies Stream[],
 })
@@ -1221,16 +1221,80 @@ describe('Поток: решения и итоги', () => {
     expect(fix().disabled).toBe(true)
   })
 
-  it('пробел из итога — в вопросы: он в отборе, утверждённый отбор уходит на сервер с ним', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }), () => json(deciding()))
-    const blocked = await card('Замер потерь')
-    fireEvent.click(within(blocked).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+  it('пробелы из итогов — в вопросы разом: отмеченные копятся, к вопросам — одним переходом, отбор — с ними всеми', async () => {
+    const two: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [...ASSEMBLED.outcomes, {
+      id: 'O3', title: 'Срок хранения', behavior: 'Отчёты хранятся сколько нужно.', adr_ids: [], constraint_ids: [],
+      risk_ids: [], acceptance_criteria: [], blocked_by: [], gaps: [{ question: 'Сколько хранить отчёты?', reason: '' }] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: two }), () => json(deciding()))
+    fireEvent.click(within(await card('Замер потерь')).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    // Остались на итогах: пробел отмечен, и видно, сколько ждёт отбора.
+    expect(within(await card('Замер потерь')).getByText(ru['gaps.added'])).toBeTruthy()
+    expect(screen.getByText('Добавлен в вопросы 1 пробел — отбор ещё не утверждён.')).toBeTruthy()
+    fireEvent.click(within(await card('Срок хранения')).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    expect(screen.getByText('Добавлено в вопросы пробелов: 2 — отбор ещё не утверждён.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
-    expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['questions.approve'] }))
+    expect(screen.getByText('Сколько хранить отчёты?')).toBeTruthy()
+    expect(screen.getByText(/Новых вопросов ещё не в отборе: 2/)).toBeTruthy()
+    // Вернулись к итогам за ещё одним — добавленное не пропало.
+    fireEvent.click(screen.getAllByRole('button', { name: /Итоги/ })[0])
+    expect(within(await card('Срок хранения')).getByText(ru['gaps.added'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['questions.approve'] }))
     await waitFor(() => expect(streamCalls).toEqual([{ group: 'A', action: 'questions', body: {
-      run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1', 'Q2'], added: ['Где хранить отчёт?'] } }]))
+      run: 'g1', revision: 0, questions_run: 'q1', keep: ['Q1', 'Q2'],
+      added: ['Где хранить отчёт?', 'Сколько хранить отчёты?'] } }]))
+  })
+
+  it('пробел — тот же вопрос, что нашёл совет, а его убрали из отбора: вопрос возвращается, а не встаёт своим', async () => {
+    const [q1, q2] = QUESTIONS_FOUND.questions
+    const gapped: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [
+      { ...ASSEMBLED.outcomes[1], blocked_by: [], gaps: [{ question: q2.text, reason: '' }] }] }
+    openStream(() => deciding({ scope: [q1], choices: [{ question_id: 'Q1', proposal: 'F2' }], decisions: [FIXED[0]],
+                                outcomes: gapped }), () => json(deciding()))
+    fireEvent.click(within(await card('Замер потерь')).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['questions.approve'] }))
+    await waitFor(() => expect(streamCalls).toHaveLength(1))
+    expect(streamCalls[0].body).toMatchObject({ keep: ['Q1', 'Q2'], added: [] })
+  })
+
+  it('после добавления вопросов выбор и решения по прежним — на месте: выбрать и решить остаётся только новое', async () => {
+    const added = { id: 'Q3', text: 'Где хранить отчёт?', source: 'added' as const, source_question_id: null,
+                    proposal_ids: [], reason: null, note: null, revisits: null }
+    const scope = [...QUESTIONS_FOUND.questions, added]
+    const earlier = [
+      { key: `Q1: ${QUESTIONS_FOUND.questions[0].text}`, choice: { question_id: 'Q1', proposal: 'F2' },
+        analysis: CHECKED.analyses[0], decision: FIXED[0] },
+      { key: `Q2: ${QUESTIONS_FOUND.questions[1].text}`, choice: { question_id: 'Q2', proposal: null },
+        analysis: CHECKED.analyses[1], decision: FIXED[1] }]
+    const options = { ...OPTIONS, run: 'p2', scope: scope.map(q => `${q.id}: ${q.text}`),
+                      options: [...OPTIONS.options, { question_id: 'Q3', proposals: [], verdict: 'none' as const, reason: null }] }
+    openStream(() => deciding({ scope, proposals: options, choices: null, analysis: null, earlier }))
+    expect(await screen.findByRole('heading', { name: ru['options.title'] })).toBeTruthy()
+    // Прежний выбор подставлен; по новому вопросу — ещё нет, и утвердить рано.
+    const approve = () => screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
+    expect(approve().disabled).toBe(true)
+    fireEvent.click(within(screen.getByRole('region', { name: 'Где хранить отчёт?' })).getByRole('radio', { name: /пока не решаю/i }))
+    expect(approve().disabled).toBe(false)
+    fireEvent.click(approve())
+    await waitFor(() => expect(streamCalls).toHaveLength(1))
+    expect(streamCalls[0].body).toMatchObject({ choices: [
+      { question_id: 'Q1', proposal: 'F2' }, { question_id: 'Q2', proposal: null }, { question_id: 'Q3', proposal: null }] })
+  })
+
+  it('решения к тому же выбору — из прежних, с обоснованием: зафиксировать можно сразу', async () => {
+    const earlier = [
+      { key: `Q1: ${QUESTIONS_FOUND.questions[0].text}`, choice: { question_id: 'Q1', proposal: 'F2' },
+        analysis: CHECKED.analyses[0], decision: { ...FIXED[0], rationale: 'Своё обоснование.', rationale_by: 'human' as const } },
+      // Выбор по Q2 с тех пор другой — прежнее решение к нему не подставляется.
+      { key: `Q2: ${QUESTIONS_FOUND.questions[1].text}`, choice: { question_id: 'Q2', proposal: 'P2' },
+        analysis: null, decision: { question_id: 'Q2', proposal: 'P2', rationale: 'Старое.', rationale_by: 'human' as const } }]
+    openStream(() => deciding({ earlier }))
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(why('Q1').value).toBe('Своё обоснование.')
+    expect(screen.queryByDisplayValue('Старое.')).toBeNull()
   })
 
   it('сборка итогов упала — причина видна, её запускают снова', async () => {
@@ -1297,9 +1361,11 @@ describe('Поток: решения и итоги', () => {
 
     const gaps = screen.getByRole('region', { name: ru['issues.gapsTitle'] })
     fireEvent.click(within(gaps).getByRole('button', { name: ru['issues.toQuestions'] }))
+    expect(within(gaps).getByText(ru['gaps.added'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
-    expect(screen.getByText(ru['questions.fromGap'])).toBeTruthy()
+    expect(screen.getByText(/Новый вопрос ещё не в отборе/)).toBeTruthy()
   })
 
   it('задачи по коду нескольких репозиториев — видно коммит каждого', async () => {
