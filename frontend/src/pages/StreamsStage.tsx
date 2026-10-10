@@ -6,7 +6,7 @@ import {
   api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf,
   REPOSITORIES_MAX, runningFrom, sameChoice, startOrFollow,
   streamOf, structureIsStale, type Choice, type Council, type Decision, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
-  type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type QuestionAnalysis,
+  type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type OutcomeTouch, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
 import { FieldList, listField } from '../components/FieldList'
@@ -2059,7 +2059,19 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
     () => api.seekOutcomes(council.id, group.id), council, c => streamOf(c, group.id)?.outcomes))
   // Утверждены — по ним уже нарезают задачи: утвердить те же ещё раз — ничего не поменять.
   const approved = stream.issues !== null && stream.issues.outcomes === run?.run
-  const canApprove = run?.state === 'done' && run.outcomes.length > 0 && !approve.busy && !stale
+  const touched = run?.touched ?? []
+  const canApprove = run?.state === 'done' && run.outcomes.length > 0 && !approve.busy && !stale && touched.length === 0
+  // Закреплённый итог, который задевают новые решения: оставить или пересобрать — решает человек.
+  const settling = useAction(onChange)
+  const settle = (outcome: string, rebuild: boolean) => void settling.go(async () => {
+    try {
+      return await api.settleTouch(council.id, { run: structure.run, revision: structure.revision }, group.id,
+                                   run?.run ?? '', outcome, rebuild)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      throw e
+    }
+  })
   const pass = () => void approve.go(async () => {
     try {
       return await api.approveOutcomes(council.id, { run: structure.run, revision: structure.revision },
@@ -2100,15 +2112,19 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
         </div>
       )}
       {run?.state === 'done' && run.outcomes.length === 0 && <p className="muted">{t('outcomes.none')}</p>}
+      {settling.error && <p className="error-text" role="alert">{settling.error}</p>}
       {run?.outcomes.map((outcome, n) => (
         <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
-                     fragments={fragments} onQuestion={onQuestion} gaps={gaps} />
+                     fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept={run.kept.includes(outcome.id)}
+                     touch={touched.find(touch => touch.outcome_id === outcome.id)} busy={settling.busy}
+                     onSettle={rebuild => settle(outcome.id, rebuild)} />
       ))}
       {run && run.uncovered_adr_ids.length > 0 && (
         <p className="fragment-note">{t('outcomes.uncovered', { ids: run.uncovered_adr_ids.join(', ') })}</p>
       )}
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
       {canApprove && !approved && <p className="fragment-note">{t('outcomes.approveHint')}</p>}
+      {touched.length > 0 && <p className="fragment-note">{t('outcomes.touchedHint')}</p>}
       <div className="stream-actions spread">
         <button className="btn-link" onClick={onBack}>{t('outcomes.change')}</button>
         {approved
@@ -2182,7 +2198,8 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
       {run.state === 'done' && run.issues.length === 0 && <p className="muted">{t('issues.none')}</p>}
       {run.issues.map((issue, n) => (
         <IssueCard key={issue.id} issue={issue} n={n + 1} adrs={adrs} questions={questions} outcomes={outcomes}
-                   gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} number={numbers.get(issue.id)} />
+                   gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} number={numbers.get(issue.id)}
+                   kept={run.kept.includes(issue.id)} />
       ))}
       {run.gaps.length > 0 && (
         <section className="card panel" aria-labelledby="issue-gaps-title">
@@ -2228,12 +2245,15 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
 }
 
 /** Задача: кому и зачем, где менять и что там сейчас, что сделать, на чём стоит — и что её держит. */
-function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQuestion, number }: Readonly<{
+function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQuestion, number, kept = false }: Readonly<{
   issue: Issue; n: number; adrs: Map<string, { question: string; text: string }>
   questions: Map<string, string>; outcomes: Map<string, string>; gaps: IssueGap[]
   fragments: Map<number, LabeledFragment>; onQuestion: (question: string) => void
   /** Номер задачи на весь проект — когда поток выгружен в заметки к этим задачам. */
   number?: string
+
+  /** Перенесена из прежней нарезки: её итоги закреплены и те же — она уже в разработке. */
+  kept?: boolean
 }>) {
   const { t } = useTranslation()
   const name = `issue-${issue.id}`
@@ -2253,6 +2273,7 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
         {number && <span className="pill ready">{number}</span>}
         <h3 id={`${name}-title`} className="question-text">{issue.title}</h3>
         {pill}
+        {kept && <span className="pill" title={t('issues.keptHint')}>{t('issues.kept')}</span>}
       </div>
       {number && <p className="fragment-note">{t('issues.commit', { id: number })}</p>}
       {open.length > 0 && (
@@ -2309,10 +2330,13 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
 }
 
 /** Итог: что меняется, на каких решениях стоит, что соблюдать, когда готово — и чего не хватает. */
-function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps }: Readonly<{
+function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps, kept = false, touch, busy = false,
+  onSettle }: Readonly<{
   outcome: Outcome; n: number; adrs: Map<string, { question: string; text: string }>
   questions: Map<string, string>; fragments: Map<number, LabeledFragment>
   onQuestion: (question: string) => void; gaps: Gaps
+  /** Закреплён: был готов, его решения те же — его не пересобирали. touch — его задевают новые решения. */
+  kept?: boolean; touch?: OutcomeTouch; busy?: boolean; onSettle?: (rebuild: boolean) => void
 }>) {
   const { t } = useTranslation()
   const name = `outcome-${outcome.id}`
@@ -2327,10 +2351,20 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps 
   return (
     <section className="card panel" aria-labelledby={`${name}-title`}>
       <div className="question-head">
-        <span className="fragment-id">{String(n).padStart(2, '0')}</span>
+        <span className="fragment-id">{outcome.id}</span>
         <h3 id={`${name}-title`} className="question-text">{outcome.title}</h3>
         {pill}
+        {kept && <span className="pill" title={t('outcomes.keptHint')}>{t('outcomes.kept')}</span>}
       </div>
+      {touch && (
+        <div className="check problem outcome-touch">
+          <span>{t('outcomes.touched', { ids: touch.adr_ids.join(', ') })}{touch.reason ? ` ${touch.reason}` : ''}</span>
+          <span className="outcome-touch-actions">
+            <button className="btn-secondary" disabled={busy} onClick={() => onSettle?.(false)}>{t('outcomes.keepAsIs')}</button>
+            <button className="btn-secondary" disabled={busy} onClick={() => onSettle?.(true)}>{t('outcomes.rebuild')}</button>
+          </span>
+        </div>
+      )}
       {blocked.length > 0 && (
         <div className="check problem outcome-missing">
           <span>{t('outcomes.missing', { ids: blocked.join(', ') })}</span>

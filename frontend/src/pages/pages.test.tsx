@@ -146,13 +146,13 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
       design_scan: null, design: ideas.A ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [],
+      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null,
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
       design_scan: null, design: ideas.B ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [],
+      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null,
       ...more.B },
   ] satisfies Stream[],
 })
@@ -205,7 +205,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -1047,7 +1047,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выбор проверен, для unresolved ИИ предлагает вариант — принятое уходит на сервер с обоснованием', async () => {
     const assembling: OutcomeDiscovery = {
-      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], uncovered_adr_ids: [], error: null }
+      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], kept: [], touched: [], uncovered_adr_ids: [], error: null }
     openStream(() => deciding(), () => json(deciding({ outcomes: assembling, decisions: [
       { question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' },
       { question_id: 'Q2', proposal: 'P2', rationale: 'Мера без опросов.', rationale_by: 'ai' }] })))
@@ -1151,7 +1151,7 @@ describe('Поток: решения и итоги', () => {
   const FIXED = [{ question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' as const },
                  { question_id: 'Q2', proposal: null, rationale: null, rationale_by: null }]
   const ASSEMBLED: OutcomeDiscovery = {
-    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [],
+    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [],
     steps: [{ name: 'outcome_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'outcome_judge', state: 'skipped', runs: [] }],
     outcomes: [
@@ -1297,6 +1297,30 @@ describe('Поток: решения и итоги', () => {
     expect(screen.queryByDisplayValue('Старое.')).toBeNull()
   })
 
+  it('у итога — его номер, а не место в списке: после пересборки номера идут с пропусками', async () => {
+    const sparse: OutcomeDiscovery = { ...ASSEMBLED, kept: ['O2'], outcomes: [
+      { ...ASSEMBLED.outcomes[0], id: 'O2' }, { ...ASSEMBLED.outcomes[1], id: 'O5' }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: sparse }))
+    expect(within(await card('Состояние в файлах')).getByText('O2')).toBeTruthy()
+    expect(within(await card('Замер потерь')).getByText('O5')).toBeTruthy()
+  })
+
+  it('закреплённый итог, который задевают новые решения: утвердить нельзя, пока не решили — оставить или пересобрать', async () => {
+    const touched: OutcomeDiscovery = { ...ASSEMBLED, kept: ['O1'],
+      touched: [{ outcome_id: 'O1', adr_ids: ['ADR-2'], reason: 'меняет хранение' }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: touched }),
+               () => json(deciding({ decisions: FIXED, outcomes: { ...touched, touched: [] } })))
+    const kept = await card('Состояние в файлах')
+    expect(within(kept).getByText(ru['outcomes.kept'])).toBeTruthy()
+    expect(within(kept).getByText(/Новые решения ADR-2 задевают этот закреплённый итог\. меняет хранение/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['outcomes.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(ru['outcomes.touchedHint'])).toBeTruthy()
+    fireEvent.click(within(kept).getByRole('button', { name: ru['outcomes.keepAsIs'] }))
+    await waitFor(() => expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes/touched', body: {
+      run: 'g1', revision: 0, outcomes_run: 'o1', outcome_id: 'O1', rebuild: false } }]))
+    await waitFor(() => expect((screen.getByRole('button', { name: ru['outcomes.approve'] }) as HTMLButtonElement).disabled).toBe(false))
+  })
+
   it('сборка итогов упала — причина видна, её запускают снова', async () => {
     const failed: OutcomeDiscovery = { ...ASSEMBLED, state: 'failed', outcomes: [], error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     openStream(() => deciding({ decisions: FIXED, outcomes: failed }),
@@ -1308,7 +1332,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   const CUT: IssueDiscovery = {
-    state: 'done', run: 'i1', outcomes: 'o1', code: true, error: null,
+    state: 'done', run: 'i1', outcomes: 'o1', code: true, error: null, kept: [], cut: {},
     sources: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abcdef1234567890', dirty: false,
                 files: 12, outside: 0, omitted: [], omitted_count: 0 }],
     steps: [{ name: 'issue_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
@@ -1366,6 +1390,11 @@ describe('Поток: решения и итоги', () => {
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
     expect(screen.getByText(/Новый вопрос ещё не в отборе/)).toBeTruthy()
+  })
+
+  it('задача закреплённого итога из прежней нарезки — помечена перенесённой', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: { ...CUT, kept: ['I1'] } }))
+    expect(within(await card('Сохранять состояние в файлы')).getByText(ru['issues.kept'])).toBeTruthy()
   })
 
   it('задачи по коду нескольких репозиториев — видно коммит каждого', async () => {

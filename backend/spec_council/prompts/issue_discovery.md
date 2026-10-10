@@ -133,6 +133,14 @@ An ISSUE that depends on a GAP must be marked as blocked.
 
 Independent ISSUES may remain ready for development.
 
+## Fixed ISSUES
+
+FIXED ISSUES below were cut before from OUTCOMES that have not changed since, and nothing blocks
+them: they are being developed already. Do not return them again, not even in parts or in other
+words. Cut only what the OUTCOMES given to you still need beyond them; an OUTCOME fully covered
+by FIXED ISSUES needs no new ISSUE. A new ISSUE may depend on a FIXED ISSUE: put its id into
+`depends_on`. Give new ISSUES ids different from the ids of the FIXED ISSUES.
+
 ## Language
 
 These instructions are in English, but write every free-text value of your answer —
@@ -212,6 +220,10 @@ Before answering, check that:
 ## ACCEPTED ADRS
 
 {{accepted_adrs}}
+
+## FIXED ISSUES
+
+{{fixed_issues}}
 
 ## CONSTRAINTS AND RISKS
 
