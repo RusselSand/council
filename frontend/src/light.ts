@@ -67,16 +67,11 @@ export const openable = (stream: Stream, step: ChainStep): boolean =>
  * нарезали заново или каталог сменили (COUNCIL_NOTES) — выгружать снова.
  */
 export const exported = (stream: Stream, notes: string | null): boolean =>
-  !!stream.notes && !!stream.issues && stream.notes.issues === stream.issues.run && notes !== null
-  && stream.notes.root === notes
+  exportedTo(stream, notes) && !!stream.issues && stream.notes?.issues === stream.issues.run
 
-/**
- * Выгружена прежняя нарезка — та, из которой переносятся задачи (после правки выше или при новой нарезке), — и в
- * нынешний каталог: перенесённые задачи несут её номера.
- */
-export const exportedBefore = (stream: Stream, notes: string | null): boolean =>
-  !!stream.notes && !!stream.earlier_issues && stream.notes.issues === stream.earlier_issues.run && notes !== null
-  && stream.notes.root === notes
+/** Поток выгружали в нынешний каталог (к каким задачам — неважно): каталог сменили — его выгрузка не там. */
+export const exportedTo = (stream: Stream, notes: string | null): boolean =>
+  !!stream.notes && notes !== null && stream.notes.root === notes
 
 /** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
 export const exportedCount = (stream: Stream): number => stream.notes?.notes.filter(note => !note.kept).length ?? 0

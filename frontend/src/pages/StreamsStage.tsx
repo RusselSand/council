@@ -15,7 +15,7 @@ import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
 import {
-  CHAIN, chainLight, currentStep, exported, exportedBefore, exportedCount, openable, streamLight, type ChainStep,
+  CHAIN, chainLight, currentStep, exported, exportedCount, exportedTo, openable, streamLight, type ChainStep,
 } from '../light'
 import { useAction } from '../useAction'
 
@@ -2253,12 +2253,14 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
 }>) {
   const { t } = useTranslation()
   const run = stream.issues
-  // Номера задач на весь проект — у выгруженного к этим задачам потока. Перенесённые и сохранённые задачи — те же,
-  // что в прежней нарезке, и, может, уже в работе: у них номер из её выгрузки. Новые — без номера, пока не выгрузят.
-  const carried = new Set(run ? run.kept : stream.saved_issues.map(issue => issue.id))
+  // Номера задач на весь проект — у выгруженного к этим задачам потока. Перенесённые и сохранённые задачи — копии
+  // прежних (и через несколько нарезок тоже) и, может, уже в работе: номер — из последней выгрузки, если там та же
+  // задача (тот же I-номер и название, как узнаёт её и выгрузка). Новые — без номера, пока не выгрузят.
+  const carried = new Map((run ? run.issues.filter(issue => run.kept.includes(issue.id)) : stream.saved_issues)
+    .map(issue => [issue.id, issue.title]))
   let numbered = exported(stream, notes) ? stream.notes?.numbers ?? [] : []
-  if (!exported(stream, notes) && exportedBefore(stream, notes)) {
-    numbered = (stream.notes?.numbers ?? []).filter(number => carried.has(number.issue_id))
+  if (!exported(stream, notes) && exportedTo(stream, notes)) {
+    numbered = (stream.notes?.numbers ?? []).filter(number => carried.get(number.issue_id) === number.title)
   }
   const numbers = new Map(numbered.map(n => [n.issue_id, n.id]))
   const retry = useAction(onChange)

@@ -1849,8 +1849,10 @@ describe('Поток: решения и итоги', () => {
     const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
                                          outcome_ids: ['O2'] }]
     const before = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers }
-    // Отбор поправили — нарезку сняли, а I1 сохранена: её номер — тот же.
-    openWith(() => deciding({ choices: null, analysis: null, earlier_issues: CUT, notes: before,
+    // Выгружали нарезку i1; потом её нарезали заново без выгрузки (i2, I1 перенесена), а теперь поправили отбор —
+    // нарезку сняли, I1 сохранена: номер у неё тот же, через сколько нарезок ни перенеси.
+    const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'] }
+    openWith(() => deciding({ choices: null, analysis: null, earlier_issues: recut, notes: before,
                               saved_outcomes: [ASSEMBLED.outcomes[0]], saved_issues: [CUT.issues[0]] }),
              () => json(atStart()))
     const chain = await screen.findByRole('region', { name: /Цепочка/ })
