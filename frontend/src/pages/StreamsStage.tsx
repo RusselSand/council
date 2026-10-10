@@ -1881,16 +1881,13 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
     written.get(`${question}:${proposal}`) ?? suggested(question, proposal) ?? ''
   const decided = scope.filter(q => picked.get(q.id))
   const complete = decided.every(q => squash(rationaleOf(q.id, picked.get(q.id) ?? '')) !== '')
-  // Готово — решение есть: вариант с обоснованием (и подсказанным ИИ), или оно уже было (зафиксированное или
-  // прежнее к тому же выбору); проверку ещё ведут — ИИ работает; остальное — ход за человеком.
-  const settled = new Set(start.map(d => d.question_id))
-  const checked = new Map(analysis?.analyses.map(a => [a.question_id, a]) ?? [])
+  // Готово — решение есть: вариант с обоснованием (своим, подсказанным ИИ или прежним). Открытый вопрос не готов,
+  // даже зафиксированный: он держит свои итоги. Проверку ещё ведут — ИИ работает; остальное — ход за человеком.
   const decisionSlides: Slide[] = scope.map(q => {
     const value = picked.get(q.id) ?? null
-    const reasoned = value !== null && squash(rationaleOf(q.id, value)) !== ''
     let light: Slide['light'] = 'yours'
-    if (reasoned || (settled.has(q.id) && value === start.find(d => d.question_id === q.id)?.proposal)) light = 'done'
-    else if (sought && !checked.has(q.id)) light = 'running'
+    if (value !== null && squash(rationaleOf(q.id, value)) !== '') light = 'done'
+    else if (sought && !said.has(q.id)) light = 'running'
     return { id: q.id, title: q.text, light }
   })
   // Пока ИИ собирает итоги по решениям или нарезает их на задачи, их не поменять: сервер ответит 423.
