@@ -13,6 +13,7 @@ import { FieldList, listField } from '../components/FieldList'
 import { LabelPill } from '../components/Labels'
 import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
+import { firstOpen, Slider, type Slide } from '../components/Slider'
 import { CHAIN, chainLight, currentStep, exported, exportedCount, reachable, streamLight, type ChainStep } from '../light'
 import { useAction } from '../useAction'
 
@@ -93,6 +94,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
       </aside>
       <div className="streams-main">
         <Now stream={stream} group={group} notes={notes} />
+        <StepBanner stream={stream} group={group} view={view} notes={notes} />
         {(view === 'outcomes' || view === 'issues') && pending > 0 && (
           <section className="card panel pending-questions" aria-label={t('gaps.title')}>
             <p className="pending-text">{t('gaps.pending', { count: pending })}</p>
@@ -260,18 +262,8 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
   const { t } = useTranslation()
   const reached = CHAIN.indexOf(currentStep(stream))
   const open = CHAIN.indexOf(reachable(stream))
-  const status = (step: ChainStep, i: number) => {
-    if (step === 'group') return groupStatus(stream, group, t)
-    if (step === 'repository' && stream.idea) return repositoryStatus(stream, t)
-    if (step === 'design' && stream.repository) return designStatus(stream, t)
-    if (step === 'questions' && stream.design) return questionsStatus(stream, t)
-    if (step === 'options' && stream.scope) return optionsStatus(stream, t)
-    if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
-    if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
-    if (step === 'issues' && stream.issues) return issuesStatus(stream, t)
-    if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, notes, t)
-    return t(i === reached ? 'chain.soon' : 'chain.notStarted')
-  }
+  const status = (step: ChainStep, i: number) =>
+    stepStatus(stream, group, step, notes, t) ?? t(i === reached ? 'chain.soon' : 'chain.notStarted')
   return (
     <section className="card panel chain" aria-labelledby="chain-title">
       <h2 id="chain-title" className="panel-title caps">
@@ -289,14 +281,17 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
                 <span className={`chain-status ${light}`}>
                   {status(step, i)}
                 </span>
-                <span className="chain-role"><span className="role-tag ai">{t('chain.ai')}</span>{t(`chain.${step}.ai`)}</span>
-                {step !== 'issues' && (
+                {(i === reached || view === step) && (
+                  <span className="chain-role"><span className="role-tag ai">{t('chain.ai')}</span>{t(`chain.${step}.ai`)}</span>
+                )}
+                {(i === reached || view === step) && step !== 'issues' && (
                   <span className="chain-role"><span className="role-tag">{t('chain.you')}</span>{t(`chain.${step}.you`)}</span>
                 )}
               </span>
             </>
           )
-          const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}`
+          const compact = i !== reached && view !== step ? ' compact' : ''
+          const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}${compact}`
           return (
             <li key={step}>
               {i <= open
@@ -308,6 +303,45 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
         })}
       </ol>
     </section>
+  )
+}
+
+/** Что с шагом потока — словами, как в цепочке; шаг ещё не начат — null. */
+function stepStatus(stream: Stream, group: Group, step: ChainStep, notes: string | null, t: T): string | null {
+  if (step === 'group') return groupStatus(stream, group, t)
+  if (step === 'repository' && stream.idea) return repositoryStatus(stream, t)
+  if (step === 'design' && stream.repository) return designStatus(stream, t)
+  if (step === 'questions' && stream.design) return questionsStatus(stream, t)
+  if (step === 'options' && stream.scope) return optionsStatus(stream, t)
+  if (step === 'decisions' && stream.choices) return decisionsStatus(stream, t)
+  if (step === 'outcomes' && stream.decisions) return outcomesStatus(stream, t)
+  if (step === 'issues' && stream.issues) return issuesStatus(stream, t)
+  if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, notes, t)
+  return null
+}
+
+/**
+ * Плашка открытого шага: чего ждём — цветом, значком и словами. ИИ работает — зелёная, ход за вами — жёлтая, сбой —
+ * красная; готовый и не начатый шаг плашки не дают. Причину сбоя и кнопку повтора шаг показывает ниже, а ход
+ * каждой модели — колонка справа.
+ */
+function StepBanner({ stream, group, view, notes }: Readonly<{
+  stream: Stream; group: Group; view: ChainStep; notes: string | null
+}>) {
+  const { t } = useTranslation()
+  const light = chainLight(stream, view, notes)
+  if (light !== 'running' && light !== 'yours' && light !== 'failed') return null
+  const icon = { running: '◔', yours: '!', failed: '×' }[light]
+  return (
+    <div className={`banner ${light}`} role="status">
+      <span className="banner-icon" aria-hidden="true">{icon}</span>
+      <span className="banner-text">
+        <strong>{t(`banner.${light}`)}</strong> · {light === 'yours' && view !== 'issues'
+          ? t(`chain.${view}.you`) : stepStatus(stream, group, view, notes, t) ?? t(`chain.${view}`)}
+        {light === 'running' && <span className="banner-note"> {t('banner.runningNote')}</span>}
+        {light === 'failed' && <span className="banner-note"> {t('banner.failedNote')}</span>}
+      </span>
+    </div>
   )
 }
 
@@ -1630,7 +1664,13 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const found = new Map(search?.options.map(o => [o.question_id, o]) ?? [])
   const ownOf = (question: string) => squash(owned.get(question) ?? '')
   // Свой вариант без текста — ещё не выбор: такой сервер не примет.
-  const chosen = scope.filter(q => picked.has(q.id) && (picked.get(q.id) !== OWN || ownOf(q.id) !== '')).length
+  const answered = (question: string) => picked.has(question) && (picked.get(question) !== OWN || ownOf(question) !== '')
+  const chosen = scope.filter(q => answered(q.id)).length
+  // Вопрос выбран — готов; вариантов к нему ещё ищут — ИИ работает; иначе — ход за человеком.
+  const choiceSlides: Slide[] = scope.map(q => ({
+    id: q.id, title: q.text,
+    light: answered(q.id) ? 'done' : sought && !found.has(q.id) ? 'running' : 'yours',
+  }))
   // Пока ИИ работает с утверждённым выбором (проверяет, собирает итоги), выбор не поменять: 423.
   const checking = runningFrom(stream, 'analysis')
   const canApprove = !busy && !sought && !checking && !stale && search !== null && chosen === scope.length
@@ -1685,17 +1725,20 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
           </p>
         </div>
       )}
-      {scope.map(question => {
-        const kept = stream.choices?.find(c => c.question_id === question.id)
-        return (
-          <QuestionChoice key={question.id} question={question} options={found.get(question.id)}
-                          sought={sought} fragments={fragments} value={picked.get(question.id)}
-                          own={owned.get(question.id) ?? ''}
-                          ownId={kept?.text && squash(kept.text) === ownOf(question.id) ? kept.proposal : null}
-                          busy={busy} onPick={proposal => pick(question.id, proposal)}
-                          onOwn={text => setOwned(before => new Map(before).set(question.id, text))} />
-        )
-      })}
+      <Slider slides={choiceSlides} label={t('options.slides')} start={firstOpen(choiceSlides)}>
+        {n => {
+          const question = scope[n]
+          const kept = stream.choices?.find(c => c.question_id === question.id)
+          return (
+            <QuestionChoice key={question.id} question={question} options={found.get(question.id)}
+                            sought={sought} fragments={fragments} value={picked.get(question.id)}
+                            own={owned.get(question.id) ?? ''}
+                            ownId={kept?.text && squash(kept.text) === ownOf(question.id) ? kept.proposal : null}
+                            busy={busy} onPick={proposal => pick(question.id, proposal)}
+                            onOwn={text => setOwned(before => new Map(before).set(question.id, text))} />
+          )
+        }}
+      </Slider>
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
       {checking && <p className="fragment-note">{t('options.belowRunning')}</p>}
       <div className="stream-actions spread">
@@ -1837,6 +1880,18 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
     written.get(`${question}:${proposal}`) ?? suggested(question, proposal) ?? ''
   const decided = scope.filter(q => picked.get(q.id))
   const complete = decided.every(q => squash(rationaleOf(q.id, picked.get(q.id) ?? '')) !== '')
+  // Готово — решение есть: вариант с обоснованием (и подсказанным ИИ), или оно уже было (зафиксированное или
+  // прежнее к тому же выбору); проверку ещё ведут — ИИ работает; остальное — ход за человеком.
+  const settled = new Set(start.map(d => d.question_id))
+  const checked = new Map(analysis?.analyses.map(a => [a.question_id, a]) ?? [])
+  const decisionSlides: Slide[] = scope.map(q => {
+    const value = picked.get(q.id) ?? null
+    const reasoned = value !== null && squash(rationaleOf(q.id, value)) !== ''
+    let light: Slide['light'] = 'yours'
+    if (reasoned || (settled.has(q.id) && value === start.find(d => d.question_id === q.id)?.proposal)) light = 'done'
+    else if (sought && !checked.has(q.id)) light = 'running'
+    return { id: q.id, title: q.text, light }
+  })
   // Пока ИИ собирает итоги по решениям или нарезает их на задачи, их не поменять: сервер ответит 423.
   const assembling = runningFrom(stream, 'outcomes')
   const canApprove = !busy && !sought && !assembling && !stale && analysis !== null && complete
@@ -1898,25 +1953,30 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
           </p>
         </div>
       )}
-      {scope.map((question, n) => {
-        const value = picked.get(question.id) ?? null
-        const rationale = value ? rationaleOf(question.id, value) : ''
-        const fixed = stream.decisions?.find(d => d.question_id === question.id)
-        return (
-          <DecisionCard key={question.id} question={question} n={n + 1} options={optionsOf(question)}
-                        choice={stream.choices?.find(c => c.question_id === question.id)?.proposal ?? null}
-                        said={said.get(question.id)} sought={sought} value={value} rationale={rationale}
-                        byAi={value !== null && squash(rationale) === squash(suggested(question.id, value) ?? '')}
-                        fixed={fixed !== undefined && fixed.proposal === value
-                          && (value === null || fixed.rationale === squash(rationale))}
-                        busy={busy} onPick={proposal => setPicked(before => new Map(before).set(question.id, proposal))}
-                        onRationale={text => value && setWritten(before => new Map(before).set(`${question.id}:${value}`, text))} />
-        )
-      })}
+      <Slider slides={decisionSlides} label={t('decisions.slides')}
+              start={focus ? Math.max(scope.findIndex(q => q.id === focus), 0) : firstOpen(decisionSlides)}>
+        {n => {
+          const question = scope[n]
+          const value = picked.get(question.id) ?? null
+          const rationale = value ? rationaleOf(question.id, value) : ''
+          const fixed = stream.decisions?.find(d => d.question_id === question.id)
+          return (
+            <DecisionCard key={question.id} question={question} n={n + 1} options={optionsOf(question)}
+                          choice={stream.choices?.find(c => c.question_id === question.id)?.proposal ?? null}
+                          said={said.get(question.id)} sought={sought} value={value} rationale={rationale}
+                          byAi={value !== null && squash(rationale) === squash(suggested(question.id, value) ?? '')}
+                          fixed={fixed !== undefined && fixed.proposal === value
+                            && (value === null || fixed.rationale === squash(rationale))}
+                          busy={busy} onPick={proposal => setPicked(before => new Map(before).set(question.id, proposal))}
+                          onRationale={text => value && setWritten(before => new Map(before).set(`${question.id}:${value}`, text))} />
+          )
+        }}
+      </Slider>
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
       {assembling && <p className="fragment-note">{t('decisions.belowRunning')}</p>}
       <div className="stream-actions spread">
-        <span className="muted">{t('decisions.count', { count: decided.length, total: scope.length })}</span>
+        <span className="muted">{t('decisions.count', { count: decisionSlides.filter(slide => slide.light === 'done').length,
+                                                          total: scope.length })}</span>
         <button className="btn-primary large" disabled={!canApprove} onClick={submit}>{t('decisions.approve')}</button>
       </div>
     </>
@@ -2060,6 +2120,11 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
   // Утверждены — по ним уже нарезают задачи: утвердить те же ещё раз — ничего не поменять.
   const approved = stream.issues !== null && stream.issues.outcomes === run?.run
   const touched = run?.touched ?? []
+  // Итог готов — готов; его задевают новые решения или что-то держит — ход за человеком.
+  const outcomeSlides: Slide[] = (run?.outcomes ?? []).map(outcome => ({
+    id: outcome.id, title: outcome.title,
+    light: !touched.some(touch => touch.outcome_id === outcome.id) && outcomeReady(outcome) ? 'done' : 'yours',
+  }))
   const canApprove = run?.state === 'done' && run.outcomes.length > 0 && !approve.busy && !stale && touched.length === 0
   // Закреплённый итог, который задевают новые решения: оставить или пересобрать — решает человек.
   const settling = useAction(onChange)
@@ -2113,12 +2178,20 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
       )}
       {run?.state === 'done' && run.outcomes.length === 0 && <p className="muted">{t('outcomes.none')}</p>}
       {settling.error && <p className="error-text" role="alert">{settling.error}</p>}
-      {run?.outcomes.map((outcome, n) => (
-        <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
-                     fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept={run.kept.includes(outcome.id)}
-                     touch={touched.find(touch => touch.outcome_id === outcome.id)} busy={settling.busy}
-                     onSettle={rebuild => settle(outcome.id, rebuild)} />
-      ))}
+      {run && run.outcomes.length > 0 && (
+        // Новая сборка — и слайдер заново, с первого итога, который ждёт человека.
+        <Slider key={run.run} slides={outcomeSlides} label={t('outcomes.slides')} start={firstOpen(outcomeSlides)}>
+          {n => {
+            const outcome = run.outcomes[n]
+            return (
+              <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
+                           fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept={run.kept.includes(outcome.id)}
+                           touch={touched.find(touch => touch.outcome_id === outcome.id)} busy={settling.busy}
+                           onSettle={rebuild => settle(outcome.id, rebuild)} />
+            )
+          }}
+        </Slider>
+      )}
       {run && run.uncovered_adr_ids.length > 0 && (
         <p className="fragment-note">{t('outcomes.uncovered', { ids: run.uncovered_adr_ids.join(', ') })}</p>
       )}
@@ -2166,6 +2239,10 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
   const cut = () => void retry.go(() => startOrFollow(
     () => api.seekIssues(council.id, group.id), council, c => streamOf(c, group.id)?.issues))
   if (!run) return null
+  // Задачу можно брать — готова; её что-то держит — ход за человеком.
+  const issueSlides: Slide[] = run.issues.map(issue => ({
+    id: issue.id, title: issue.title, light: issueReady(issue) ? 'done' : 'yours',
+  }))
   const [first] = run.sources
   let code = t('issues.noCode')
   if (run.code && run.sources.length > 1) {
@@ -2196,11 +2273,19 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
         </div>
       )}
       {run.state === 'done' && run.issues.length === 0 && <p className="muted">{t('issues.none')}</p>}
-      {run.issues.map((issue, n) => (
-        <IssueCard key={issue.id} issue={issue} n={n + 1} adrs={adrs} questions={questions} outcomes={outcomes}
-                   gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} number={numbers.get(issue.id)}
-                   kept={run.kept.includes(issue.id)} />
-      ))}
+      {run.issues.length > 0 && (
+        // Новая нарезка — и слайдер заново, с первой задачи, которую что-то держит.
+        <Slider key={run.run} slides={issueSlides} label={t('issues.slides')} start={firstOpen(issueSlides)}>
+          {n => {
+            const issue = run.issues[n]
+            return (
+              <IssueCard key={issue.id} issue={issue} n={n + 1} adrs={adrs} questions={questions} outcomes={outcomes}
+                         gaps={run.gaps} fragments={fragments} onQuestion={onQuestion} number={numbers.get(issue.id)}
+                         kept={run.kept.includes(issue.id)} />
+            )
+          }}
+        </Slider>
+      )}
       {run.gaps.length > 0 && (
         <section className="card panel" aria-labelledby="issue-gaps-title">
           <h3 id="issue-gaps-title" className="panel-title">{t('issues.gapsTitle')}</h3>

@@ -215,6 +215,18 @@ const server = ({
     return json(council())
   }
 
+/**
+ * Карточка по заголовку. В слайдере видна одна: сначала открыть её фишку — у фишки подсказкой тот же заголовок.
+ * Вне слайдера — просто карточка.
+ */
+const slideTo = async (title: string) => {
+  await waitFor(() => expect(screen.queryAllByRole('tab').some(tab => tab.getAttribute('title') === title)
+    || screen.queryByRole('region', { name: title }) !== null).toBe(true))
+  const chip = screen.queryAllByRole('tab').find(tab => tab.getAttribute('title') === title)
+  if (chip && chip.getAttribute('aria-selected') !== 'true') fireEvent.click(chip)
+  return screen.findByRole('region', { name: title })
+}
+
 const renderAt = (path: string) => render(<RouterProvider router={createMemoryRouter([{
   path: '/', element: <App />, children: [
     { index: true, element: <HomePage /> },
@@ -691,13 +703,15 @@ describe('Поток: группа и идея', () => {
     expect(within(first).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()
     expect(within(first).getByText(ru['options.recommended'])).toBeTruthy()
     expect(within(first).getByText('зависит от: Q2')).toBeTruthy()
-    expect(screen.getByText('Новых вариантов нет: всё уже есть')).toBeTruthy()
     const approve = screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
     expect(approve.disabled).toBe(true)
     expect(screen.getByText('Выбрано 0 из 2')).toBeTruthy()
 
     fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
-    const second = screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    // Q2 — следующая карточка слайдера; фишка Q1 уже «готово».
+    expect(screen.getByRole('tab', { name: /Q1, готово/ })).toBeTruthy()
+    const second = await slideTo('Как понять, что воркер не теряет результат?')
+    expect(within(second).getByText('Новых вариантов нет: всё уже есть')).toBeTruthy()
     fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
     expect(screen.getByText('Выбрано 2 из 2')).toBeTruthy()
     fireEvent.click(approve)
@@ -706,7 +720,37 @@ describe('Поток: группа и идея', () => {
       run: 'g1', revision: 0, proposals_run: 'p1',
       choices: [{ question_id: 'Q1', proposal: 'P1' }, { question_id: 'Q2', proposal: null }] } }])
     expect(screen.getAllByText('P1 · Хранить в SQLite')).toHaveLength(2)   // ваш выбор и решение в ADR
-    expect(screen.getAllByText(ru['decisions.checking'])).toHaveLength(2)    // оба вопроса ещё проверяют
+    expect(screen.getByText(ru['decisions.checking'])).toBeTruthy()          // Q1 ещё проверяют — и Q2:
+    expect(screen.getByRole('tab', { name: /Q2, ИИ работает/ })).toBeTruthy()
+  })
+
+  it('варианты — слайдером: по карточке на вопрос, ← → с клавиатуры, сверху — чей ход', async () => {
+    const proposals: ProposalDiscovery = { state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals } }))
+    const slider = await screen.findByRole('region', { name: ru['options.slides'] })
+    expect(within(slider).getByText('готово 0 из 2')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain(ru['banner.yours'])
+    expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()
+    fireEvent.keyDown(slider, { key: 'ArrowRight' })
+    expect(screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })).toBeTruthy()
+    expect(screen.queryByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeNull()
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()
+    // Стрелки в поле ввода — его, а не слайдера.
+    fireEvent.click(screen.getByRole('radio', { name: /Свой вариант/ }))
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Свой вариант к Q1' }), { key: 'ArrowRight' })
+    expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()
+  })
+
+  it('цепочка: роли ИИ и ваша — только у текущего и открытого шага, остальные одной строкой', async () => {
+    const proposals: ProposalDiscovery = { state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
+                                    { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals } }))
+    const chain = await screen.findByRole('region', { name: /Цепочка/ })
+    expect(within(chain).getAllByText(ru['chain.you'])).toHaveLength(1)
+    expect(within(chain).getByText(ru['chain.options.you'])).toBeTruthy()
+    expect(within(chain).queryByText(ru['chain.group.you'])).toBeNull()
   })
 
   it('свой вариант пишут прямо у вопроса — он уходит на сервер текстом, а номер даёт сервер', async () => {
@@ -729,18 +773,21 @@ describe('Поток: группа и идея', () => {
     const own = screen.getByRole('textbox', { name: 'Свой вариант к Q1' })
     expect(document.activeElement).toBe(own)
     expect(screen.getByText(ru['options.ownEmpty'])).toBeTruthy()
-    const second = screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    const second = await slideTo('Как понять, что воркер не теряет результат?')
     fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
     const approve = screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement
     expect(screen.getByText('Выбрано 1 из 2')).toBeTruthy()          // пустой свой — ещё не выбор
     expect(approve.disabled).toBe(true)
 
-    fireEvent.change(own, { target: { value: '  Хранить   в Redis ' } })
+    // Назад к Q1: свой вариант выбран — пишут его текст.
+    const back = await slideTo('Где хранить состояние?')
+    fireEvent.change(within(back).getByRole('textbox', { name: 'Свой вариант к Q1' }),
+                     { target: { value: '  Хранить   в Redis ' } })
     expect(screen.queryByText(ru['options.ownEmpty'])).toBeNull()
     // Выбрали другой и вернулись — текст на месте.
-    fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
+    fireEvent.click(within(back).getByRole('radio', { name: /Хранить в SQLite/ }))
     expect(screen.queryByRole('textbox', { name: 'Свой вариант к Q1' })).toBeNull()
-    fireEvent.click(within(first).getByRole('radio', { name: /Свой вариант/ }))
+    fireEvent.click(within(back).getByRole('radio', { name: /Свой вариант/ }))
     expect((screen.getByRole('textbox', { name: 'Свой вариант к Q1' }) as HTMLTextAreaElement).value).toBe('  Хранить   в Redis ')
     expect(screen.getByText('Выбрано 2 из 2')).toBeTruthy()
     fireEvent.click(approve)
@@ -757,7 +804,7 @@ describe('Поток: группа и идея', () => {
       questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals,
       choices: [{ question_id: 'Q1', proposal: 'F2' }, { question_id: 'Q2', proposal: 'P1', text: 'Считать потери' }] } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['decisions.change'] }))
-    const second = await screen.findByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })
+    const second = await slideTo('Как понять, что воркер не теряет результат?')
     const own = within(second).getByRole('radio', { name: /Свой вариант/ }) as HTMLInputElement
     expect(own.checked).toBe(true)
     expect(within(second).getByText('P1')).toBeTruthy()
@@ -776,7 +823,9 @@ describe('Поток: группа и идея', () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
                                     { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals: seeking } }))
     expect(await screen.findByText(ru['options.noneShort'])).toBeTruthy()       // Q1 готов
-    expect(screen.getByText(ru['options.seeking'])).toBeTruthy()                // Q2 ещё ищут
+    expect(screen.getByRole('tab', { name: /Q2, ИИ работает/ })).toBeTruthy()
+    expect(within(await slideTo('Как понять, что воркер не теряет результат?'))
+      .getByText(ru['options.seeking'])).toBeTruthy()                           // Q2 ещё ищут
     expect(screen.getByText(ru['options.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['options.approve'] }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -1041,7 +1090,7 @@ describe('Поток: решения и итоги', () => {
   const deciding = (more: Partial<Stream> = {}) => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: {
     questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals: OPTIONS, analysis: CHECKED,
     choices: [{ question_id: 'Q1', proposal: 'F2' }, { question_id: 'Q2', proposal: null }], ...more } })
-  const card = (question: string) => screen.findByRole('region', { name: question })
+  const card = (question: string) => slideTo(question)
   const fix = () => screen.getByRole('button', { name: ru['decisions.approve'] }) as HTMLButtonElement
   const why = (question: string) => screen.getByRole('textbox', { name: `Почему ${question}` }) as HTMLTextAreaElement
 
@@ -1293,8 +1342,12 @@ describe('Поток: решения и итоги', () => {
         analysis: null, decision: { question_id: 'Q2', proposal: 'P2', rationale: 'Старое.', rationale_by: 'human' as const } }]
     openStream(() => deciding({ earlier }))
     expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
-    expect(why('Q1').value).toBe('Своё обоснование.')
+    // Открыта первая, где ещё нет ответа: Q2 (прежнее решение — к другому выбору); Q1 уже готов.
+    expect(screen.getByRole('tab', { name: /Q2/, selected: true })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q1, готово/ })).toBeTruthy()
     expect(screen.queryByDisplayValue('Старое.')).toBeNull()
+    await slideTo(QUESTIONS_FOUND.questions[0].text)
+    expect(why('Q1').value).toBe('Своё обоснование.')
   })
 
   it('у итога — его номер, а не место в списке: после пересборки номера идут с пропусками', async () => {
@@ -1321,13 +1374,28 @@ describe('Поток: решения и итоги', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: ru['outcomes.approve'] }) as HTMLButtonElement).disabled).toBe(false))
   })
 
+  it('сбой и работа ИИ — цветной плашкой над шагом: что случилось и где смотреть', async () => {
+    const failed: OutcomeDiscovery = { ...ASSEMBLED, state: 'failed', outcomes: [], error: 'судья fable: лимит' }
+    openStream(() => deciding({ decisions: FIXED, outcomes: failed }))
+    const banner = await screen.findByRole('status')
+    expect(banner.className).toContain('failed')
+    expect(banner.textContent).toContain(ru['banner.failed'])
+    expect(banner.textContent).toContain(ru['banner.failedNote'])
+    cleanup()
+    const running: OutcomeDiscovery = { ...ASSEMBLED, state: 'running', outcomes: [] }
+    openStream(() => deciding({ decisions: FIXED, outcomes: running }))
+    const working = await screen.findByRole('status')
+    expect(working.className).toContain('running')
+    expect(working.textContent).toContain(ru['banner.running'])
+  })
+
   it('сборка итогов упала — причина видна, её запускают снова', async () => {
     const failed: OutcomeDiscovery = { ...ASSEMBLED, state: 'failed', outcomes: [], error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     openStream(() => deciding({ decisions: FIXED, outcomes: failed }),
                () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED })))
     expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
-    expect(await screen.findByText('Состояние в файлах')).toBeTruthy()
+    expect(await slideTo('Состояние в файлах')).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes/discovery', body: undefined }])
   })
 
@@ -1701,7 +1769,7 @@ describe('Поток: решения и итоги', () => {
                () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT })))
     expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
-    expect(await screen.findByText('Сохранять состояние в файлы')).toBeTruthy()
+    expect(await slideTo('Сохранять состояние в файлы')).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'issues/discovery', body: undefined }])
   })
 })
