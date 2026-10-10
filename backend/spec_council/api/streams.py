@@ -58,10 +58,12 @@ from ..models import (
     Group,
     GroupsEdit,
     IdeaDiscovery,
+    Issue,
     IssueDiscovery,
     LabeledFragment,
     NotesDraft,
     OpenQuestion,
+    Outcome,
     OutcomeDiscovery,
     ProjectDecision,
     Proposal,
@@ -74,6 +76,7 @@ from ..models import (
     ScannedRepository,
     ScanRepository,
     SelectDecisions,
+    SettleTouch,
     Stream,
     StreamIdea,
 )
@@ -116,7 +119,16 @@ from ..repository import (
     sources_of,
     working_copy,
 )
-from ..work import carried_analyses, carried_options, earlier_choices, kept_work, last_used
+from ..work import (
+    carried_analyses,
+    carried_options,
+    cutting_plan,
+    earlier_choices,
+    kept_outcomes,
+    kept_work,
+    last_used,
+    remembered,
+)
 from .councils import (
     CANNOT_START,
     MISSING,
@@ -145,7 +157,7 @@ RESLICED = "Типы фрагментов поменялись после рас
 # Всё, что ниже отбора решений проекта: другой отбор это сбрасывает.
 BELOW_DECISIONS = {"questions": None, "scope": None, "proposals": None, "choices": None,
                    "analysis": None, "decisions": None, "outcomes": None, "issues": None,
-                   "earlier": [], "asked": 0}
+                   "earlier": [], "asked": 0, "earlier_outcomes": None, "earlier_issues": None}
 # Всё, что ниже шагов «Репозиторий» и «Дизайн»: другой скан, другой выбор на шаге или другая
 # идея это сбрасывает — и отбор решений проекта тоже.
 BELOW_DESIGN = {"decisions_search": None, "project_decisions": None, **BELOW_DECISIONS}
@@ -937,7 +949,7 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
                 proposals = runs[0].state.model_copy(deep=True)
             changes |= {"proposals": proposals, "choices": None, "analysis": None,
                         "decisions": None, "outcomes": None, "issues": None,
-                        "earlier": kept_work(stream)}
+                        "earlier": kept_work(stream), **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1051,7 +1063,7 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
                     update={"choices": choices}), agents, store, carried)]
                 analysis = runs[0].state.model_copy(deep=True)
             changes |= {"analysis": analysis, "decisions": None, "outcomes": None,
-                        "issues": None, "earlier": kept_work(stream)}
+                        "issues": None, "earlier": kept_work(stream), **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1230,14 +1242,16 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
         changes: dict = {"decisions": decisions}
         runs: list[CouncilRun] = []
         if assembles_anew(stream, decisions):
+            kept = kept_outcomes(stream, stream.scope, decisions)
             if missing:
-                outcomes = unconnected(
-                    start_outcomes(council.participants, council.judge, decisions), missing)
+                outcomes = unconnected(start_outcomes(
+                    council.participants, council.judge, decisions, [o.id for o in kept]),
+                    missing)
             else:
                 runs = [outcome_run(council, group, stream.model_copy(
-                    update={"decisions": decisions}), agents, store)]
+                    update={"decisions": decisions}), agents, store, kept)]
                 outcomes = runs[0].state.model_copy(deep=True)
-            changes |= {"outcomes": outcomes, "issues": None}
+            changes |= {"outcomes": outcomes, "issues": None, **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1290,7 +1304,8 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
                           stream.proposals, fragments_of(council, group_of(council, group)),
                           council.participants, council.judge, agents, report,
                           choices=stream.choices or (), repository=repository_map(stream),
-                          design=design_map(stream))
+                          design=design_map(stream),
+                          kept=kept_outcomes(stream, stream.scope, stream.decisions))
 
     expired_before(store, council_id, group, assembling(group),
                    lambda council: changed_choice(notes_of(council), checked(council)))
@@ -1318,6 +1333,9 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         approvable(stream, edit.outcomes_run)
+        if stream.outcomes.touched:
+            raise HTTPException(409, "Новые решения задевают закреплённые итоги — сначала решите "
+                                     "по каждому: оставить как есть или пересобрать")
         anew = cuts_anew(stream, edit.outcomes_run)
         if anew and running(stream.issues):
             raise HTTPException(423, "Совет ещё нарезает прежние итоги — дождитесь его")
@@ -1334,21 +1352,30 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
         # Те же итоги (повтор, ответ потерялся): ничего не меняется, и код не читаем — его
         # может уже и не быть.
         return council
-    sources = code_of(stream_in(council, group), repositories)
+    # Нарезать нечего (все итоги покрыты перенесёнными задачами) — и код не нужен.
+    sources = (code_of(stream_in(council, group), repositories)
+               if cutting_plan(stream_in(council, group))[1] else [])
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
         runs: list[CouncilRun] = []
         if not cuts_anew(stream, edit.outcomes_run):
             return council, runs
-        if missing:
+        carried, cut = cutting_plan(stream)
+        if missing and cut:
             issues = unconnected(start_issues(council.participants, council.judge,
                                               edit.outcomes_run), missing)
         else:
-            runs = [issue_run(council, group, stream, sources, agents, store)]
-            issues = runs[0].state.model_copy(deep=True)
-        return store.update_council(council_id, {
-            "streams": replaced(council, stream.model_copy(update={"issues": issues}))}), runs
+            run = issue_run(council, group, stream, sources, agents, store,
+                            carried=carried, cut=cut)
+            if cut:
+                runs = [run]
+                issues = run.state.model_copy(deep=True)
+            else:
+                issues = run.run()       # без моделей: только перенесённые задачи
+        return store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
+            update={"issues": issues,
+                    "earlier_issues": remembered(stream)["earlier_issues"]}))}), runs
 
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
 
@@ -1389,10 +1416,57 @@ def start_issue_discovery(council_id: str, group: str, store: StoreDep, config: 
 
     def build(council: Council, report: Callable) -> IssueRun:
         stream = stream_in(council, group)
-        return issue_run(council, group, stream, sources, agents, store, report=report)
+        carried, cut = cutting_plan(stream)
+        return issue_run(council, group, stream, sources, agents, store, report=report,
+                         carried=carried, cut=cut)
 
     return start_run(council_id, store, config, agents, launch, cutting(group), ready, None,
                      build)
+
+
+@router.post("/{council_id}/streams/{group}/outcomes/touched", status_code=200,
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
+                        409: {"description": "Итоги уже собрали заново или пометки нет"},
+                        423: {"description": "Совет ещё работает с итогами"}})
+def settle_touch(council_id: str, group: str, edit: SettleTouch, store: StoreDep,
+                 config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                 notes_of: NotesOfDep) -> Council:
+    """Новое решение задевает закреплённый итог — человек решает: оставить итог как есть
+    (пометка снимается) или пересобрать его — итоги собираются заново без этого итога
+    среди закреплённых, задачи нарежут заново к новым итогам."""
+    def plan() -> tuple[Council, bool]:
+        council = current(council_id, store, edit)
+        stream = stream_in(council, group)
+        approvable(stream, edit.outcomes_run)
+        if not any(t.outcome_id == edit.outcome_id for t in stream.outcomes.touched):
+            raise HTTPException(409, f"Итог {edit.outcome_id} уже ничто не задевает")
+        if edit.rebuild and below_running(stream, "outcomes"):
+            raise HTTPException(423, "Совет ещё работает с итогами — дождитесь его")
+        if edit.rebuild:
+            expired(store, council, stream, changed_choice(notes_of(council), stream))
+        return council, edit.rebuild
+
+    def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
+        stream = stream_in(council, group)
+        runs: list[CouncilRun] = []
+        if not edit.rebuild:
+            touched = [t for t in stream.outcomes.touched if t.outcome_id != edit.outcome_id]
+            changes: dict = {"outcomes": stream.outcomes.model_copy(update={"touched": touched})}
+        else:
+            kept = [outcome for outcome in kept_outcomes(stream, stream.scope, stream.decisions)
+                    if outcome.id != edit.outcome_id]
+            if missing:
+                outcomes = unconnected(start_outcomes(
+                    council.participants, council.judge, stream.decisions,
+                    [o.id for o in kept]), missing)
+            else:
+                runs = [outcome_run(council, group, stream, agents, store, kept)]
+                outcomes = runs[0].state.model_copy(deep=True)
+            changes = {"outcomes": outcomes, "issues": None, **remembered(stream)}
+        return store.update_council(council_id, {
+            "streams": replaced(council, stream.model_copy(update=changes))}), runs
+
+    return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
 
 
 def approvable(stream: Stream, outcomes_run: str) -> None:
@@ -1445,11 +1519,14 @@ def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
 
 
 def issue_run(council: Council, group: str, stream: Stream, sources: list[Source],
-              runner: Runner, store: Store, report: Callable | None = None) -> IssueRun:
+              runner: Runner, store: Store, report: Callable | None = None, *,
+              carried: list[Issue] | None = None, cut: list[str] | None = None) -> IssueRun:
+    """carried — задачи закреплённых итогов, которые переносятся; cut — что ещё нарезать."""
     return IssueRun(council.id, stream, fragments_of(council, group_of(council, group)),
                     council.participants, council.judge, runner,
                     report or reporter(store, council.id, cutting(group)), sources=sources,
-                    repository=repository_map(stream), design=design_map(stream))
+                    repository=repository_map(stream), design=design_map(stream),
+                    carried=carried or [], cut=cut)
 
 
 def decided(scope: list[OpenQuestion], found: dict[str, list[Proposal]],
@@ -1672,13 +1749,13 @@ def decision_run(council: Council, group: str, stream: Stream, runner: Runner,
 
 
 def outcome_run(council: Council, group: str, stream: Stream, runner: Runner,
-                store: Store) -> OutcomeRun:
+                store: Store, kept: list[Outcome]) -> OutcomeRun:
     return OutcomeRun(council.id, stream.idea.text, stream.scope, stream.decisions,
                       stream.proposals, fragments_of(council, group_of(council, group)),
                       council.participants, council.judge, runner,
                       reporter(store, council.id, assembling(group)),
                       choices=stream.choices or (), repository=repository_map(stream),
-                      design=design_map(stream))
+                      design=design_map(stream), kept=kept)
 
 
 def find_stream(council: Council, group: str) -> Stream | None:

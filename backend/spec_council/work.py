@@ -8,21 +8,30 @@
 
 Соседи у перенесённого вопроса поменялись, а его варианты и проверку искали без них: это
 осознанно — новый вопрос, в свою очередь, видит все остальные.
+
+То же с итогами и задачами: итог, который был готов и чьи решения те же, закрепляется — его не
+пересобирают, а модели видят его данностью; задачи такого итога (тот же итог — те же задачи,
+ничто их не держит) переносятся, а не нарезаются заново: они уже в разработке.
 """
 
 from collections.abc import Iterable
 
 from .models import (
     Choice,
+    Decision,
     DecisionAnalysis,
+    Issue,
+    IssueDiscovery,
     OpenQuestion,
+    Outcome,
+    OutcomeDiscovery,
     ProposalDiscovery,
     QuestionAnalysis,
     QuestionOptions,
     QuestionWork,
     Stream,
 )
-from .pipeline import choice_entry, question_key
+from .pipeline import choice_entry, decisions_key, outcome_print, question_key
 
 
 def keys_of(scope: Iterable[OpenQuestion]) -> dict[str, str]:
@@ -117,3 +126,89 @@ def last_used(stream: Stream) -> int:
     ids += [decision.proposal for decision in stream.decisions or []]
     return max((int(i[1:]) for i in ids if i and i.startswith("P") and i[1:].isdigit()),
                default=0)
+
+
+def outcome_ready(outcome: Outcome) -> bool:
+    """Итог готов к разработке: его не держат ни открытые вопросы, ни пробелы, и есть чем
+    проверить, что он сделан."""
+    return not outcome.blocked_by and not outcome.gaps and bool(outcome.acceptance_criteria)
+
+
+def remembered(stream: Stream) -> dict[str, OutcomeDiscovery | IssueDiscovery | None]:
+    """Что запомнить, когда правка снимает итоги и задачи: последние собранные и нарезанные — из
+    них закрепят готовое, а не соберут и не нарежут заново."""
+    outcomes = stream.outcomes if stream.outcomes and stream.outcomes.state == "done" else None
+    issues = stream.issues if stream.issues and stream.issues.state == "done" else None
+    return {"earlier_outcomes": outcomes or stream.earlier_outcomes,
+            "earlier_issues": issues or stream.earlier_issues}
+
+
+def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Decision],
+                  released: Iterable[str] = ()) -> list[Outcome]:
+    """Итоги, которые закрепляются при новой сборке: были готовы, и каждое их решение — то же
+    (тот же вопрос, вариант и обоснование). Номера решений — по новому отбору: ADR-n — n-й
+    вопрос, и вопросы могли добавить или убрать. released — итоги, которые человек велел
+    пересобрать."""
+    before = remembered(stream)["earlier_outcomes"]
+    if not isinstance(before, OutcomeDiscovery):
+        return []
+    now = {decision.question_id: decision for decision in decisions}
+    position = {question.id: n for n, question in enumerate(scope, 1)}
+    kept = []
+    for outcome in before.outcomes:
+        if outcome.id in set(released) or not outcome_ready(outcome):
+            continue
+        adrs = []
+        for name in outcome.adr_ids:
+            n = int(name.split("-")[1])
+            entry = before.decisions[n - 1] if 0 < n <= len(before.decisions) else ""
+            question = entry.split(": ", 1)[0]
+            decision = now.get(question)
+            if (decision is None or decision.proposal is None
+                    or decisions_key([decision])[0] != entry or question not in position):
+                break
+            adrs.append(f"ADR-{position[question]}")
+        else:
+            if adrs:
+                kept.append(outcome.model_copy(update={
+                    "adr_ids": sorted(adrs, key=lambda name: int(name.split("-")[1]))}))
+    return kept
+
+
+def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
+    """Задачи прежней нарезки, которые остаются: каждый их итог — тот же, что тогда нарезали,
+    задача ничем не заблокирована, и всё, от чего она зависит, тоже остаётся. Они уже в
+    разработке — их не нарезают заново."""
+    before = remembered(stream)["earlier_issues"]
+    if not isinstance(before, IssueDiscovery):
+        return []
+    prints = {outcome.id: outcome_print(outcome) for outcome in outcomes}
+    fit = {issue.id: issue for issue in before.issues
+           if not issue.blocked_by and issue.outcome_ids
+           and all(name in prints and before.cut.get(name) == prints[name]
+                   for name in issue.outcome_ids)}
+    while dropped := [name for name, issue in fit.items()
+                      if any(other not in fit for other in issue.depends_on)]:
+        for name in dropped:
+            del fit[name]
+    return [issue for issue in before.issues if issue.id in fit]
+
+
+def uncut(stream: Stream, outcomes: list[Outcome], carried: list[Issue]) -> list[str]:
+    """Итоги, которые ещё надо нарезать: все, кроме целиком покрытых перенесёнными задачами —
+    у такого итога есть перенесённая задача, и ни одной его прежней задачи не потеряли."""
+    before = remembered(stream)["earlier_issues"]
+    previous = before.issues if isinstance(before, IssueDiscovery) else []
+    kept = {issue.id for issue in carried}
+    covered = {name for issue in carried for name in issue.outcome_ids}
+    lost = {name for issue in previous if issue.id not in kept for name in issue.outcome_ids}
+    return [outcome.id for outcome in outcomes
+            if outcome.id not in covered or outcome.id in lost]
+
+
+def cutting_plan(stream: Stream) -> tuple[list[Issue], list[str]]:
+    """Что перенести и что нарезать: задачи прежней нарезки тех же итогов и итоги, которые
+    ими не покрыты."""
+    outcomes = stream.outcomes.outcomes if stream.outcomes else []
+    carried = carried_issues(stream, outcomes)
+    return carried, uncut(stream, outcomes, carried)

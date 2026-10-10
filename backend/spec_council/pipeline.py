@@ -124,6 +124,7 @@ from .models import (
     Outcome,
     OutcomeDiscovery,
     OutcomeGap,
+    OutcomeTouch,
     ProjectDecision,
     Proposal,
     ProposalDiscovery,
@@ -143,7 +144,7 @@ from .models import (
 from .notes import Catalog
 from .outcomes import Context as OutcomeContext
 from .outcomes import as_prompt as outcome_prompt
-from .outcomes import outcome_list, same_outcomes
+from .outcomes import assembly_of, same_assembly, touch_prompt
 from .project import (
     catalog_print,
     catalog_prompt,
@@ -341,12 +342,20 @@ def decisions_key(decisions: list[Decision]) -> list[str]:
     return [f"{d.question_id}: {d.proposal or '-'}: {d.rationale or ''}" for d in decisions]
 
 
-def start_outcomes(participants: list[str], judge: str,
-                   decisions: list[Decision]) -> OutcomeDiscovery:
+def start_outcomes(participants: list[str], judge: str, decisions: list[Decision],
+                   kept: Iterable[str] = ()) -> OutcomeDiscovery:
+    """kept — номера закреплённых итогов: их не пересобирают."""
     return OutcomeDiscovery(state="running", run=uuid4().hex[:8],
-                            decisions=decisions_key(decisions),
+                            decisions=decisions_key(decisions), kept=list(kept),
                             steps=steps(participants, judge,
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
+
+
+def outcome_print(outcome: Outcome) -> str:
+    """Итог, каким его нарезали на задачи: тот же — его задачи переносятся. Номера решений —
+    не в счёт: они сдвигаются вместе с отбором, а итог тот же."""
+    return json.dumps([outcome.title, outcome.behavior, sorted(outcome.acceptance_criteria),
+                       outcome.constraint_ids, outcome.risk_ids], ensure_ascii=False)
 
 
 def start_issues(participants: list[str], judge: str, outcomes_run: str) -> IssueDiscovery:
@@ -1115,7 +1124,11 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
     изменения системы, судья сводит их наборы в итоговый. Итог, которому не хватает решения
     открытого вопроса, заблокирован им — недостающее не додумывается. Решения — ADR-n по
     номеру вопроса в отборе; открытый вопрос решения не имеет. Какие решения не вошли ни в
-    один итог, считает код, а не модель."""
+    один итог, считает код, а не модель.
+
+    kept — закреплённые итоги (были готовы, их решения те же): модели видят их данностью и
+    собирают только остальное, а если новое решение такой итог задевает — говорят об этом
+    (touches), и решает человек. Закреплённые сохраняют номера, новые нумеруются дальше."""
 
     what = "сборка итогов"
 
@@ -1125,10 +1138,13 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
                  runner: Runner, report: Callable[[OutcomeDiscovery], None], *,
                  choices: Sequence[Choice] = (),
                  repository: str = context_prompt(None),
-                 design: str = design_context(None)) -> None:
+                 design: str = design_context(None),
+                 kept: Sequence[Outcome] = ()) -> None:
         """choices — выбор человека: из него свои варианты, которыми можно было решить."""
+        self.kept = list(kept)
         super().__init__(council_id, participants, judge, runner, report,
-                         start_outcomes(participants, judge, decisions))
+                         start_outcomes(participants, judge, decisions,
+                                        [outcome.id for outcome in self.kept]))
         self.idea = idea
         self.repository = repository
         self.design = design
@@ -1145,40 +1161,51 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             frozenset(f.id for f in limits if f.label == "constraint"),
             frozenset(f.id for f in limits if f.label == "risk"),
             frozenset(q["id"] for q in questions if q["status"] == "open"),
-            {same_question(q.text): q.id for q in self.scope})
+            {same_question(q.text): q.id for q in self.scope},
+            {outcome.id: frozenset(outcome.adr_ids) for outcome in self.kept})
         values = {
             "idea": self.idea,
             "questions_and_proposals": as_json(questions),
             "accepted_adrs": as_json(adrs),
+            "fixed_outcomes": as_json([{
+                "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
+                "adr_ids": outcome.adr_ids,
+                "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
+                "risk_ids": [f"F{i}" for i in outcome.risk_ids],
+                "acceptance_criteria": outcome.acceptance_criteria} for outcome in self.kept]),
             "constraints_and_risks": limits_prompt(limits),
             "repository": self.repository,
             "design": self.design,
         }
         answers = self._ask_all(StepName.outcome_discovery, render("outcome_discovery", **values),
-                                partial(outcome_list, context=context))
+                                partial(assembly_of, context=context))
         # Одинаковые наборы — один; порядок итогов — как у первого, кто его прислал.
-        sets: dict[str, list] = {}
+        sets: dict[str, Any] = {}
         for found in answers.values():
-            sets.setdefault(same_outcomes(found), found)
+            sets.setdefault(same_assembly(found), found)
         if len(answers) > 1 and len(sets) == 1:
             self._skip(StepName.outcome_judge)
             chosen = next(iter(sets.values()))
         else:
-            variants = shuffled([{"outcomes": [outcome_prompt(c) for c in found]}
+            variants = shuffled([{"outcomes": [outcome_prompt(c) for c in found.outcomes],
+                                  "touches": [touch_prompt(t) for t in found.touches]}
                                  for found in sets.values()])
             prompt = render("outcome_judge", **values, outcome_candidates=as_json(
                 [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
             chosen = self._ask_judge(StepName.outcome_judge, prompt,
-                                     partial(outcome_list, context=context))
-        outcomes = [Outcome(id=f"O{n}", title=c.title, behavior=c.behavior,
-                            adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
-                            risk_ids=list(c.risk_ids), acceptance_criteria=list(c.criteria),
-                            blocked_by=list(c.blocked_by),
-                            gaps=[OutcomeGap(question=g.question, reason=g.reason)
-                                  for g in c.gaps])
-                    for n, c in enumerate(chosen, 1)]
+                                     partial(assembly_of, context=context))
+        first = max((int(outcome.id[1:]) for outcome in self.kept), default=0) + 1
+        outcomes = [*self.kept, *(
+            Outcome(id=f"O{n}", title=c.title, behavior=c.behavior,
+                    adr_ids=list(c.adr_ids), constraint_ids=list(c.constraint_ids),
+                    risk_ids=list(c.risk_ids), acceptance_criteria=list(c.criteria),
+                    blocked_by=list(c.blocked_by),
+                    gaps=[OutcomeGap(question=g.question, reason=g.reason) for g in c.gaps])
+            for n, c in enumerate(chosen.outcomes, first))]
         covered = {name for outcome in outcomes for name in outcome.adr_ids}
         return {"outcomes": outcomes,
+                "touched": [OutcomeTouch(outcome_id=t.outcome_id, adr_ids=list(t.adr_ids),
+                                         reason=t.reason) for t in chosen.touches],
                 "uncovered_adr_ids": [adr["id"] for adr in adrs if adr["id"] not in covered]}
 
 
@@ -1285,7 +1312,12 @@ class IssueRun(CouncilRun[IssueDiscovery]):
     проверяются по коду, а карта скана идёт им в помощь; без скана кода нет. Задачу, которой
     не хватает решения, блокирует пробел или открытый вопрос — недостающее не додумывается.
     Номера задач (I-n) и пробелов (G-n) — по порядку у судьи; какие итоги не вошли ни в одну
-    задачу, считает код, а не модель."""
+    задачу, считает код, а не модель.
+
+    carried — задачи прежней нарезки тех же итогов, которые ничто не держит: они уже в
+    разработке, их не нарезают заново, а модели видят их данностью; cut — номера итогов, которые
+    ещё надо нарезать (остальные целиком покрыты перенесёнными задачами). Новые задачи нумеруются
+    дальше перенесённых."""
 
     what = "нарезка на задачи"
 
@@ -1295,10 +1327,13 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                  sources: Sequence[Source] = (),
                  repository: str = context_prompt(None),
                  design: str = design_context(None),
-                 copy: Copier = snapshot_all) -> None:
+                 copy: Copier = snapshot_all,
+                 carried: Sequence[Issue] = (), cut: Iterable[str] | None = None) -> None:
         """stream — поток с утверждёнными итогами: его идея, отбор, решения, варианты и итоги."""
         super().__init__(council_id, participants, judge, runner, report,
                          start_issues(participants, judge, stream.outcomes.run))
+        self.carried = list(carried)
+        self.cut = set(cut) if cut is not None else {o.id for o in stream.outcomes.outcomes}
         self.idea = stream.idea.text
         self.scope = stream.scope or []
         self.decisions = {decision.question_id: decision for decision in stream.decisions or []}
@@ -1311,6 +1346,11 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         self.copy = copy
 
     def work(self) -> dict[str, Any]:
+        if not self.cut:
+            # Все итоги покрыты перенесёнными задачами: ни моделей, ни кода не нужно.
+            self._skip(StepName.issue_discovery)
+            self._skip(StepName.issue_judge)
+            return self._numbered(IssueAnswer((), ()))
         with self._reading(self.sources, self.copy) as folder:
             if folder is not None:
                 # Снимок есть — модели читают этот код: с каких он коммитов и с правками ли.
@@ -1323,8 +1363,9 @@ class IssueRun(CouncilRun[IssueDiscovery]):
     def _cut(self) -> dict[str, Any]:
         questions, adrs, limits = decided_context(self.scope, self.decisions,
                                                   self.found_proposals, self.fragments)
+        uncut = [outcome for outcome in self.outcomes if outcome.id in self.cut]
         context = IssueContext(
-            frozenset(outcome.id for outcome in self.outcomes),
+            frozenset(outcome.id for outcome in uncut),
             frozenset(adr["id"] for adr in adrs),
             frozenset(f.id for f in limits if f.label == "constraint"),
             frozenset(f.id for f in limits if f.label == "risk"),
@@ -1333,7 +1374,7 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             {o.id: Parent(tuple(o.adr_ids), tuple(o.constraint_ids), tuple(o.risk_ids),
                           tuple(o.blocked_by), tuple((g.question, g.reason) for g in o.gaps),
                           tuple(o.acceptance_criteria))
-             for o in self.outcomes})
+             for o in uncut})
         opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
                   for q in questions if q["status"] == "open"}
         values = {
@@ -1347,8 +1388,12 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 # Открытый вопрос, что держит итог, — текстом и с вариантами: по одному
                 # номеру модели не поймут, чего не хватает и что от него зависит.
                 "blocked_by": [opened.get(name, name) for name in outcome.blocked_by],
-                "gaps": [gap.model_dump() for gap in outcome.gaps]} for outcome in self.outcomes]),
+                "gaps": [gap.model_dump() for gap in outcome.gaps]} for outcome in uncut]),
             "accepted_adrs": as_json(adrs),
+            "fixed_issues": as_json([{
+                "id": issue.id, "title": issue.title, "user_story": issue.user_story,
+                "outcome_ids": issue.outcome_ids, "scope": issue.scope}
+                for issue in self.carried]),
             "constraints_and_risks": limits_prompt(limits),
             "repository_context": self._code_note() + self.repository,
             "design": self.design,
@@ -1383,9 +1428,10 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 f"и текущее состояние; карта ниже — с шага Repository Discovery.\n\n")
 
     def _numbered(self, chosen: IssueAnswer) -> dict[str, Any]:
-        """Номера по порядку: задачи — I-n, пробелы — G-n (в ответе они уже по порядку);
-        зависимости — по новым номерам."""
-        renamed = {issue.name: f"I{n}" for n, issue in enumerate(chosen.issues, 1)
+        """Номера по порядку: задачи — I-n дальше перенесённых, пробелы — G-n (в ответе они уже
+        по порядку); зависимости — по новым номерам. Перенесённые — как были."""
+        first = max((int(issue.id[1:]) for issue in self.carried), default=0) + 1
+        renamed = {issue.name: f"I{n}" for n, issue in enumerate(chosen.issues, first)
                    if issue.name}
         issues = [Issue(id=f"I{n}", title=c.title, user_story=c.user_story,
                         main_entry_points=list(c.entry_points), current_state=c.current_state,
@@ -1394,11 +1440,13 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                         risk_ids=list(c.risk_ids),
                         depends_on=[renamed[name] for name in c.depends_on],
                         blocked_by=list(c.blocked_by), acceptance_criteria=list(c.criteria))
-                  for n, c in enumerate(chosen.issues, 1)]
+                  for n, c in enumerate(chosen.issues, first)]
         gaps = [IssueGap(id=f"G{n}", question=g.question, reason=g.reason,
                          outcome_ids=list(g.outcome_ids)) for n, g in enumerate(chosen.gaps, 1)]
+        issues = [*self.carried, *issues]
         covered = {name for issue in issues for name in issue.outcome_ids}
-        return {"issues": issues, "gaps": gaps,
+        return {"issues": issues, "gaps": gaps, "kept": [issue.id for issue in self.carried],
+                "cut": {outcome.id: outcome_print(outcome) for outcome in self.outcomes},
                 "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
 
 

@@ -1,8 +1,18 @@
 """Итоги: разбор ответов, ссылки только на своё, блокировка только открытыми вопросами."""
 
+from dataclasses import replace
+
 import pytest
 
-from spec_council.outcomes import Candidate, Context, Gap, as_prompt, outcome_list
+from spec_council.outcomes import (
+    Candidate,
+    Context,
+    Gap,
+    Touch,
+    as_prompt,
+    assembly_of,
+    outcome_list,
+)
 from spec_council.slicing import BadAnswer
 
 CONTEXT = Context(adrs=frozenset({"ADR-1", "ADR-3"}), constraints=frozenset({4}),
@@ -79,3 +89,14 @@ def test_a_gap_that_is_a_scope_question_is_not_a_gap():
         {"question": "Где живёт  база?", "reason": "нет решения"}, {"question": "Как искать."},
         {"question": "Кто смотрит отчёт?"}])]}, scoped)
     assert (found.blocked_by, found.gaps) == (("Q2",), (Gap("Кто смотрит отчёт?", ""),))
+
+
+def test_a_touch_names_a_kept_outcome_and_only_decisions_new_to_it():
+    context = replace(CONTEXT, kept={"O1": frozenset({"ADR-1"})})
+    touches = assembly_of({"outcomes": [], "touches": [
+        {"outcome_id": "O1", "adr_ids": ["ADR-1", "ADR-3"], "reason": "меняет поиск"},
+        {"outcome_id": "o1", "adr_ids": ["ADR-3"], "reason": "и ещё"},   # тот же итог — одна
+        {"outcome_id": "O7", "adr_ids": ["ADR-3"], "reason": "чужой итог"},
+        {"outcome_id": "O1", "adr_ids": ["ADR-1"], "reason": "его же решение — не пометка"},
+    ]}, context).touches
+    assert touches == (Touch("O1", ("ADR-3",), "меняет поиск; и ещё"),)

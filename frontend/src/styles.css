@@ -474,3 +474,7 @@ section > .option-note { margin: 8px 0 0 18px }
 /* Пробелы, отнесённые в вопросы из итогов и задач: сколько их и переход к отбору. */
 .pending-questions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px }
 .pending-text { margin: 0; font-size: 13px }
+
+/* Закреплённый итог, который задевают новые решения: оставить или пересобрать. */
+.outcome-touch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px }
+.outcome-touch-actions { display: flex; flex-wrap: wrap; gap: 8px }

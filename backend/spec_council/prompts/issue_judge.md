@@ -155,6 +155,13 @@ Do not create artificial ISSUES for the sake of formal coverage.
 
 Check that no requirements got lost between ISSUES.
 
+## Fixed ISSUES
+
+FIXED ISSUES below were cut before from OUTCOMES that have not changed since, and nothing blocks
+them: they are being developed already. Do not return them again, not even in parts or in other
+words. Cut only what the OUTCOMES given to you still need beyond them; an OUTCOME fully covered
+by FIXED ISSUES needs no new ISSUE.
+
 ## Language
 
 These instructions are in English, but write every free-text value of your answer —
@@ -233,6 +240,10 @@ Before answering, check that:
 ## ACCEPTED ADRS
 
 {{accepted_adrs}}
+
+## FIXED ISSUES
+
+{{fixed_issues}}
 
 ## CONSTRAINTS AND RISKS
 
