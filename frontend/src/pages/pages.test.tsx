@@ -1255,6 +1255,17 @@ describe('Поток: решения и итоги', () => {
     expect(scrolled.mock.contexts.map(el => (el as Element).id)).toContain('decision-Q2-title')
   })
 
+  it('открытый вопрос не зелёный, даже зафиксированный: он держит итог, слайдер открывается на нём', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }))
+    const chain = await screen.findByRole('region', { name: /Цепочка/ })
+    fireEvent.click(within(chain).getByRole('button', { name: /Решения/ }))
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q1, готово/ })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /Q2, ждёт вас/, selected: true })).toBeTruthy()
+    expect(screen.getByText('готово 1 из 2')).toBeTruthy()
+    expect(screen.getByText('Решено 1 из 2')).toBeTruthy()
+  })
+
   it('итог без критериев готовности — не готов к разработке', async () => {
     const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
     openStream(() => deciding({ decisions: FIXED, outcomes: vague }))
