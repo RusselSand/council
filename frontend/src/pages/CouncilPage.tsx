@@ -79,13 +79,24 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   // sent — нарезка на экране, когда ушёл запуск: правки типов после него ответ не откатит.
   // Сколько ответов на действия экран принял: опрос, ушедший раньше последнего, устарел.
   const acted = useRef(0)
+  // Проекты правят на своей странице, бывает — в другой вкладке: папка заметок совета, с которой
+  // сверяются выгрузка и черновик, — по свежим. Дёшево: настройки целиком спрашивают CLI моделей.
+  const refreshProjects = useCallback(() => {
+    api.projects().then(projects => update(([c, settings]) => [c, { ...settings, projects }]),
+                        () => { /* остаются прежние — следующее действие спросит снова */ })
+  }, [update])
+  useEffect(() => {
+    window.addEventListener('focus', refreshProjects)
+    return () => window.removeEventListener('focus', refreshProjects)
+  }, [refreshProjects])
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
     acted.current += 1
     update(([c, settings]) => [{
       ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
     }, settings])
-  }, [update])
+    refreshProjects()
+  }, [update, refreshProjects])
 
   const saver = useAutosave(async (patch: CouncilPatch) => {
     try {

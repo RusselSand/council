@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesDep, NotesOfDep, Store, StoreDep
+from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesOfDep, Store, StoreDep
 from ..export import (
     drafted,
     export_in,
@@ -133,17 +133,18 @@ def drafting(group: str):
                                              "или поток в него не выгрузить"}})
 def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
                 config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                notes: NotesDep) -> Council:
+                notes_of: NotesOfDep) -> Council:
     """Черновик выгрузки потока в заметки: что ляжет в каталог, под какими номерами и что
     будет с каждой заметкой. Язык документации тот же, что у работы, — черновик готов сразу;
     другой — новые тексты переводит судья, и без подключения к нему черновик записан упавшим.
     Связки заметок («потому что», «Задачи») совет знает по-русски и по-английски: на другом
-    языке их доводит тот же перевод, даже если язык заметок — язык работы."""
-    root = root_of(notes)
+    языке их доводит тот же перевод, даже если язык заметок — язык работы. Каталог — по совету,
+    прочитанному под замком, как и у записи."""
     translate = notes_language() != language() or not knows_words(language())
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
+        root_of(notes_of(council))
         stream = stream_in(council, group)
         cut(stream)
         if running(stream.notes_draft):
@@ -152,6 +153,7 @@ def draft_notes(council_id: str, group: str, edit: GroupsEdit, store: StoreDep,
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
+        root = root_of(notes_of(council))
         catalog = catalog_of(root)
         draft = draft_of(council, group, stream, root, catalog, store)
         runs: list[CouncilRun] = []

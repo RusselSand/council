@@ -199,6 +199,7 @@ const server = ({
   (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     if (url === '/api/settings') return json(settings())
+    if (url === '/api/projects') return json(settings().projects)
     if (url === '/api/councils') return method === 'POST' ? json({ id: COUNCIL.id }) : json([council()])
     if (url.endsWith('/slicing')) { starts++; return start() }
     if (url.endsWith('/structure')) { groupStarts++; return group() }
@@ -1474,6 +1475,24 @@ describe('Поток: решения и итоги', () => {
     expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('папку проекта сменили в другой вкладке — черновик, собранный после, записать можно', async () => {
+    let root = '/notes'
+    fetchMock.mockImplementation(server({
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
+      stream: () => {
+        root = '/new'                         // пока экран был открыт, папку проекта поменяли
+        return json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }))
+      },
+      settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: root }] }),
+    }))
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
+    expect(await screen.findByRole('button', { name: ru['notes.write'] })).toBeTruthy()
+    expect(screen.queryByText(ru['notes.moved'])).toBeNull()
+    expect(screen.getByText('Каталог заметок: /new')).toBeTruthy()
+  })
+
   it('черновик к прежней папке документации (проект сменили) — не записать, собрать заново', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/old' } }),
              () => json(atStart()))
@@ -1643,6 +1662,16 @@ describe('Ввод', () => {
     expect(screen.getByText(ru['brief.projectNoNotes'])).toBeTruthy()
     fireEvent.change(project, { target: { value: 'p1' } })
     expect(screen.queryByText(ru['brief.projectNoNotes'])).toBeNull()
+  })
+
+  it('проекты правили в другой вкладке — вернулись к совету, и список проектов уже нынешний', async () => {
+    let projects = [PROJECT]
+    fetchMock.mockImplementation(server({ settings: () => ({ ...SETTINGS, projects }) }))
+    renderAt('/councils/demo-1/brief')
+    const project = await screen.findByRole('combobox', { name: new RegExp(ru['brief.project']) }) as HTMLSelectElement
+    projects = [PROJECT, { ...PROJECT, id: 'p2', name: 'Новый' }]
+    fireEvent.focus(window)
+    await waitFor(() => expect([...project.options].map(o => o.text)).toContain('Новый'))
   })
 
   it('проекта совета больше нет среди проектов — он так и подписан, а не подменён первым', async () => {
@@ -2498,6 +2527,30 @@ describe('Проекты', () => {
     expect((await within(form).findByRole('alert')).textContent).toBe('deep/repo: Каталога нет')
     expect(calls).toEqual([{ method: 'PUT', url: '/api/projects/p1', body: {
       name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs', revision: 3 } }])
+  })
+
+  it('пока форма открыта, другую не открыть; проект поправили в другой вкладке — список с сервера', async () => {
+    let fetched = 0
+    const other: Project = { ...PROJECT, id: 'p2', name: 'Совет' }
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (url === '/api/repositories') return json(COPIES)
+      if (url === '/api/projects' && method === 'GET') {
+        fetched++
+        return json(fetched === 1 ? [PROJECT, other] : [{ ...PROJECT, notes: 'elsewhere/docs', revision: 1 }, other])
+      }
+      return json({ detail: 'Проект уже поправили, например в другой вкладке, — откройте его заново' }, 409)
+    })
+    renderAt('/projects')
+    fireEvent.click(within(await card('Кромка')).getByRole('button', { name: ru['projects.edit'] }))
+    expect(screen.queryByRole('button', { name: ru['projects.new'] })).toBeNull()
+    expect((within(await card('Совет')).getByRole('button', { name: ru['projects.edit'] }) as HTMLButtonElement).disabled).toBe(true)
+    const form = screen.getByRole('form', { name: 'Кромка' })
+    fireEvent.click(within(form).getByRole('button', { name: ru['projects.save'] }))
+    expect((await within(form).findByRole('alert')).textContent).toContain('уже поправили')
+    await waitFor(() => expect(fetched).toBe(2))
+    fireEvent.click(within(form).getByRole('button', { name: ru['projects.cancel'] }))
+    expect(within(await card('Кромка')).getByText('elsewhere/docs')).toBeTruthy()   // нынешняя версия
   })
 
   it('удаление — со вторым шагом; проект выбран у совета — отказ виден, проект на месте', async () => {

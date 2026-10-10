@@ -129,21 +129,15 @@ NotesOf = Callable[[Council], Path | None]
 
 
 def get_notes_of(projects: ProjectsDep, repositories: RepositoriesDep) -> NotesOf:
-    """Каталог заметок по самому совету: для совета, прочитанного под замком, — проект и его
-    папку могли сменить, пока шёл запрос."""
+    """Каталог заметок по самому совету. Ручки зовут его для совета, прочитанного под замком
+    советов: проект совета и папку проекта меняют под ним же, и ход не пойдёт с папкой, которую
+    сменили посреди запроса."""
     return lambda council: council_notes(council, projects, repositories)
 
 
 NotesOfDep = Annotated[NotesOf, Depends(get_notes_of)]
 
 
-def get_notes_root(council_id: str, store: StoreDep, notes_of: NotesOfDep) -> Path | None:
-    """Каталог заметок совета на начало запроса; совета нет — None (ответит сама ручка)."""
-    council = store.get_council(council_id)
-    return notes_of(council) if council is not None else None
-
-
-NotesDep = Annotated[Path | None, Depends(get_notes_root)]
 
 Launcher = Callable[[Callable[[], object]], None]
 

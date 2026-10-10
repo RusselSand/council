@@ -152,6 +152,30 @@ def test_a_folder_changed_while_the_write_waits_for_the_lock_is_not_written_into
     assert not (tmp_path / "first").exists() and not (tmp_path / "second").exists()
 
 
+def test_a_draft_waiting_for_the_lock_is_built_for_the_folder_it_finds_there(agents, tmp_path):
+    projects = Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="first"))
+    app.dependency_overrides[get_projects] = lambda: projects
+    app.dependency_overrides[get_repositories] = lambda: tmp_path
+    result = []
+    try:
+        council_id = cut_c()
+        client.patch(f"/api/councils/{council_id}", json={"project": project.id})
+        with council_lock:
+            worker = threading.Thread(target=lambda: result.append(drafts(council_id)))
+            worker.start()
+            worker.join(0.3)                                       # сборка ждёт замка
+            projects.update_project(project.id, ProjectDraft(name="Кромка", notes="second"))
+        worker.join(10)
+        assert result[0].status_code == 202
+        assert streams_of(council_id)["C"].notes_draft.root == str((tmp_path / "second").resolve())
+        assert writes(council_id).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_projects)
+        app.dependency_overrides.pop(get_repositories)
+    assert (tmp_path / "second").exists() and not (tmp_path / "first").exists()
+
+
 def test_issues_must_be_cut_before_drafting(agents, notes_dir):
     council_id = grouped()
     confirm(council_id)

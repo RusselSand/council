@@ -24,6 +24,9 @@ export function ProjectsPage() {
     setEditing(null)
   }
   const removed = (id: string) => update(([projects, copies]) => [projects.filter(p => p.id !== id), copies])
+  // Проект поправили в другой вкладке: список — как на сервере, и открытый заново возьмёт нынешнюю версию.
+  const outdated = () => api.projects().then(projects => update(([, copies]) => [projects, copies]),
+                                             () => { /* список прежний, отказ уже виден */ })
 
   return (
     <main className="main">
@@ -32,7 +35,8 @@ export function ProjectsPage() {
           <h1 className="page-title">{t('projects.title')}</h1>
           <p className="page-sub">{t('projects.sub')}</p>
         </div>
-        {state.kind === 'ok' && editing !== 'new' && (
+        {/* Пока открыта форма, другую не открыть: несохранённое в ней пропало бы молча. */}
+        {state.kind === 'ok' && editing === null && (
           <button className="btn-primary" onClick={() => setEditing('new')}>{t('projects.new')}</button>
         )}
       </div>
@@ -46,14 +50,15 @@ export function ProjectsPage() {
       {state.kind === 'ok' && (
         <div className="project-list">
           {editing === 'new' && (
-            <ProjectForm copies={state.data[1]} onSaved={saved} onCancel={() => setEditing(null)} />
+            <ProjectForm copies={state.data[1]} onSaved={saved} onCancel={() => setEditing(null)}
+                         onOutdated={outdated} />
           )}
           {state.data[0].length === 0 && editing !== 'new' && <div className="card muted">{t('projects.empty')}</div>}
           {state.data[0].map(project => editing === project.id
             ? <ProjectForm key={project.id} project={project} copies={state.data[1]} onSaved={saved}
-                           onCancel={() => setEditing(null)} />
-            : <ProjectCard key={project.id} project={project} onEdit={() => setEditing(project.id)}
-                           onRemoved={() => removed(project.id)} />)}
+                           onCancel={() => setEditing(null)} onOutdated={outdated} />
+            : <ProjectCard key={project.id} project={project} locked={editing !== null}
+                           onEdit={() => setEditing(project.id)} onRemoved={() => removed(project.id)} />)}
         </div>
       )}
     </main>
@@ -64,8 +69,9 @@ export function ProjectsPage() {
 const reason = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback)
 
 /** Проект в списке: его рабочие копии, папка документации и что с ней не так. Удаление — со вторым шагом. */
-function ProjectCard({ project, onEdit, onRemoved }: Readonly<{
-  project: Project; onEdit: () => void; onRemoved: () => void
+function ProjectCard({ project, locked, onEdit, onRemoved }: Readonly<{
+  /** locked — открыта форма другого проекта: править и удалять этот — после неё. */
+  project: Project; locked: boolean; onEdit: () => void; onRemoved: () => void
 }>) {
   const { t } = useTranslation()
   const [asking, setAsking] = useState(false)
@@ -98,8 +104,8 @@ function ProjectCard({ project, onEdit, onRemoved }: Readonly<{
             </>
           ) : (
             <>
-              <button className="btn-secondary" onClick={onEdit}>{t('projects.edit')}</button>
-              <button className="btn-link" onClick={() => setAsking(true)}>{t('projects.delete')}</button>
+              <button className="btn-secondary" disabled={locked} onClick={onEdit}>{t('projects.edit')}</button>
+              <button className="btn-link" disabled={locked} onClick={() => setAsking(true)}>{t('projects.delete')}</button>
             </>
           )}
         </div>
@@ -122,8 +128,10 @@ function ProjectCard({ project, onEdit, onRemoved }: Readonly<{
  * Новый проект или правка. Рабочие копии из каталога репозиториев — галочками; копию глубже или без каталога
  * репозиториев (тогда пути абсолютные) вписывают путём. Пустые поля путей не уходят.
  */
-function ProjectForm({ project, copies, onSaved, onCancel }: Readonly<{
+function ProjectForm({ project, copies, onSaved, onCancel, onOutdated }: Readonly<{
   project?: Project; copies: WorkingCopies; onSaved: (project: Project) => void; onCancel: () => void
+  /** Сервер ответил 409: проект с тех пор поправили — список обновить. */
+  onOutdated: () => void
 }>) {
   const { t } = useTranslation()
   const nameId = useId()
@@ -154,6 +162,7 @@ function ProjectForm({ project, copies, onSaved, onCancel }: Readonly<{
       onSaved(project ? await api.updateProject(project.id, draft, revision) : await api.createProject(draft))
     } catch (e) {
       setError(reason(e, t('projects.saveFailed')))
+      if (e instanceof ApiError && e.status === 409) onOutdated()
     } finally {
       setBusy(false)
     }
