@@ -1018,6 +1018,28 @@ def test_an_own_question_keeps_its_number_when_another_is_removed(agents):
     assert streams_of(council_id)["C"].scope[-1].id == "Q5"
 
 
+def test_a_number_given_to_an_option_of_a_removed_question_is_not_given_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)                       # P1 — у Q1, P2 — у Q2; выбор не утверждали
+    choose(council_id, "C", ["Q1"])            # Q2 убрали — с ним и P2
+    choose(council_id, "C", ["Q1"], [GAP])
+    options = streams_of(council_id)["C"].proposals.options
+    assert [(o.question_id, [p.id for p in o.proposals]) for o in options] == [
+        ("Q1", ["P1"]), ("Q3", ["P3"])]
+
+
+def test_a_number_given_to_a_removed_own_question_is_not_given_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    choose(council_id, "C", ["Q1", "Q2"], [GAP])
+    assert streams_of(council_id)["C"].scope[-1].id == "Q3"
+    choose(council_id, "C", ["Q1", "Q2"])      # убрали до всякого выбора
+    choose(council_id, "C", ["Q1", "Q2"], ["Другой вопрос?"])
+    assert streams_of(council_id)["C"].scope[-1].id == "Q4"
+
+
 def test_another_idea_drops_what_was_kept_from_before(agents):
     council_id = grouped()
     confirm(council_id)

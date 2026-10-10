@@ -1436,11 +1436,12 @@ function QuestionsStep({ council, structure, stream, group, notes, onChange, app
     event.preventDefault()
     const text = squash(draft)
     if (!text) return
-    // Сравнение — как на сервере: совпавший с оставленным или своим вопрос он всё равно бы выкинул.
+    // Сравнение — как на сервере: совпавший с оставленным или своим вопрос он всё равно бы выкинул, а убранный
+    // найденный — возвращается, а не встаёт рядом своим.
     const there = [...kept.map(q => q.text), ...added].some(own => sameQuestion(own) === sameQuestion(text))
     setTwice(there)
     if (!there) {
-      setAdded([...added, text])
+      onDraft(withQuestion(scopeDraft, stream, text))
       setDraft('')
     }
   }
@@ -2430,8 +2431,16 @@ const draftTexts = (draft: ScopeDraft, stream: Stream) => [
 const inDraft = (draft: ScopeDraft, stream: Stream, question: string) =>
   draftTexts(draft, stream).some(text => sameQuestion(text) === sameQuestion(question))
 
-const withQuestion = (draft: ScopeDraft, stream: Stream, question: string): ScopeDraft =>
-  inDraft(draft, stream, question) ? draft : { ...draft, added: [...draft.added, squash(question)] }
+/**
+ * Вопрос — в черновик: уже там — как есть; такой найденный советом убрали — он возвращается (со своим номером и всей
+ * работой по нему), а не встаёт рядом своим вопросом; иначе — свой вопрос.
+ */
+function withQuestion(draft: ScopeDraft, stream: Stream, question: string): ScopeDraft {
+  if (inDraft(draft, stream, question)) return draft
+  const found = (stream.questions?.questions ?? []).find(q => sameQuestion(q.text) === sameQuestion(question))
+  if (found) return { ...draft, removed: draft.removed.filter(id => id !== found.id) }
+  return { ...draft, added: [...draft.added, squash(question)] }
+}
 
 /** Сколько вопросов черновика ещё не в утверждённом отборе. */
 const pendingOf = (draft: ScopeDraft, stream: Stream) => {

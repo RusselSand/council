@@ -1247,6 +1247,19 @@ describe('Поток: решения и итоги', () => {
       added: ['Где хранить отчёт?', 'Сколько хранить отчёты?'] } }]))
   })
 
+  it('пробел — тот же вопрос, что нашёл совет, а его убрали из отбора: вопрос возвращается, а не встаёт своим', async () => {
+    const [q1, q2] = QUESTIONS_FOUND.questions
+    const gapped: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [
+      { ...ASSEMBLED.outcomes[1], blocked_by: [], gaps: [{ question: q2.text, reason: '' }] }] }
+    openStream(() => deciding({ scope: [q1], choices: [{ question_id: 'Q1', proposal: 'F2' }], decisions: [FIXED[0]],
+                                outcomes: gapped }), () => json(deciding()))
+    fireEvent.click(within(await card('Замер потерь')).getByRole('button', { name: ru['outcomes.toQuestions'] }))
+    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['questions.approve'] }))
+    await waitFor(() => expect(streamCalls).toHaveLength(1))
+    expect(streamCalls[0].body).toMatchObject({ keep: ['Q1', 'Q2'], added: [] })
+  })
+
   it('после добавления вопросов выбор и решения по прежним — на месте: выбрать и решить остаётся только новое', async () => {
     const added = { id: 'Q3', text: 'Где хранить отчёт?', source: 'added' as const, source_question_id: null,
                     proposal_ids: [], reason: null, note: null, revisits: null }

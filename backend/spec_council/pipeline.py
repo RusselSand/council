@@ -307,10 +307,11 @@ def scope_key(scope: list[OpenQuestion]) -> list[str]:
 
 
 def start_proposals(participants: list[str], judge: str, scope: list[OpenQuestion],
-                    carried: Iterable[QuestionOptions] = ()) -> ProposalDiscovery:
-    """carried — варианты вопросов, которые были в отборе и раньше: их не ищут, они уже здесь."""
+                    carried: Iterable[QuestionOptions] = (), first: int = 1) -> ProposalDiscovery:
+    """carried — варианты вопросов, которые были в отборе и раньше: их не ищут, они уже здесь;
+    first — с какого номера нумеровать новые."""
     return ProposalDiscovery(state="running", run=uuid4().hex[:8], scope=scope_key(scope),
-                             options=list(carried),
+                             options=list(carried), first=first,
                              steps=steps(participants, judge,
                                          (StepName.proposal_discovery, StepName.proposal_judge)))
 
@@ -863,7 +864,7 @@ class ProposalRun(CouncilRun[ProposalDiscovery]):
         self.carried = dict(carried or {})
         self.first = first
         super().__init__(council_id, participants, judge, runner, report,
-                         start_proposals(participants, judge, scope, self.carried.values()))
+                         start_proposals(participants, judge, scope, self.carried.values(), first))
         self.idea = idea
         self.repository = repository
         self.design = design

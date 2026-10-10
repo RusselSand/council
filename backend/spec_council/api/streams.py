@@ -145,7 +145,7 @@ RESLICED = "Типы фрагментов поменялись после рас
 # Всё, что ниже отбора решений проекта: другой отбор это сбрасывает.
 BELOW_DECISIONS = {"questions": None, "scope": None, "proposals": None, "choices": None,
                    "analysis": None, "decisions": None, "outcomes": None, "issues": None,
-                   "earlier": []}
+                   "earlier": [], "asked": 0}
 # Всё, что ниже шагов «Репозиторий» и «Дизайн»: другой скан, другой выбор на шаге или другая
 # идея это сбрасывает — и отбор решений проекта тоже.
 BELOW_DESIGN = {"decisions_search": None, "project_decisions": None, **BELOW_DECISIONS}
@@ -919,17 +919,19 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         stream = stream_in(council, group)
         scope = scope_for(stream, edit)
-        changes: dict = {"scope": scope}
+        changes: dict = {"scope": scope, "asked": asked_after(stream, scope)}
         runs: list[CouncilRun] = []
         if proposes_anew(stream, scope):
             carried = carried_options(stream.proposals, scope)
+            first = last_used(stream) + 1
             if len(carried) == len(scope):
                 proposals = start_proposals(council.participants, council.judge, scope,
-                                            carried.values()).model_copy(
+                                            carried.values(), first).model_copy(
                     update={"state": "done", "steps": []})
             elif missing:
                 proposals = unconnected(start_proposals(
-                    council.participants, council.judge, scope, carried.values()), missing)
+                    council.participants, council.judge, scope, carried.values(), first),
+                    missing)
             else:
                 runs = [proposal_run(council, group, stream, scope, agents, store)]
                 proposals = runs[0].state.model_copy(deep=True)
@@ -952,7 +954,7 @@ def scope_for(stream: Stream, edit: ApproveScope) -> list[OpenQuestion]:
     if search.run != edit.questions_run:
         raise HTTPException(409, "Вопросы уже нашли заново — отбор был к прежним")
     return scoped(search, edit.keep, edit.added, stream.scope or [],
-                  [work.key for work in stream.earlier])
+                  [work.key for work in stream.earlier], stream.asked)
 
 
 def proposes_anew(stream: Stream, scope: list[OpenQuestion]) -> bool:
@@ -1478,12 +1480,14 @@ def decided(scope: list[OpenQuestion], found: dict[str, list[Proposal]],
 
 
 def scoped(search: QuestionDiscovery, keep: list[str], added: list[str],
-           before: Sequence[OpenQuestion] = (), earlier: Sequence[str] = ()) -> list[OpenQuestion]:
+           before: Sequence[OpenQuestion] = (), earlier: Sequence[str] = (),
+           asked: int = 0) -> list[OpenQuestion]:
     """Отобранные вопросы: оставленные — в порядке совета, свои — следом, с номерами дальше.
     Свой вопрос, совпавший с оставленным или другим своим, — тот же вопрос. Свой вопрос, который
     уже был в отборе (before), сохраняет номер — по нему узнают его работу; новый получает
-    номер дальше всех, какие поток давал (и в прежней работе, earlier), а не первый
-    свободный: убрали свой вопрос — номер следующего не сдвигается."""
+    номер дальше всех, какие поток давал (и в прежней работе, earlier, и вопросам, которые потом
+    убрали, — asked), а не первый свободный: убрали свой вопрос — номер следующего не сдвигается
+    и не достаётся другому."""
     found = {question.id: question for question in search.questions}
     unknown = [question_id for question_id in keep if question_id not in found]
     if unknown:
@@ -1506,9 +1510,15 @@ def scoped(search: QuestionDiscovery, keep: list[str], added: list[str],
            for question in before if question.source == "added"}
     taken = [question.id for question in [*search.questions, *before]]
     taken += [key.split(": ", 1)[0] for key in earlier]
-    numbers = count(max((int(i[1:]) for i in taken if i[1:].isdigit()), default=0) + 1)
+    numbers = count(max([asked, *(int(i[1:]) for i in taken if i[1:].isdigit())]) + 1)
     return [*kept, *(OpenQuestion(id=was.get(same_question(text)) or f"Q{next(numbers)}",
                                   text=text, source="added") for text in own)]
+
+
+def asked_after(stream: Stream, scope: list[OpenQuestion]) -> int:
+    """Самый большой номер вопроса, какой отбор давал, — и с этим отбором."""
+    ids = [question.id for question in [*(stream.scope or []), *scope]]
+    return max([stream.asked, *(int(i[1:]) for i in ids if i[1:].isdigit())])
 
 
 def seen_idea(stream: Stream,
