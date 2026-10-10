@@ -724,7 +724,7 @@ describe('Поток: группа и идея', () => {
     expect(screen.getByRole('tab', { name: /Q2, ИИ работает/ })).toBeTruthy()
   })
 
-  it('варианты — слайдером: по карточке на вопрос, ← → с клавиатуры, сверху — чей ход', async () => {
+  it('варианты — слайдером: по карточке на вопрос, фишки — вкладки с клавиатуры, сверху — чей ход', async () => {
     const proposals: ProposalDiscovery = { state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [] }
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
                                     { A: { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals } }))
@@ -732,12 +732,22 @@ describe('Поток: группа и идея', () => {
     expect(within(slider).getByText('готово 0 из 2')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain(ru['banner.yours'])
     expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()
-    fireEvent.keyDown(slider, { key: 'ArrowRight' })
+    const [q1, q2] = within(slider).getAllByRole('tab')
+    // → на фишке: открыта следующая карточка, и фокус — на её фишке, чтобы скринридер её назвал.
+    fireEvent.keyDown(q1, { key: 'ArrowRight' })
     expect(screen.getByRole('radiogroup', { name: 'Как понять, что воркер не теряет результат?' })).toBeTruthy()
     expect(screen.queryByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeNull()
-    fireEvent.keyDown(slider, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(q2)
+    expect(q2.getAttribute('aria-selected')).toBe('true')
+    // С последней — по кругу на первую; Home и End — к краям.
+    fireEvent.keyDown(q2, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(q1)
+    fireEvent.keyDown(q1, { key: 'End' })
+    expect(document.activeElement).toBe(q2)
+    fireEvent.keyDown(q2, { key: 'Home' })
+    expect(document.activeElement).toBe(q1)
     expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()
-    // Стрелки в поле ввода — его, а не слайдера.
+    // Стрелки внутри карточки — её полей, а не слайдера.
     fireEvent.click(screen.getByRole('radio', { name: /Свой вариант/ }))
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Свой вариант к Q1' }), { key: 'ArrowRight' })
     expect(screen.getByRole('radiogroup', { name: 'Где хранить состояние?' })).toBeTruthy()

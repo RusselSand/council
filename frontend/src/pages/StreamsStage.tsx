@@ -273,25 +273,26 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
         {CHAIN.map((step, i) => {
           const light = chainLight(stream, step, notes)
           const state = i === reached ? 'current' : 'later'
+          const compact = i !== reached && view !== step
           const body = (
             <>
               <span className={`chain-num ${light}`} aria-hidden="true">{light === 'done' ? '✓' : i + 1}</span>
               <span className="chain-body">
                 <span className="chain-name">{t(`chain.${step}`)}</span>
-                <span className={`chain-status ${light}`}>
+                {/* Свёрнутый шаг — одной строкой: длинный статус обрезан, целиком — в подсказке. */}
+                <span className={`chain-status ${light}`} title={compact ? status(step, i) : undefined}>
                   {status(step, i)}
                 </span>
-                {(i === reached || view === step) && (
+                {!compact && (
                   <span className="chain-role"><span className="role-tag ai">{t('chain.ai')}</span>{t(`chain.${step}.ai`)}</span>
                 )}
-                {(i === reached || view === step) && step !== 'issues' && (
+                {!compact && step !== 'issues' && (
                   <span className="chain-role"><span className="role-tag">{t('chain.you')}</span>{t(`chain.${step}.you`)}</span>
                 )}
               </span>
             </>
           )
-          const compact = i !== reached && view !== step ? ' compact' : ''
-          const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}${compact}`
+          const className = `chain-step ${i < reached ? 'done' : state}${view === step ? ' open' : ''}${compact ? ' compact' : ''}`
           return (
             <li key={step}>
               {i <= open

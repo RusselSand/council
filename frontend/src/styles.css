@@ -485,8 +485,10 @@ section > .option-note { margin: 8px 0 0 18px }
   .streams-nav, .streams-side { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto }
 }
 /* Цепочка: не текущий и не открытый шаг — одной строкой. */
-.chain-step.compact { padding: 5px 8px }
-.chain-step.compact .chain-status { margin-bottom: 0 }
+.chain-step.compact { align-items: center; padding: 5px 8px }
+.chain-step.compact .chain-body { flex-direction: row; align-items: baseline; gap: 8px }
+.chain-step.compact .chain-name { flex: none }
+.chain-step.compact .chain-status { overflow: hidden; margin-bottom: 0; text-overflow: ellipsis; white-space: nowrap }
 
 /* Плашка открытого шага: чего ждём — цветом, значком и словами. */
 .banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border: 1px solid transparent; border-radius: 12px; font-size: 13.5px }
