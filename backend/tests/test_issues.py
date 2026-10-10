@@ -1,8 +1,10 @@
 """Задачи: разбор ответа участника или судьи, ссылки, зависимости и пробелы."""
 
+from dataclasses import replace
+
 import pytest
 
-from spec_council.issues import Context, as_prompt, issue_set, same_issues
+from spec_council.issues import Context, Parent, as_prompt, issue_set, same_issues
 from spec_council.slicing import BadAnswer
 
 CONTEXT = Context(outcomes=frozenset({"O1", "O2"}), adrs=frozenset({"ADR-1"}),
@@ -77,6 +79,18 @@ def test_a_gap_blocks_by_its_number_and_one_that_repeats_a_question_by_the_quest
     assert found.blocked_by == ("G1", "Q2")
     assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
         ("Сколько хранить историю?", ("O1",))]
+
+
+def test_an_issue_of_another_outcome_is_blocked_by_a_known_gap_named_by_its_text():
+    # Пробел итога O2 известен заранее; модель его не повторяет, а задача итога O1 ссылается на
+    # него текстом — и держится им.
+    known = Parent(gaps=(("Сколько хранить историю?", "нет срока"),))
+    context = replace(CONTEXT, parents={"O2": known})
+    answer = issue_set({"issues": [issue(blocked_by=["Сколько хранить историю?"]),
+                                   issue("I2", "Хранение", outcomes=("O2",))], "gaps": []},
+                       context)
+    assert [gap.question for gap in answer.gaps] == ["Сколько хранить историю?"]
+    assert [i.blocked_by for i in answer.issues] == [("G1",), ("G1",)]
 
 
 def test_an_issue_may_be_blocked_by_a_gap_named_by_its_text():

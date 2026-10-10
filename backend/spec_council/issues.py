@@ -231,6 +231,11 @@ def issue_set(data: dict, context: Context) -> Answer:
     if not isinstance(raw, list):
         raise BadAnswer("нет списка issues")
     gaps, refs, asked = gaps_of(data.get("gaps"), context)
+    # Пробелы итогов — сразу: задача другого итога может сослаться на такой текстом, а пересказ
+    # своими словами модели запрещены — тот же пробел дважды.
+    for outcome_id, parent in context.parents.items():
+        for question, reason in parent.gaps:
+            joined(gaps, question, reason, (outcome_id,))
     valid, problems = [], []
     for n, item in enumerate(raw, 1):
         try:
@@ -242,9 +247,6 @@ def issue_set(data: dict, context: Context) -> Answer:
     issues = linked(valid, context.fixed)
     if cycle := cycle_of(issues):
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
-    for outcome_id, parent in context.parents.items():
-        for question, reason in parent.gaps:
-            joined(gaps, question, reason, (outcome_id,))
     gaps, issues = placed(gaps, issues)
     issues = after_blocked([inherited(issue, gaps, context, asked) for issue in issues])
     return Answer(tuple(issues), tuple(gaps))

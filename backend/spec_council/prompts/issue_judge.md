@@ -132,6 +132,12 @@ Compare the GAPs found by the independent agents.
 
 Merge semantically identical uncertainties.
 
+The `gaps` and `blocked_by` of the OUTCOMES are already known: the system carries them into the
+issues of that OUTCOME by itself. Drop every candidate GAP that restates one of them — even in
+other words, more precisely or narrowed down to one issue: the ISSUES of that OUTCOME stay
+blocked without it. If an ISSUE of another OUTCOME depends on such a known gap, copy the gap's
+question verbatim into its `blocked_by`; for a known OPEN QUESTION, put its id.
+
 Keep only those that really require a new OPEN QUESTION and an accepted decision.
 
 Do not return a GAP for details that a coding agent can decide locally without changing the approved architecture or behavior.

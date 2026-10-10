@@ -104,6 +104,11 @@ one of its questions remains open.
 If you find a new gap, keep it for returning
 to Question Discovery.
 
+A gap that restates an OPEN QUESTION — even in other words, more precisely or only for one
+OUTCOME — is not a gap: replace it with that question's id in `blocked_by` if the question has
+no accepted ADR, and drop it otherwise. Gaps about the same uncertainty are one gap, with the
+same wording in every OUTCOME it holds.
+
 Do not answer a gap yourself.
 
 ## 5. Acceptance criteria

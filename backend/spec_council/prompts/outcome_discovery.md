@@ -189,7 +189,12 @@ Return only JSON:
 }
 
 If you find a new uncertainty that is not yet
-among the OPEN QUESTIONS, put it into `gaps`:
+among the OPEN QUESTIONS, put it into `gaps`.
+
+An uncertainty that an OPEN QUESTION already covers is not a gap — even if you would word it
+differently, more precisely or only for this OUTCOME. Put that question's id into `blocked_by`
+instead, if it has no accepted ADR; never restate an OPEN QUESTION as a gap. Two gaps about the
+same uncertainty are one gap, with the same wording in every OUTCOME it holds:
 
 {
   "question": "What needs to be determined?",
