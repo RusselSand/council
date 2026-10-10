@@ -1150,7 +1150,8 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
                                              "обоснования"},
                         423: {"description": "Совет ещё собирает итоги по прежним решениям"}})
 def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store: StoreDep,
-                      config: ConfigDep, agents: AgentsDep, launch: LauncherDep) -> Council:
+                      config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                      notes_of: NotesOfDep) -> Council:
     """Человек фиксирует решения: по каждому отобранному вопросу — вариант с обоснованием (ADR)
     или открытый вопрос, — и совет сразу собирает из них итоги. Вариант — любой из тех, что у
     вопроса есть, а не только проверенный советом: решает человек, и проблема, которую нашёл
@@ -1158,7 +1159,8 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
     человеком (ai), своё или поправленное — human. Зафиксировать заново — поменять решения:
     итоги собираются заново; те же решения их не трогают. Решения — к той проверке, что была
     на экране: проверили заново — 409. Если проверка упала, решать можно и без неё — со своим
-    обоснованием."""
+    обоснованием. Отмеченные решения проекта с тех пор поменялись или проект сменили, а в его
+    папке есть неотобранные решения, — 409, их отбирают заново: выбор проверяли без них."""
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
@@ -1166,6 +1168,8 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
         if anew and below_running(stream, "outcomes"):
             raise HTTPException(423, "Совет ещё собирает итоги по прежним решениям или нарезает "
                                      "их на задачи — дождитесь его")
+        if anew:
+            expired(store, council, stream, changed_choice(notes_of(council), stream))
         return council, anew
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
@@ -1209,11 +1213,13 @@ def assembles_anew(stream: Stream, decisions: list[Decision]) -> bool:
 @router.post("/{council_id}/streams/{group}/outcomes/discovery", status_code=202,
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                            agents: AgentsDep, launch: LauncherDep) -> Council:
+                            agents: AgentsDep, launch: LauncherDep,
+                            notes_of: NotesOfDep) -> Council:
     """Собирает итоги заново: после сбоя или если при фиксации решений не было подключения к
     моделям. Повтор не платит второй раз за уже данные ответы. Собранные итоги он не трогает:
-    за них заплачено, а заново они соберутся, когда поменяются решения."""
-    def ready(council: Council) -> None:
+    за них заплачено, а заново они соберутся, когда поменяются решения. Решения проекта с тех
+    пор поменялись или проект сменили — 409, как и при фиксации решений."""
+    def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.decisions is None:
             raise HTTPException(409, "Сначала зафиксируйте решения")
@@ -1221,6 +1227,10 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
             raise HTTPException(409, "Итоги уже собраны — заново они соберутся по другим решениям")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        return stream
+
+    def ready(council: Council) -> None:
+        refused(changed_choice(notes_of(council), checked(council)))
 
     def build(council: Council, report: Callable) -> OutcomeRun:
         stream = stream_in(council, group)
@@ -1230,6 +1240,8 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
                           choices=stream.choices or (), repository=repository_map(stream),
                           design=design_map(stream))
 
+    expired_before(store, council_id, group, assembling(group),
+                   lambda council: changed_choice(notes_of(council), checked(council)))
     return start_run(council_id, store, config, agents, launch, assembling(group), ready, None,
                      build)
 
