@@ -1667,11 +1667,17 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   // Свой вариант без текста — ещё не выбор: такой сервер не примет.
   const answered = (question: string) => picked.has(question) && (picked.get(question) !== OWN || ownOf(question) !== '')
   const chosen = scope.filter(q => answered(q.id)).length
-  // Вопрос выбран — готов; вариантов к нему ещё ищут — ИИ работает; иначе — ход за человеком.
-  const choiceSlides: Slide[] = scope.map(q => ({
-    id: q.id, title: q.text,
-    light: answered(q.id) ? 'done' : sought && !found.has(q.id) ? 'running' : 'yours',
-  }))
+  // Выбран вариант — готово. «Пока не решаю» — ответ шага, но вопрос открыт, как и на «Решениях»: жёлтый,
+  // даже пока к нему ищут варианты. Без ответа: вариантов ещё ищут — ИИ работает, иначе — ход за человеком.
+  const choiceSlides: Slide[] = scope.map(q => {
+    let light: Slide['light'] = 'yours'
+    if (answered(q.id)) light = picked.get(q.id) === null ? 'yours' : 'done'
+    else if (sought && !found.has(q.id)) light = 'running'
+    return { id: q.id, title: q.text, light }
+  })
+  // Открыть — на первом вопросе совсем без ответа, даже если к нему ещё ищут варианты (новый вопрос после правки
+  // отбора); нет таких — на первом жёлтом, то есть «пока не решаю».
+  const waiting = scope.findIndex(q => !answered(q.id))
   // Пока ИИ работает с утверждённым выбором (проверяет, собирает итоги), выбор не поменять: 423.
   const checking = runningFrom(stream, 'analysis')
   const canApprove = !busy && !sought && !checking && !stale && search !== null && chosen === scope.length
@@ -1726,7 +1732,7 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
           </p>
         </div>
       )}
-      <Slider slides={choiceSlides} label={t('options.slides')} start={firstOpen(choiceSlides)}>
+      <Slider slides={choiceSlides} label={t('options.slides')} start={waiting >= 0 ? waiting : firstOpen(choiceSlides)}>
         {n => {
           const question = scope[n]
           const kept = stream.choices?.find(c => c.question_id === question.id)
