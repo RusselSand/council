@@ -201,6 +201,26 @@ same uncertainty are one gap, with the same wording in every OUTCOME it holds:
   "reason": "Why the OUTCOME cannot be completed without it."
 }
 
+A gap becomes an OPEN QUESTION word for word: the user adds it to the questions as it is. Word
+`question` by the rules of an OPEN QUESTION:
+
+- one uncertainty: if you see two, record two gaps — do not join them with "and";
+- it names what is unknown, not possible answers: no options — not in parentheses, not as
+  "A or B", not as "... or otherwise";
+- one sentence. If the question is unclear without the decision it rests on, add one short
+  condition with that decision's ID ("if the card pages stay on the mock (ADR-28)"). Everything
+  else — why the OUTCOME needs it — goes into `reason`.
+
+Bad: "When and how is the index rebuilt (nightly, on every change or otherwise), and what happens
+to a deleted article?"
+Good: two gaps — "When is the index rebuilt?" and "What happens to a deleted article in the
+index?"
+
+Do not record a gap if:
+- its answer already follows unambiguously from the accepted ADRs;
+- it can be decided locally during implementation without changing the behavior of the OUTCOME:
+  framework, class structure, logging, deployment tooling and similar details.
+
 Do not create new OPEN QUESTIONS on your own.
 `gaps` are only material for returning to Question Discovery.
 
@@ -215,6 +235,7 @@ Before answering, check that:
 - no new product or architectural decisions have appeared;
 - acceptance criteria contain no invented requirements;
 - open questions are listed explicitly;
+- every gap is one neutral question without answer options;
 - no OUTCOME is declared ready if a necessary decision is missing.
 
 ## IDEA
