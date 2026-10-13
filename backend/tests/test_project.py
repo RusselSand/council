@@ -704,3 +704,12 @@ def test_a_replaced_copy_at_the_scanned_root_leaves_no_trail(tmp_path):
     git(tmp_path, "clone", "-q", str(tmp_path / "original"), str(repo))
     assert rerooted(scan, tmp_path).repositories[0].root == ""
     assert scanned_commits(rerooted(scan, tmp_path)) == {}
+
+
+def test_a_copy_without_a_root_still_counts_for_the_paths_of_the_others(tmp_path):
+    """В скане две рабочие копии, а одну теперь не найти: пути карты всё так же с папкой копии,
+    и след по другой находится."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("api", repo), ("front", tmp_path / "front"), paths=("api/app.py",))
+    scan.repositories[1].root = ""                                  # её не найти
+    assert evidence_files(scan) == [(repo, "app.py", "api/app.py")]
