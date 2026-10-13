@@ -749,6 +749,72 @@ def test_the_same_choices_keep_the_check_and_other_ones_check_again(agents):
     assert [a.verdict for a in stream.analysis.analyses] == ["recommended", "recommended"]
 
 
+@pytest.fixture
+def neighbours(agents, monkeypatch):
+    """Проверка Q1 зависит от Q2: пока Q2 не решён, выбор по Q1 с ним не сходится. Какие
+    вопросы участники проверяли — по порядку."""
+    asked = []
+
+    def analysis(prompt, judge):
+        question = json.loads(section(prompt, "OPEN QUESTION"))["id"]
+        related = json.loads(section(prompt, "RELATED QUESTIONS"))
+        if not judge:
+            asked.append(question)
+        if question == "Q1" and any(q["status"] == "unresolved" for q in related):
+            if judge:
+                return {"status": "conflict", "proposal_id": "P1",
+                        "validation": {"depends_on_question_ids": ["Q2"]},
+                        "reason": "Без ответа на Q2 так не выйдет.", "rationale": None}
+            return {"status": "user_selected", "selected_proposal_id": "P1",
+                    "validation": {"valid": False, "depends_on_question_ids": ["Q2"]}}
+        return Agents.analysis(prompt, judge)
+
+    monkeypatch.setattr(agents, "analysis", analysis)
+    return asked
+
+
+def test_a_check_that_rests_on_another_question_is_redone_when_its_choice_changes(neighbours):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id)
+    first = streams_of(council_id)["C"].analysis.analyses[0]
+    assert (first.verdict, first.depends_on, first.context, first.rationale) == (
+        "conflict", ["Q2"], ["Q2: -"], None)
+    neighbours.clear()
+    # По Q2 выбрали вариант: противоречие ушло, и Q1 проверяют заново, хоть выбор по нему тот же.
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2")])
+    again = streams_of(council_id)["C"].analysis
+    assert set(neighbours) == {"Q1", "Q2"}
+    assert [(a.question_id, a.verdict, a.rationale) for a in again.analyses] == [
+        ("Q1", "validated", WHY), ("Q2", "validated", WHY)]
+    # Проверка Q2 ни на что не опирается: другой выбор по Q1 её не повторяет.
+    neighbours.clear()
+    chose(council_id, "C", [("Q1", None), ("Q2", "P2")])
+    assert set(neighbours) == {"Q1"}
+
+
+def rechecks(council_id, group, question):
+    return client.post(f"/api/councils/{council_id}/streams/{group}/analysis/{question}")
+
+
+def test_one_question_is_rechecked_and_the_others_are_kept(neighbours):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id, (("Q1", "P1"), ("Q2", "P2")))
+    first = streams_of(council_id)["C"].analysis
+    neighbours.clear()
+    res = rechecks(council_id, "C", "Q2")
+    assert res.status_code == 202
+    again = streams_of(council_id)["C"].analysis
+    assert set(neighbours) == {"Q2"}                                    # только Q2
+    assert again.run != first.run and again.choices == first.choices
+    assert again.analyses[0] == first.analyses[0]                       # Q1 — перенесена
+    assert rechecks(council_id, "C", "Q9").status_code == 409            # такого вопроса нет
+    decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", WHY)])
+    res = rechecks(council_id, "C", "Q1")
+    assert res.status_code == 409 and "зафиксированы" in res.json()["detail"]
+
+
 def test_an_own_option_is_checked_decided_and_built_on_like_the_councils(agents):
     council_id = grouped()
     confirm(council_id)

@@ -978,8 +978,9 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
     сказать, от какого нерешённого вопроса зависит выбор. Одинаковые анализы судья видит
     одним: число согласных — не довод.
 
-    carried — проверка того же выбора по тем же вопросам: её не повторяют, хоть выбор по
-    соседним и поменялся, — проверяют только новое."""
+    carried — проверка того же выбора по тем же вопросам: её не повторяют, если выбор по
+    вопросам, от которых она зависит, тот же (work.carried_analyses), — проверяют только новое.
+    Поэтому каждая проверка помнит, каким был этот выбор (QuestionAnalysis.context)."""
 
     what = "проверка выбора"
 
@@ -1000,6 +1001,7 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
         self.accepted = accepted_prompt(accepted)
         self.scope = scope
         self.choices = {choice.question_id: choice.proposal for choice in choices}
+        self.entries = {choice.question_id: choice_entry(choice) for choice in choices}
         self.found = found_by_question(proposals, choices)
         self.fragments = {fragment.id: fragment for fragment in fragments}
 
@@ -1020,7 +1022,8 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                 asked = True
                 verdict = self._analyze(question, offered, selected, known, limits, failures)
             with self._lock:
-                self.state.analyses.append(analysis_of_question(question, verdict))
+                self.state.analyses.append(analysis_of_question(question, verdict,
+                                                                self.entries))
                 self._publish()
         if not asked:
             self._skip(StepName.decision_analysis)
@@ -1072,12 +1075,16 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
                 "selected_proposal": None if selected is None else {"id": selected, "text": text}}
 
 
-def analysis_of_question(question: OpenQuestion, verdict: Analysis) -> QuestionAnalysis:
+def analysis_of_question(question: OpenQuestion, verdict: Analysis,
+                         entries: Mapping[str, str]) -> QuestionAnalysis:
+    """Проверка вопроса — и выбор по вопросам, от которых она зависит, как он был при ней
+    (entries — выбор по каждому вопросу потока, «Q2: P5»)."""
     return QuestionAnalysis(
         question_id=question.id, verdict=verdict.kind, proposal=verdict.proposal,
         constraint_conflicts=list(verdict.conflicts), risk_ids=list(verdict.risks),
-        depends_on=list(verdict.depends_on), reason=verdict.reason or None,
-        rationale=verdict.rationale)
+        depends_on=list(verdict.depends_on),
+        context=[entries[name] for name in verdict.depends_on if name in entries],
+        reason=verdict.reason or None, rationale=verdict.rationale)
 
 
 def offered(question: OpenQuestion, fragments: dict[int, LabeledFragment],

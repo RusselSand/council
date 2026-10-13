@@ -27,6 +27,7 @@ from ..deps import (
     FigmaDep,
     Launcher,
     LauncherDep,
+    NotesOf,
     NotesOfDep,
     RepositoriesDep,
     Store,
@@ -1178,6 +1179,28 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
     """Проверяет выбор заново: после сбоя или если при утверждении выбора не было подключения
     к моделям. Повтор не платит второй раз за уже данные ответы. Отмеченные решения проекта в
     каталоге с тех пор поменялись — 409, их отбирают заново."""
+    return analyzed_again(council_id, group, store, config, agents, launch, notes_of)
+
+
+@router.post("/{council_id}/streams/{group}/analysis/{question}", status_code=202,
+             responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
+def recheck_question(council_id: str, group: str, question: str, store: StoreDep,
+                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
+                     notes_of: NotesOfDep) -> Council:
+    """Перепроверяет выбор по одному вопросу: совет смотрит на него заново, а проверка других
+    переносится — кроме той, что уже не держится (выбор, на который она опиралась, поменялся).
+    Нужна, когда противоречие сняли правкой другого вопроса, а совет этой связи не назвал, — или
+    чтобы совет посмотрел ещё раз. Прежняя проверка удалась — её ответы уже не в лотке, и модели
+    отвечают заново. Решения уже зафиксированы — 409: перепроверяют до них. Вопроса в отборе
+    нет — 409."""
+    return analyzed_again(council_id, group, store, config, agents, launch, notes_of,
+                          frozenset({question}))
+
+
+def analyzed_again(council_id: str, group: str, store: Store, config: AppConfig,
+                   agents: AgentRunner, launch: Launcher, notes_of: NotesOf,
+                   anew: frozenset[str] = frozenset()) -> Council:
+    """Проверка выбора ещё раз: всё, что не перенести, и вопросы anew — в любом случае."""
     def checked(council: Council) -> Stream:
         stream = stream_in(council, group)
         if stream.choices is None:
@@ -1186,6 +1209,9 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
             raise HTTPException(409, "Решения уже зафиксированы")
         if outdated(council.slicing, council.structure):
             raise HTTPException(409, RESLICED)
+        missing = anew - {question.id for question in stream.scope or []}
+        if missing:
+            raise HTTPException(409, f"Вопроса {', '.join(sorted(missing))} в отборе уже нет")
         return stream
 
     def ready(council: Council) -> None:
@@ -1199,7 +1225,7 @@ def start_decision_analysis(council_id: str, group: str, store: StoreDep, config
                            council.participants, council.judge, agents, report,
                            repository=repository_map(stream), design=design_map(stream),
                            accepted=stream.project_decisions or (),
-                           carried=carried_analyses(stream, stream.choices))
+                           carried=carried_analyses(stream, stream.choices, anew))
 
     expired_before(store, council_id, group, checking(group),
                    lambda council: changed_choice(notes_of(council), checked(council)))
