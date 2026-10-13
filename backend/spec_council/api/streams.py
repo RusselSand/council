@@ -116,7 +116,6 @@ from ..repository import (
     context_prompt,
     fits,
     merged,
-    rerooted,
     same_copy,
     sources_of,
     working_copy,
@@ -783,20 +782,19 @@ def start_decisions_search(council_id: str, group: str, store: StoreDep, config:
         notes = notes_of(council)
         return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                             council.participants, council.judge, agents, report,
-                            catalog=project_catalog(notes, stream),
-                            scan=approved_scan(stream, repositories), own=own_ids(stream, notes))
+                            catalog=project_catalog(notes, stream), scan=approved_scan(stream),
+                            own=own_ids(stream, notes), repositories=repositories)
 
     return start_run(council_id, store, config, agents, launch, searching(group), ready, None,
                      build)
 
 
-def approved_scan(stream: Stream, repositories: Path | None) -> RepositoryScan | None:
-    """Скан, карту которого утвердили на шаге «Репозиторий», — по его файлам ищется след. Корни
-    рабочих копий — где они сейчас: каталог репозиториев мог стать виден по-другому (rerooted)."""
+def approved_scan(stream: Stream) -> RepositoryScan | None:
+    """Скан, карту которого утвердили на шаге «Репозиторий», — по его файлам ищется след."""
     step, scan = stream.repository, stream.scan
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return None
-    return rerooted(scan, repositories)
+    return scan
 
 
 def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, store: Store,
@@ -804,7 +802,7 @@ def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, 
     return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                         council.participants, council.judge, runner,
                         reporter(store, council.id, searching(group)), catalog=catalog,
-                        scan=approved_scan(stream, repositories), own=own)
+                        scan=approved_scan(stream), own=own, repositories=repositories)
 
 
 def design_step(stream: Stream, edit: ApproveDesign) -> DesignStep:

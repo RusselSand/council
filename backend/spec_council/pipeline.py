@@ -178,6 +178,7 @@ from .repository import (
     context_prompt,
     judged_map,
     map_of,
+    rerooted,
     scanned,
     snapshot_all,
     sources_prompt,
@@ -1525,16 +1526,19 @@ class NotesRun(CouncilRun[NotesDraft]):
 class DecisionsRun(CouncilRun[DecisionsSearch]):
     """Отбор прошлых решений проекта для потока. Каталог — ADR из заметок с идеей, вопросом и
     статусом; след в коде к ним совет собирает сам, git log по файлам утверждённой карты
-    репозитория. Участники по отдельности отбирают относящиеся к идее, судья проверяет только
-    их кандидатов; одинаковый отбор — судья не нужен. Решения, которые выгрузил сам поток, —
-    не «прошлые»: их в каталоге нет."""
+    репозитория — в рабочих копиях там, где они сейчас (repositories — каталог репозиториев:
+    его могли увидеть по-другому, снаружи докера и в нём). Ищется уже в ходе, вне замка советов:
+    git на медленной рабочей копии не держит остальных. Участники по отдельности отбирают
+    относящиеся к идее, судья проверяет только их кандидатов; одинаковый отбор — судья не нужен.
+    Решения, которые выгрузил сам поток, — не «прошлые»: их в каталоге нет."""
 
     what = "отбор решений проекта"
 
     def __init__(self, council_id: str, stream: Stream, fragments: list[LabeledFragment],
                  participants: list[str], judge: str, runner: Runner,
                  report: Callable[[DecisionsSearch], None], *, catalog: Catalog,
-                 scan: RepositoryScan | None, own: Sequence[str] = ()) -> None:
+                 scan: RepositoryScan | None, own: Sequence[str] = (),
+                 repositories: Path | None = None) -> None:
         super().__init__(council_id, participants, judge, runner, report, start_decisions(
             participants, judge, stream.idea.text, repository_of(stream), design_of(stream)))
         self.idea = stream.idea.text
@@ -1542,10 +1546,12 @@ class DecisionsRun(CouncilRun[DecisionsSearch]):
         self.catalog = catalog
         self.scan = scan
         self.own = list(own)
+        self.repositories = repositories
 
     def work(self) -> dict[str, Any]:
-        commits = scanned_commits(self.scan) if self.scan and self.scan.result else {}
-        files = evidence_files(self.scan, commits) if commits else []
+        scan = rerooted(self.scan, self.repositories) if self.scan and self.scan.result else None
+        commits = scanned_commits(scan) if scan else {}
+        files = evidence_files(scan, commits) if scan and commits else []
         trails = trails_of(files, issue_outcomes(self.catalog), commits) if files else {}
         catalog = records(self.catalog, trails, self.own)
         with self._lock:

@@ -661,3 +661,30 @@ def test_the_trail_is_found_where_the_repositories_folder_is_seen_now(tmp_path):
     # По тому же пути — другой репозиторий: сканированного коммита нет, корень прежний.
     scan.repositories[0].commit_sha = "0" * 40
     assert rerooted(scan, tmp_path).repositories[0].root == str(tmp_path / "elsewhere" / "project")
+
+
+def test_the_trail_is_found_in_the_copy_where_it_is_when_the_selection_runs(agents, tmp_path):
+    """Сканировали в одном месте, а отбор решений идёт, когда каталог репозиториев виден уже
+    по-другому (снаружи докера и в нём): прежнего корня нет — след ищется в той же копии там,
+    где она сейчас."""
+    repos = tmp_path / "repos"
+    repo = repos / "project"
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q")
+    (repo / "app.py").write_text("def main(): ...\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "Поиск ISS-0003")
+    app.dependency_overrides[get_repositories] = lambda: repos
+    try:
+        council_id = grouped()
+        confirm(council_id)
+        approve(council_id, "C", IDEA_C)
+        scans(council_id, "C")
+        takes(council_id, "C")
+        mounted = tmp_path / "mounted"
+        repos.rename(mounted)                                   # прежнего корня больше нет
+        app.dependency_overrides[get_repositories] = lambda: mounted
+        passes(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_repositories)
+    assert streams_of(council_id)["C"].decisions_search.traced == 1
