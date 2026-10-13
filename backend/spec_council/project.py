@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .models import CodeTrail, ProjectDecision, RepositoryScan
 from .notes import Catalog, declared_issues, issues_in
-from .repository import RepositoryError, git_bytes
+from .repository import RepositoryError, git_bytes, has_commit
 from .repository import text_of as reason_text
 from .slicing import BadAnswer
 
@@ -127,14 +127,6 @@ def scanned_commits(scan: RepositoryScan) -> dict[Path, str]:
     return {Path(source.root): source.commit_sha for source in scan.repositories
             if source.root and source.commit_sha
             and has_commit(Path(source.root), source.commit_sha)}
-
-
-def has_commit(root: Path, sha: str) -> bool:
-    try:
-        git_bytes(root, "cat-file", "-e", f"{sha}^{{commit}}")
-    except RepositoryError:
-        return False
-    return True
 
 
 def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | None:

@@ -36,6 +36,7 @@ from spec_council.project import (
     selected,
     trails_of,
 )
+from spec_council.repository import rerooted
 from spec_council.slicing import BadAnswer
 from tests.test_streams import (
     DECIDED,
@@ -647,3 +648,16 @@ def test_the_trail_comes_from_the_approved_repository_map(agents, tmp_path):
     assert search.traced == 1
     catalog = section(agents.prompts["project_decisions_discovery"], "PROJECT ADR CATALOG")
     assert '"issue": "ISS-0003"' in catalog and '"file": "app.py"' in catalog
+
+
+def test_the_trail_is_found_where_the_repositories_folder_is_seen_now(tmp_path):
+    """Сканировали снаружи докера, а отбор идёт внутри: тот же каталог репозиториев виден
+    по другому пути — корень рабочей копии берётся нынешний, если это та же копия."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("project", tmp_path / "elsewhere" / "project"))     # корень, как был снаружи
+    scan.repositories[0].commit_sha = head(repo)
+    assert scanned_commits(scan) == {}                                  # по старому корню — никак
+    assert scanned_commits(rerooted(scan, tmp_path)) == {repo.resolve(): head(repo)}
+    # По тому же пути — другой репозиторий: сканированного коммита нет, корень прежний.
+    scan.repositories[0].commit_sha = "0" * 40
+    assert rerooted(scan, tmp_path).repositories[0].root == str(tmp_path / "elsewhere" / "project")

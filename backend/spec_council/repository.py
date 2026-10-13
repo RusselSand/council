@@ -40,6 +40,7 @@ from .models import (
     RepositoryFinding,
     RepositoryFlow,
     RepositoryMap,
+    RepositoryScan,
     RepositoryUnknown,
     ScannedRepository,
 )
@@ -373,6 +374,43 @@ def working_copy(text: str, base: Path | None) -> Inventory:
     found = inventory(root)
     fits(found)
     return found
+
+
+def has_commit(root: Path, sha: str) -> bool:
+    """Есть ли в рабочей копии этот коммит."""
+    try:
+        git_bytes(root, "cat-file", "-e", f"{sha}^{{commit}}")
+    except RepositoryError:
+        return False
+    return True
+
+
+def same_copy(source: ScannedRepository, root: Path) -> bool:
+    """По пути скана — та же рабочая копия, что сканировали. Тот же корень — та же. Другой корень
+    бывает и у той же копии: тот же каталог репозиториев виден по-другому (сканировали снаружи
+    докера — C:\\…\\repo, а теперь внутри — /repos/repo); тогда копия та же, если в ней есть
+    сканированный коммит: другой репозиторий по тому же пути его не знает."""
+    if os.path.normcase(str(root)) == os.path.normcase(source.root):
+        return True
+    return bool(source.commit_sha) and has_commit(root, source.commit_sha)
+
+
+def rerooted(scan: RepositoryScan, base: Path | None) -> RepositoryScan:
+    """Скан с корнями рабочих копий, где они сейчас: по их путям от каталога репозиториев, если
+    там та же копия (same_copy). Не найти или уже другая — корень прежний: по нему её не прочесть,
+    как и раньше."""
+    repositories = []
+    for source in scan.repositories:
+        try:
+            root = top_of(located(source.path, base))
+        except RepositoryError:
+            root = None
+        if (root is not None and source.root
+                and (base is None or root.is_relative_to(base.resolve()))
+                and same_copy(source, root)):
+            source = source.model_copy(update={"root": str(root)})
+        repositories.append(source)
+    return scan.model_copy(update={"repositories": repositories})
 
 
 def top_of(path: Path) -> Path:

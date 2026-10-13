@@ -1816,6 +1816,28 @@ def test_another_repositories_folder_is_not_taken_for_the_scanned_copy(agents, r
     assert streams_of(council_id)["C"].issues is None
 
 
+def test_the_scanned_copy_seen_from_another_place_is_still_cut_with_code(agents, repos, tmp_path):
+    """Сканировали снаружи докера, а режут внутри: тот же каталог репозиториев виден по другому
+    пути. Это та же рабочая копия — в ней сканированный коммит, — и задачи режут с её кодом."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    mounted = tmp_path / "mounted"
+    shutil.copytree(repos, mounted / "project")                     # тот же репозиторий, с .git
+    app.dependency_overrides[get_repositories] = lambda: mounted
+    res = approves(council_id, "C")
+    assert res.status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.code) == ("done", True)
+    assert agents.seen == ["app.py"]
+
+
 def test_a_scan_that_does_not_know_its_root_is_scanned_again_before_the_cut(agents, repos):
     """Скан, сделанный до того, как совет стал помнить корень рабочей копии: та ли это копия,
     не проверить — её не читают, а сканируют заново."""
