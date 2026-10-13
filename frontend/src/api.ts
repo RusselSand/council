@@ -237,7 +237,11 @@ export interface QuestionAnalysis {
   /** Выбор по вопросам из depends_on, каким он был при проверке («Q2: P5»): поменялся — проверяют заново. */
   context: string[]
   reason: string | null; rationale: string | null
+  /** У conflict: что поправить — по шагу на правку. */
+  fixes: DecisionFix[]
 }
+/** Что поправить, чтобы проблема с выбором ушла: в каком вопросе, что поменять и с чем это расходится. */
+export interface DecisionFix { question_id: string; change: string; why: string }
 /** Проверка выбора: по вопросу за раз, готовые — в analyses по мере проверки; choices — к какому выбору. */
 export interface DecisionAnalysis {
   state: 'running' | 'done' | 'failed'; run: string; choices: string[]; steps: Step[]

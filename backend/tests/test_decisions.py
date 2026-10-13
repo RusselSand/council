@@ -2,7 +2,14 @@
 
 import pytest
 
-from spec_council.decisions import Analysis, Context, analysis_of, as_prompt, judged_analysis
+from spec_council.decisions import (
+    Analysis,
+    Context,
+    Fix,
+    analysis_of,
+    as_prompt,
+    judged_analysis,
+)
 from spec_council.slicing import BadAnswer
 
 
@@ -100,3 +107,25 @@ def test_the_judge_sees_each_analysis_as_the_participants_were_asked_for_it():
     assert as_prompt(Analysis("recommended", "P1", reason="дешевле")) == {
         "status": "unresolved", "recommendation": {"proposal_id": "P1", "reason": "дешевле"}}
     assert as_prompt(Analysis("none", None, reason="мало данных"))["recommendation"] is None
+
+
+def test_the_judge_says_what_to_fix_and_where():
+    here = Context(constraints=frozenset({4}), risks=frozenset(), questions=frozenset({"Q2"}),
+                   proposals=frozenset({"P2"}), selected="P2", question="Q1")
+    found = judged_analysis({
+        "status": "conflict", "proposal_id": "P2", "reason": "Против F4.",
+        "validation": {"constraint_conflicts": ["F4"]}, "rationale": None,
+        "fixes": [{"question_id": "q1", "change": " Уберите  «и в облако». ", "why": "F4."},
+                  {"question_id": "Q2", "change": "Решите его раньше."},
+                  {"question_id": "Q9", "change": "Чужой вопрос."},        # нет в потоке
+                  {"question_id": "Q2", "change": "  "},                   # без сути
+                  "не правка"]}, here)
+    assert found.fixes == (Fix("Q1", "Уберите «и в облако».", "F4."),
+                           Fix("Q2", "Решите его раньше."))
+    # Проблемы нет — и править нечего.
+    clean = judged_analysis({"status": "validated", "proposal_id": "P2",
+                             "fixes": [{"question_id": "Q2", "change": "Решите."}]}, here)
+    assert clean.fixes == ()
+    with pytest.raises(BadAnswer, match="правка длиннее"):
+        judged_analysis({"status": "conflict", "proposal_id": "P2",
+                         "fixes": [{"question_id": "Q1", "change": "x" * 1001}]}, here)

@@ -639,6 +639,15 @@ class Choice(BaseModel):
     text: str | None = None
 
 
+class DecisionFix(BaseModel):
+    """Что поправить, чтобы проблема с выбором ушла: в каком вопросе (question_id), что
+    поменять (change) и с чем это расходится (why)."""
+
+    question_id: str
+    change: str
+    why: str = ""
+
+
 class QuestionAnalysis(BaseModel):
     """Что совет сказал по вопросу перед решением: проверил выбор человека или, если вопрос
     unresolved, сравнил его варианты. Новых вариантов здесь нет, выбор человека не меняется."""
@@ -660,6 +669,8 @@ class QuestionAnalysis(BaseModel):
     context: list[str] = []
     # Почему так: в чём проблема, чем рекомендованный лучше, чего не хватает для выбора.
     reason: str | None = None
+    # У conflict: что поправить — по шагу на правку, чтобы человек прошёл их по порядку.
+    fixes: list[DecisionFix] = []
     # Обоснование решения, предложенное советом: в ADR — только если человек его подтвердит.
     rationale: str | None = None
 

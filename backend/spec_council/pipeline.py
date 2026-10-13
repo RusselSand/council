@@ -106,6 +106,7 @@ from .models import (
     Choice,
     Decision,
     DecisionAnalysis,
+    DecisionFix,
     DecisionsSearch,
     DesignScan,
     Group,
@@ -1037,7 +1038,7 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
             frozenset(f.id for f in limits if f.label == "constraint"),
             frozenset(f.id for f in limits if f.label == "risk"),
             frozenset(q.id for q in self.scope if q.id != question.id),
-            frozenset(proposal["id"] for proposal in offered), selected)
+            frozenset(proposal["id"] for proposal in offered), selected, question.id)
         values = {
             "idea": self.idea,
             "question": as_json({"id": question.id, "text": question.text}),
@@ -1084,7 +1085,9 @@ def analysis_of_question(question: OpenQuestion, verdict: Analysis,
         constraint_conflicts=list(verdict.conflicts), risk_ids=list(verdict.risks),
         depends_on=list(verdict.depends_on),
         context=[entries[name] for name in verdict.depends_on if name in entries],
-        reason=verdict.reason or None, rationale=verdict.rationale)
+        reason=verdict.reason or None, rationale=verdict.rationale,
+        fixes=[DecisionFix(question_id=fix.question, change=fix.change, why=fix.why)
+               for fix in verdict.fixes])
 
 
 def offered(question: OpenQuestion, fragments: dict[int, LabeledFragment],
