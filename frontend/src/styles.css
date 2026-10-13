@@ -388,6 +388,8 @@ section > .option-note { margin: 8px 0 0 18px }
 .repo-steps { margin: 4px 0 0; padding-left: 18px }
 .check p, .check ul { margin: 0 }
 .check ul { padding-left: 18px }
+.check.problem { display: grid; gap: 6px }
+.check ol.decision-fixes { display: grid; gap: 4px; margin: 0; padding-left: 20px }
 
 /* Светофор точкой: в списках, легенде, на карточках советов. */
 .light-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--fg-faint) }

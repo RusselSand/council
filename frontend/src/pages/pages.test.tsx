@@ -1097,9 +1097,9 @@ describe('Поток: решения и итоги', () => {
             { name: 'decision_judge', state: 'done', runs: [run('fable', 'done')] }],
     analyses: [
       { question_id: 'Q1', verdict: 'validated', proposal: 'F2', constraint_conflicts: [], risk_ids: [],
-        depends_on: ['Q2'], context: ['Q2: -'], reason: null, rationale: KEPT },
+        depends_on: ['Q2'], context: ['Q2: -'], reason: null, rationale: KEPT, fixes: [] },
       { question_id: 'Q2', verdict: 'recommended', proposal: 'P2', constraint_conflicts: [], risk_ids: [],
-        depends_on: [], context: [], reason: 'видно сразу', rationale: 'Мера без опросов.' },
+        depends_on: [], context: [], reason: 'видно сразу', rationale: 'Мера без опросов.', fixes: [] },
     ],
   }
   /** Поток A: Q1 — выбран F2 из текста, Q2 — unresolved; выбор проверен. */
@@ -1184,11 +1184,18 @@ describe('Поток: решения и итоги', () => {
   it('проблема, найденная ИИ, видна, но решению не мешает', async () => {
     const conflict: DecisionAnalysis = { ...CHECKED, analyses: [
       { question_id: 'Q1', verdict: 'conflict', proposal: 'F2', constraint_conflicts: [3], risk_ids: [], depends_on: [],
-        context: [], reason: 'Файлы не переживут смену диска.', rationale: null }, CHECKED.analyses[1]] }
+        context: [], reason: 'Файлы не переживут смену диска.', rationale: null, fixes: [
+          { question_id: 'Q1', change: 'Уберите из текста «на одном диске».', why: 'F3: диск меняют.' },
+          { question_id: 'Q2', change: 'Решите его раньше.', why: '' }] }, CHECKED.analyses[1]] }
     openStream(() => deciding({ analysis: conflict }))
     const first = await card('Где хранить состояние?')
     expect(within(first).getByText(ru['decisions.conflict'])).toBeTruthy()
     expect(within(first).getByText('Файлы не переживут смену диска. Противоречит F3.', { exact: false })).toBeTruthy()
+    // Что поправить — по шагу: где, что поменять и почему; правку в самом вопросе делают своим вариантом.
+    expect(within(first).getByText(ru['decisions.fixes'])).toBeTruthy()
+    expect(within(first).getAllByRole('listitem').map(item => item.textContent)).toEqual([
+      'Q1 — Уберите из текста «на одном диске». Почему: F3: диск меняют.', 'Q2 — Решите его раньше.'])
+    expect(within(first).getByText(ru['decisions.fixHere'])).toBeTruthy()
     expect(fix().disabled).toBe(true)                        // обоснования нет — у совета его не было
     fireEvent.change(why('Q1'), { target: { value: 'Диск не меняем.' } })
     expect(fix().disabled).toBe(false)
@@ -1197,7 +1204,7 @@ describe('Поток: решения и итоги', () => {
   it('противоречие сняли другим вопросом — карточку перепроверяют одну, вписанное на других остаётся', async () => {
     const conflict: DecisionAnalysis = { ...CHECKED, analyses: [
       { question_id: 'Q1', verdict: 'conflict', proposal: 'F2', constraint_conflicts: [], risk_ids: [], depends_on: [],
-        context: [], reason: 'Без замера потерь файлы не проверить.', rationale: null }, CHECKED.analyses[1]] }
+        context: [], reason: 'Без замера потерь файлы не проверить.', rationale: null, fixes: [] }, CHECKED.analyses[1]] }
     openStream(() => deciding({ analysis: conflict }), () => json(deciding({ analysis: { ...CHECKED, run: 'd2' } })))
     const second = await card('Как понять, что воркер не теряет результат?')
     fireEvent.click(within(second).getByRole('button', { name: ru['decisions.accept'] }))

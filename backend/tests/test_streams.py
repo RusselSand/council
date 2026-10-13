@@ -764,7 +764,9 @@ def neighbours(agents, monkeypatch):
             if judge:
                 return {"status": "conflict", "proposal_id": "P1",
                         "validation": {"depends_on_question_ids": ["Q2"]},
-                        "reason": "Без ответа на Q2 так не выйдет.", "rationale": None}
+                        "reason": "Без ответа на Q2 так не выйдет.", "rationale": None,
+                        "fixes": [{"question_id": "Q2", "change": "Выберите вариант.",
+                                   "why": "Q1 стоит на ответе на Q2."}]}
             return {"status": "user_selected", "selected_proposal_id": "P1",
                     "validation": {"valid": False, "depends_on_question_ids": ["Q2"]}}
         return Agents.analysis(prompt, judge)
@@ -780,6 +782,9 @@ def test_a_check_that_rests_on_another_question_is_redone_when_its_choice_change
     first = streams_of(council_id)["C"].analysis.analyses[0]
     assert (first.verdict, first.depends_on, first.context, first.rationale) == (
         "conflict", ["Q2"], ["Q2: -"], None)
+    # Что поправить — видно в проверке: где и что поменять.
+    assert [(f.question_id, f.change, f.why) for f in first.fixes] == [
+        ("Q2", "Выберите вариант.", "Q1 стоит на ответе на Q2.")]
     neighbours.clear()
     # По Q2 выбрали вариант: противоречие ушло, и Q1 проверяют заново, хоть выбор по нему тот же.
     chose(council_id, "C", [("Q1", "P1"), ("Q2", "P2")])

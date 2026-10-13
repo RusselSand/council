@@ -2041,9 +2041,20 @@ function DecisionCard({ question, n, options, choice, said, sought, value, ratio
     <p className="check ok"><strong>{t('decisions.validated')}</strong> {consequences(said, t)}</p>
   )
   else if (said?.verdict === 'conflict') verdict = (
-    <p className="check problem">
-      <strong>{t('decisions.conflict')}</strong> {[said.reason, consequences(said, t)].filter(Boolean).join(' ')}
-    </p>
+    <div className="check problem">
+      <p><strong>{t('decisions.conflict')}</strong> {[said.reason, consequences(said, t)].filter(Boolean).join(' ')}</p>
+      {said.fixes.length > 0 && (
+        <>
+          <p><strong>{t('decisions.fixes')}</strong></p>
+          <ol className="decision-fixes">{said.fixes.map(fix => (
+            <li key={`${fix.question_id}:${fix.change}`}>
+              <strong>{fix.question_id}</strong> — {fix.change}{fix.why && ` ${t('decisions.fixWhy', { why: fix.why })}`}
+            </li>
+          ))}</ol>
+          {said.fixes.some(fix => fix.question_id === question.id) && <p>{t('decisions.fixHere')}</p>}
+        </>
+      )}
+    </div>
   )
   else if (said?.verdict === 'recommended' && said.proposal) {
     const proposal = said.proposal

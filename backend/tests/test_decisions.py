@@ -2,7 +2,14 @@
 
 import pytest
 
-from spec_council.decisions import Analysis, Context, analysis_of, as_prompt, judged_analysis
+from spec_council.decisions import (
+    Analysis,
+    Context,
+    Fix,
+    analysis_of,
+    as_prompt,
+    judged_analysis,
+)
 from spec_council.slicing import BadAnswer
 
 
@@ -60,6 +67,7 @@ def test_the_judge_validates_flags_a_conflict_recommends_or_holds_back():
     assert validated == Analysis("validated", "P2", (), (5,), ("Q2",), "", "Бот — точка входа.")
     conflict = judged_analysis({"status": "conflict", "proposal_id": "P2", "reason": "против F4",
                                 "validation": {"constraint_conflicts": ["F4"]},
+                                "fixes": [{"question_id": "Q2", "change": "Решите Q2."}],
                                 "rationale": None}, CHOSEN)
     assert (conflict.kind, conflict.conflicts, conflict.reason, conflict.rationale) == (
         "conflict", (4,), "против F4", None)
@@ -74,7 +82,8 @@ def test_the_judge_validates_flags_a_conflict_recommends_or_holds_back():
 
 def test_a_problem_the_judge_names_is_a_conflict_whatever_the_status():
     found = judged_analysis({"status": "validated", "proposal_id": "P2",
-                             "validation": {"constraint_conflicts": ["F4"]}}, CHOSEN)
+                             "validation": {"constraint_conflicts": ["F4"]},
+                             "fixes": [{"question_id": "Q2", "change": "Решите Q2."}]}, CHOSEN)
     assert found.kind == "conflict"
 
 
@@ -87,6 +96,12 @@ def test_a_problem_the_judge_names_is_a_conflict_whatever_the_status():
     ({"status": "recommended", "proposal_id": "P1", "rationale": {"text": "x" * 2001}}, OPEN,
      "длиннее"),
     ({"status": "accepted"}, OPEN, "status"),
+    # Проблема без того, что с ней делать: ни одной правки — или ни одной годной.
+    ({"status": "conflict", "proposal_id": "P2"}, CHOSEN, "без правок"),
+    ({"status": "conflict", "proposal_id": "P2",
+      "fixes": [{"question_id": "Q9", "change": "Чужой вопрос."}]}, CHOSEN, "без правок"),
+    ({"status": "validated", "proposal_id": "P2", "validation": {"constraint_conflicts": ["F4"]}},
+     CHOSEN, "без правок"),
 ])
 def test_a_judge_answer_out_of_form_is_bad(answer, where, problem):
     with pytest.raises(BadAnswer, match=problem):
@@ -100,3 +115,25 @@ def test_the_judge_sees_each_analysis_as_the_participants_were_asked_for_it():
     assert as_prompt(Analysis("recommended", "P1", reason="дешевле")) == {
         "status": "unresolved", "recommendation": {"proposal_id": "P1", "reason": "дешевле"}}
     assert as_prompt(Analysis("none", None, reason="мало данных"))["recommendation"] is None
+
+
+def test_the_judge_says_what_to_fix_and_where():
+    here = Context(constraints=frozenset({4}), risks=frozenset(), questions=frozenset({"Q2"}),
+                   proposals=frozenset({"P2"}), selected="P2", question="Q1")
+    found = judged_analysis({
+        "status": "conflict", "proposal_id": "P2", "reason": "Против F4.",
+        "validation": {"constraint_conflicts": ["F4"]}, "rationale": None,
+        "fixes": [{"question_id": "q1", "change": " Уберите  «и в облако». ", "why": "F4."},
+                  {"question_id": "Q2", "change": "Решите его раньше."},
+                  {"question_id": "Q9", "change": "Чужой вопрос."},        # нет в потоке
+                  {"question_id": "Q2", "change": "  "},                   # без сути
+                  "не правка"]}, here)
+    assert found.fixes == (Fix("Q1", "Уберите «и в облако».", "F4."),
+                           Fix("Q2", "Решите его раньше."))
+    # Проблемы нет — и править нечего.
+    clean = judged_analysis({"status": "validated", "proposal_id": "P2",
+                             "fixes": [{"question_id": "Q2", "change": "Решите."}]}, here)
+    assert clean.fixes == ()
+    with pytest.raises(BadAnswer, match="правка длиннее"):
+        judged_analysis({"status": "conflict", "proposal_id": "P2",
+                         "fixes": [{"question_id": "Q1", "change": "x" * 1001}]}, here)

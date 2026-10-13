@@ -1,8 +1,9 @@
 """Анализ решения по одному вопросу: разбор ответов участников и судьи. Без ввода-вывода.
 
 Где человек выбрал вариант, его проверяют: совместим ли с идеей, соблюдает ли ограничения,
-от каких вопросов зависит, какие риски с ним связаны. Где вопрос unresolved, сравнивают его
-варианты и, если один обоснованно лучше, рекомендуют его. Новых вариантов здесь нет:
+от каких вопросов зависит, какие риски с ним связаны. Нашёл судья проблему — говорит и что
+поправить: в каком вопросе, что поменять и с чем это расходится. Где вопрос unresolved, сравнивают
+его варианты и, если один обоснованно лучше, рекомендуют его. Новых вариантов здесь нет:
 рекомендовать можно только из тех, что у вопроса есть. Выбор человека не меняется: проверка не
 того варианта или рекомендация вместо проверки — негодный ответ. Ссылки вторичны: чужой номер
 просто отбрасывается.
@@ -15,6 +16,8 @@ from .proposals import fragments_in, questions_in
 from .slicing import BadAnswer
 
 RATIONALE_MAX = 2000
+# Сколько знаков в одной правке: что поменять и почему.
+FIX_MAX = 1000
 
 # Ответы участника и судьи — в своих словах (decision_analysis.md, decision_judge.md).
 JUDGED = {"validated": "validated", "conflict": "conflict", "recommended": "recommended",
@@ -33,6 +36,17 @@ class Context:
     proposals: frozenset[str]
     # Выбор человека; None — вопрос unresolved.
     selected: str | None
+    # Сам вопрос: правка может быть и в нём.
+    question: str = ""
+
+
+@dataclass(frozen=True)
+class Fix:
+    """Что поправить, чтобы проблемы не стало: в каком вопросе, что поменять и почему."""
+
+    question: str
+    change: str
+    why: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,8 @@ class Analysis:
     depends_on: tuple[str, ...] = ()
     reason: str = ""
     rationale: str | None = None
+    # У conflict от судьи: что поправить, по шагу на правку.
+    fixes: tuple[Fix, ...] = ()
 
 
 def proposal_id(value: object) -> str | None:
@@ -75,6 +91,27 @@ def checked(data: dict, context: Context, field: str) -> Analysis:
         "conflict" if conflicts or validation.get("valid") is False else "validated",
         context.selected, conflicts, fragments_in(validation.get("risk_ids"), context.risks),
         questions_in(validation.get("depends_on_question_ids"), context.questions))
+
+
+def fixes_of(value: object, context: Context) -> tuple[Fix, ...]:
+    """Правки судьи: только в этом вопросе и других вопросах потока, и у каждой сказано, что
+    поменять. Правка с чужим вопросом или без сути отбрасывается, как чужой номер, но хоть одна
+    должна остаться: проблема без того, что с ней делать, — негодный ответ."""
+    known = context.questions | {context.question}
+    found: list[Fix] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        question, change = proposal_id(item.get("question_id")), reason_of(item.get("change"))
+        why = reason_of(item.get("why"))
+        if question not in known or not change:
+            continue
+        if len(change) + len(why) > FIX_MAX:
+            raise BadAnswer(f"правка длиннее {FIX_MAX} знаков")
+        found.append(Fix(question, change, why))
+    if not found:
+        raise BadAnswer("проблема без правок: не сказано, что поправить")
+    return tuple(found)
 
 
 def recommended(value: object, context: Context) -> str:
@@ -118,8 +155,9 @@ def judged_analysis(data: dict, context: Context) -> Analysis:
         found = checked(data, context, "proposal_id")
         # Судья назвал проблему — это конфликт, даже если status «validated».
         kind = "conflict" if found.conflicts or kind == "conflict" else "validated"
+        fixes = fixes_of(data.get("fixes"), context) if kind == "conflict" else ()
         return Analysis(kind, found.proposal, found.conflicts, found.risks, found.depends_on,
-                        reason, rationale)
+                        reason, rationale, fixes)
     if kind == "recommended":
         return Analysis(kind, recommended(data.get("proposal_id"), context), reason=reason,
                         rationale=rationale)

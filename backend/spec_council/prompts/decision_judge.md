@@ -55,6 +55,28 @@ Compare the analyses of the independent agents and check on your own:
 
 Form one canonical result of the check.
 
+### When there is a problem
+
+The user has to understand at a glance what is wrong and what to do about it.
+
+`reason` is the problem itself: one or two short sentences, what does not fit with what. Do not
+retell what is fine, and do not list risks that other choices have already removed.
+
+`fixes` is what the user has to change for the problem to go away — steps they can follow one by
+one. Each fix:
+- `question_id` — where to change it: this OPEN QUESTION or another question from RELATED
+  QUESTIONS;
+- `change` — what exactly to change, concretely: quote the words to remove or to replace and give
+  the new wording, or say which question to decide first. If keeping it as it is is also
+  acceptable, say so: "or keep it and say so in the rationale";
+- `why` — what it conflicts with, briefly and with IDs: the choice on another question (Q12, P22),
+  a constraint (F7), an accepted ADR.
+
+One fix — one change. Every problem in `reason` has at least one fix: a problem without
+`fixes` is an invalid answer. Wording of the chosen PROPOSAL is changed in this OPEN QUESTION:
+the user will take their own option with the corrected text. A question you name in a fix is
+also a question the decision depends on: list it in `depends_on_question_ids` too.
+
 ### Rationale
 
 If the user has already given a rationale, keep it unchanged.
@@ -155,9 +177,21 @@ the input. JSON keys, IDs and enum values stay exactly as specified below.
   "validation": {
     "constraint_conflicts": ["F7"],
     "risk_ids": [],
-    "depends_on_question_ids": []
+    "depends_on_question_ids": ["Q4"]
   },
-  "reason": "The chosen option contradicts F7.",
+  "reason": "The chosen option copies the logs to the cloud, and F7 keeps them on site.",
+  "fixes": [
+    {
+      "question_id": "Q1",
+      "change": "Remove \"and copies them to the cloud every night\" from the option text.",
+      "why": "F7: logs stay on site."
+    },
+    {
+      "question_id": "Q4",
+      "change": "Decide it first: the option already says the copy is nightly.",
+      "why": "The option answers Q4 in advance."
+    }
+  ],
   "rationale": null
 }
 
