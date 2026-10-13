@@ -10,7 +10,6 @@
 но работа по тем же вопросам и тому же выбору переносится (work.py), а не делается снова."""
 
 import logging
-import os
 from collections.abc import Callable, Sequence
 from itertools import count
 from pathlib import Path
@@ -117,6 +116,7 @@ from ..repository import (
     context_prompt,
     fits,
     merged,
+    same_copy,
     sources_of,
     working_copy,
 )
@@ -310,7 +310,8 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     with council_lock:
         plan()
     try:
-        sources = sources_of([(path, working_copy(path, repositories)) for path in edit.paths])
+        sources = sources_of([(path, working_copy(path, repositories, mark=True))
+                              for path in edit.paths])
         fits(merged(sources))
     except RepositoryError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -473,7 +474,7 @@ def scan_design(council_id: str, group: str, edit: ScanDesign, store: StoreDep,
                         423: {"description": "Совет ещё сканирует макет или работает ниже"}})
 def approve_design(council_id: str, group: str, edit: ApproveDesign, store: StoreDep,
                    config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                   notes_of: NotesOfDep) -> Council:
+                   notes_of: NotesOfDep, repositories: RepositoriesDep) -> Council:
     """Человек проходит шаг «Дизайн»: утверждает описание скана макета или пропускает шаг, — и
     совет сразу ищет открытые вопросы, а описание идёт во все следующие шаги. Если в каталоге
     заметок есть прошлые решения проекта, сначала совет отбирает относящиеся к идее, а вопросы
@@ -509,7 +510,7 @@ def approve_design(council_id: str, group: str, edit: ApproveDesign, store: Stor
                     step_key(stream.repository), step_key(step)), missing)
             else:
                 runs = [decisions_run(council, group, ready, agents, store, catalog,
-                                      own_ids(ready, notes))]
+                                      own_ids(ready, notes), repositories)]
                 search = runs[0].state.model_copy(deep=True)
             changes |= {**BELOW_DESIGN, "decisions_search": search}
         elif catalog is None:
@@ -757,7 +758,7 @@ def selection_for(stream: Stream, edit: SelectDecisions) -> list[ProjectDecision
              responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM})
 def start_decisions_search(council_id: str, group: str, store: StoreDep, config: ConfigDep,
                            agents: AgentsDep, launch: LauncherDep,
-                           notes_of: NotesOfDep) -> Council:
+                           notes_of: NotesOfDep, repositories: RepositoriesDep) -> Council:
     """Отбирает прошлые решения проекта заново: после сбоя или если при прохождении шага не было
     подключения к моделям. Повтор не платит второй раз за ответы, которые модели уже дали."""
     def ready(council: Council) -> None:
@@ -783,7 +784,7 @@ def start_decisions_search(council_id: str, group: str, store: StoreDep, config:
         return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                             council.participants, council.judge, agents, report,
                             catalog=project_catalog(notes, stream), scan=approved_scan(stream),
-                            own=own_ids(stream, notes))
+                            own=own_ids(stream, notes), repositories=repositories)
 
     return start_run(council_id, store, config, agents, launch, searching(group), ready, None,
                      build)
@@ -798,11 +799,11 @@ def approved_scan(stream: Stream) -> RepositoryScan | None:
 
 
 def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, store: Store,
-                  catalog: Catalog, own: list[str]) -> DecisionsRun:
+                  catalog: Catalog, own: list[str], repositories: Path | None) -> DecisionsRun:
     return DecisionsRun(council.id, stream, fragments_of(council, group_of(council, group)),
                         council.participants, council.judge, runner,
                         reporter(store, council.id, searching(group)), catalog=catalog,
-                        scan=approved_scan(stream), own=own)
+                        scan=approved_scan(stream), own=own, repositories=repositories)
 
 
 def design_step(stream: Stream, edit: ApproveDesign) -> DesignStep:
@@ -1533,12 +1534,14 @@ def code_of(stream: Stream, repositories: Path | None) -> list[Source]:
 
 def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
     """Рабочая копия скана, какая она сейчас. Тот же путь от другого каталога репозиториев —
-    уже другая рабочая копия: читать её под картой прежней нельзя."""
+    уже другая рабочая копия: читать её под картой прежней нельзя. Но тот же каталог, видный
+    по-другому (снаружи докера и в нём), — та же копия (same_copy)."""
     try:
-        found = working_copy(source.path, repositories)
+        found = working_copy(source.within if source.within and repositories is not None
+                             else source.path, repositories)
     except RepositoryError as exc:
         raise HTTPException(422, f"Рабочую копию {source.path} не прочитать: {exc}") from None
-    if os.path.normcase(str(found.root)) != os.path.normcase(source.root):
+    if not same_copy(source, found.root):
         raise HTTPException(422, f"По пути {source.path} теперь другая рабочая копия: "
                                  f"сканировали {source.root}, а сейчас это {found.root} — "
                                  "просканируйте заново")

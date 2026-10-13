@@ -26,10 +26,11 @@ import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
+from uuid import uuid4
 
 from .ideas import reason_of
 from .models import (
@@ -40,6 +41,7 @@ from .models import (
     RepositoryFinding,
     RepositoryFlow,
     RepositoryMap,
+    RepositoryScan,
     RepositoryUnknown,
     ScannedRepository,
 )
@@ -97,6 +99,10 @@ class Inventory:
     # Чего нет в снимке, хоть оно и в рабочей копии: нескачанные подмодули и ссылки (их не
     # копируем — за ссылкой может быть что угодно), с причиной; модели должны это знать.
     omitted: tuple[str, ...] = ()
+    # Метка рабочей копии (checkout_of) и её корень от каталога репозиториев — по ним копию
+    # находят и узнают, как бы ни был виден каталог (working_copy).
+    checkout: str = ""
+    within: str = ""
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -363,16 +369,125 @@ def placed(text: str, base: Path | None) -> Path:
     return path.resolve()
 
 
-def working_copy(text: str, base: Path | None) -> Inventory:
+def working_copy(text: str, base: Path | None, *, mark: bool = False) -> Inventory:
     """Рабочая копия по тексту человека — целиком внутри каталога репозиториев: корень git
     может оказаться выше выбранной папки. Корень — одним дешёвым вызовом git, до обхода: чужую
-    рабочую копию не читаем даже ради отказа."""
+    рабочую копию не читаем даже ради отказа. С её меткой (mark — поставить, если её нет: скан)
+    и корнем от каталога репозиториев. Всё это — git и файлы, и потому вне замка советов."""
     root = top_of(located(text, base))
     if base is not None and not root.is_relative_to(base.resolve()):
         raise RepositoryError(f"Корень рабочей копии {root} вне каталога репозиториев {base}")
     found = inventory(root)
     fits(found)
-    return found
+    within = root.relative_to(base.resolve()).as_posix() if base is not None else ""
+    return replace(found, checkout=checkout_of(root, mark=mark), within=within)
+
+
+def has_commit(root: Path, sha: str) -> bool:
+    """Есть ли в рабочей копии этот коммит."""
+    try:
+        git_bytes(root, "cat-file", "-e", f"{sha}^{{commit}}")
+    except RepositoryError:
+        return False
+    return True
+
+
+# Файл метки рабочей копии в её каталоге git: git посторонних файлов там не замечает.
+CHECKOUT = "spec-council-checkout"
+# Метки ставят по одной: два скана одной копии разом иначе поставили бы разные, и один запомнил
+# бы не ту, что на диске. Замок — только на метки, не советов: в нём лишь пара файлов, не git.
+MARKING = threading.Lock()
+
+
+def checkout_of(root: Path, *, mark: bool = False) -> str:
+    """Метка рабочей копии — свой номер в её каталоге git. Каталог git свой у каждого клона и
+    каждого worktree, а номер в нём один и тот же, как бы ни был виден каталог репозиториев:
+    снаружи докера (C:\\…\\repo) и внутри (/repos/repo). mark — поставить, если её ещё нет (скан).
+    Не прочитать и не поставить — пусто."""
+    try:
+        found = git_bytes(root, "rev-parse", "--absolute-git-dir").removesuffix(b"\n")
+    except RepositoryError:
+        return ""
+    path = Path(os.fsdecode(found)) / CHECKOUT
+    mark_now = mark_in(path)
+    if mark_now or not mark:
+        return mark_now
+    with MARKING:
+        return marked(path)
+
+
+def marked(path: Path) -> str:
+    """Метка в файле path — та, что уже есть, или новая. Появляется она целиком или никак:
+    сначала — во временном файле рядом, потом — жёсткой ссылкой, а та не перезапишет метку,
+    которую тем временем поставил другой процесс. Жёстких ссылок нет — заменой, если метки всё ещё
+    нет; сканы одного сервера ставят метки по одной (MARKING), и каждый вернёт ту, что на диске.
+    Пустая или битая метка (прерванная запись) — не метка: её заменяют."""
+    mark_now = mark_in(path)
+    if mark_now:
+        return mark_now
+    made = uuid4().hex
+    part = path.with_name(f"{CHECKOUT}-{made}.part")
+    try:
+        part.write_text(f"{made}\n", encoding="ascii", newline="\n")
+        try:
+            os.link(part, path)
+        except FileExistsError:
+            if not mark_in(path):
+                os.replace(part, path)
+        except OSError:
+            if not mark_in(path):
+                os.replace(part, path)
+    except OSError:
+        return ""
+    finally:
+        part.unlink(missing_ok=True)
+    return mark_in(path)
+
+
+def mark_in(path: Path) -> str:
+    """Метка из файла — 32 шестнадцатеричных знака; нет файла, пустой или не метка — пусто."""
+    try:
+        text = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return ""
+    return text if re.fullmatch(r"[0-9a-f]{32}", text) else ""
+
+
+def same_copy(source: ScannedRepository, root: Path) -> bool:
+    """По пути скана — та же рабочая копия, что сканировали: с той же меткой (checkout_of). Другой
+    клон или worktree того же проекта — уже другая копия, хоть коммит в нём и тот же: карта могла
+    описывать правки, которых в нём нет. Скан без метки (сделан раньше) — по корню; корень другой
+    (каталог репозиториев виден по-другому) — та же, если скан был без правок и сканированный
+    коммит в ней есть: правок, которые не узнать, у такого скана нет."""
+    if source.checkout:
+        return checkout_of(root) == source.checkout
+    if os.path.normcase(str(root)) == os.path.normcase(source.root):
+        return True
+    return not source.dirty and bool(source.commit_sha) and has_commit(root, source.commit_sha)
+
+
+def rerooted(scan: RepositoryScan, base: Path | None) -> RepositoryScan:
+    """Скан с корнями рабочих копий, где они сейчас: по их местам от каталога репозиториев
+    (located_again), если там та же копия (same_copy). Не найти или там уже другая — корня нет, и
+    следа по ней не будет: прежний корень мог привести в чужую копию."""
+    repositories = []
+    for source in scan.repositories:
+        try:
+            root = top_of(located_again(source, base))
+        except RepositoryError:
+            root = None
+        same = (root is not None and bool(source.root)
+                and (base is None or root.is_relative_to(base.resolve()))
+                and same_copy(source, root))
+        repositories.append(source.model_copy(update={"root": str(root) if same else ""}))
+    return scan.model_copy(update={"repositories": repositories})
+
+
+def located_again(source: ScannedRepository, base: Path | None) -> Path:
+    """Где рабочая копия скана сейчас: по её корню от каталога репозиториев, каким он был при
+    скане (within), — так её находят, и если путь ввели абсолютным, а каталог теперь виден
+    по-другому. Скан до этого — по пути, как его ввели."""
+    return located(source.within if source.within and base is not None else source.path, base)
 
 
 def top_of(path: Path) -> Path:
@@ -809,6 +924,7 @@ def scanned(source: Source) -> ScannedRepository:
     """Что скан помнит о рабочей копии."""
     found = source.found
     return ScannedRepository(name=source.name, path=source.path, root=str(found.root),
+                             within=found.within, checkout=found.checkout,
                              commit_sha=found.commit_sha, dirty=found.dirty,
                              files=len(found.files), outside=found.outside,
                              omitted=capped(found.omitted), omitted_count=len(found.omitted))

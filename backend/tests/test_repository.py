@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,8 @@ from spec_council.repository import (
     Context,
     Inventory,
     RepositoryError,
+    Source,
+    checkout_of,
     context_prompt,
     inventory,
     inventory_prompt,
@@ -22,6 +26,8 @@ from spec_council.repository import (
     located,
     map_of,
     merged,
+    same_copy,
+    scanned,
     sha_prompt,
     snapshot,
     snapshot_all,
@@ -1107,3 +1113,100 @@ def test_a_file_name_that_is_not_utf8_is_scanned_as_it_is(repo, tmp_path):
     into, _, copied = copy(found, tmp_path)
     assert name in copied
     assert os.path.exists(os.fsencode(into) + b"/bad-\xff.py")
+
+
+def head_of(root):
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_a_working_copy_is_known_by_its_mark_however_the_folder_is_seen(repo, tmp_path):
+    mark = checkout_of(repo, mark=True)
+    assert mark and checkout_of(repo) == mark                       # одна и та же
+    # git метки не замечает: рабочая копия чистая, как и была.
+    assert subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], check=True,
+                          capture_output=True, text=True).stdout == ""
+    scanned = ScannedRepository(path="project", root=str(tmp_path / "elsewhere" / "project"),
+                                checkout=mark, commit_sha=head_of(repo))
+    # Тот же каталог, видный по-другому (снаружи докера и в нём), — та же копия: метка с ней.
+    seen = tmp_path / "seen" / "project"
+    shutil.copytree(repo, seen)
+    assert same_copy(scanned, repo) and same_copy(scanned, seen)
+    # Клон и worktree того же проекта — другие копии, хоть коммит в них тот же.
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
+    git(repo, "worktree", "add", "-q", str(tmp_path / "tree"))
+    assert checkout_of(clone) == "" and not same_copy(scanned, clone)
+    assert not same_copy(scanned, tmp_path / "tree")
+    assert checkout_of(clone, mark=True) not in ("", mark)
+
+
+def test_a_scan_without_a_mark_is_known_by_its_root_or_clean_commit(repo, tmp_path):
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
+    old = ScannedRepository(path="project", root=str(repo), commit_sha=head_of(repo))
+    assert same_copy(old, repo)                                     # тот же корень
+    assert same_copy(old, clone)                                    # чистый — по коммиту
+    # С правками — нет: карта могла описывать их, а в другой копии их не узнать.
+    assert not same_copy(old.model_copy(update={"dirty": True}), clone)
+
+
+def test_a_scan_record_takes_the_mark_found_outside_the_lock(repo, monkeypatch):
+    """Метку ставит и читает working_copy — вне замка советов. Запись скана (под замком) git не
+    зовёт: только переносит найденное."""
+    found = working_copy(str(repo), None, mark=True)
+    assert found.checkout == checkout_of(repo) and found.checkout
+
+    def no_git(*args, **kwargs):
+        raise AssertionError("git под замком")
+
+    monkeypatch.setattr(repository, "git_bytes", no_git)
+    record = scanned(Source("", str(repo), found))
+    assert record.checkout == found.checkout
+
+
+def test_a_mark_appears_whole_and_a_broken_one_is_replaced(repo, monkeypatch):
+    marker = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
+                                 check=True, capture_output=True, text=True).stdout.strip())
+    marker = marker / repository.CHECKOUT
+    marker.write_text("", encoding="ascii")                         # запись прервалась
+    mark = checkout_of(repo, mark=True)
+    assert len(mark) == 32 and checkout_of(repo) == mark            # пустую заменили
+    marker.unlink()
+    # Пока ставили, метку поставил другой скан: его метка и остаётся, а не пустота и не наша.
+    other = "a" * 32
+
+    def raced(source, target):
+        Path(target).write_text(f"{other}\n", encoding="ascii")
+        raise FileExistsError(target)
+
+    monkeypatch.setattr(os, "link", raced)
+    assert checkout_of(repo, mark=True) == other
+    # Жёстких ссылок нет — метку ставят заменой, и временного файла не остаётся.
+    marker.unlink()
+
+    def no_links(source, target):
+        raise OSError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_links)
+    assert len(checkout_of(repo, mark=True)) == 32
+    assert [p.name for p in marker.parent.glob(f"{repository.CHECKOUT}*")] == [marker.name]
+
+
+def test_concurrent_scans_without_hard_links_all_get_the_mark_on_disk(repo, monkeypatch):
+    """Жёстких ссылок нет, а копию сканируют разом несколько советов: метку ставит один, и все
+    запоминают ту, что на диске."""
+    def no_links(source, target):
+        raise OSError(1, "Operation not permitted")
+
+    real_replace = os.replace
+
+    def slow_replace(source, target):
+        time.sleep(0.05)                    # окно, в котором другой скан тоже не видит метки
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "link", no_links)
+    monkeypatch.setattr(os, "replace", slow_replace)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        marks = list(pool.map(lambda _: checkout_of(repo, mark=True), range(6)))
+    assert len(set(marks)) == 1 and marks[0] == checkout_of(repo)

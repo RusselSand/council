@@ -36,6 +36,7 @@ from spec_council.project import (
     selected,
     trails_of,
 )
+from spec_council.repository import checkout_of, rerooted
 from spec_council.slicing import BadAnswer
 from tests.test_streams import (
     DECIDED,
@@ -647,3 +648,68 @@ def test_the_trail_comes_from_the_approved_repository_map(agents, tmp_path):
     assert search.traced == 1
     catalog = section(agents.prompts["project_decisions_discovery"], "PROJECT ADR CATALOG")
     assert '"issue": "ISS-0003"' in catalog and '"file": "app.py"' in catalog
+
+
+def test_the_trail_is_found_where_the_repositories_folder_is_seen_now(tmp_path):
+    """Сканировали снаружи докера, а отбор идёт внутри: тот же каталог репозиториев виден
+    по другому пути — корень рабочей копии берётся нынешний, если это та же копия."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("project", tmp_path / "elsewhere" / "project"))     # корень, как был снаружи
+    scan.repositories[0].commit_sha = head(repo)
+    assert scanned_commits(scan) == {}                                  # по старому корню — никак
+    assert scanned_commits(rerooted(scan, tmp_path)) == {repo.resolve(): head(repo)}
+    # По тому же пути — другой репозиторий: сканированного коммита нет — корня нет, и следа тоже:
+    # прежний корень мог привести в чужую копию.
+    scan.repositories[0].commit_sha = "0" * 40
+    assert rerooted(scan, tmp_path).repositories[0].root == ""
+    assert scanned_commits(rerooted(scan, tmp_path)) == {}
+
+
+def test_the_trail_is_found_in_the_copy_where_it_is_when_the_selection_runs(agents, tmp_path):
+    """Сканировали в одном месте, а отбор решений идёт, когда каталог репозиториев виден уже
+    по-другому (снаружи докера и в нём): прежнего корня нет — след ищется в той же копии там,
+    где она сейчас."""
+    repos = tmp_path / "repos"
+    repo = repos / "project"
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q")
+    (repo / "app.py").write_text("def main(): ...\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "Поиск ISS-0003")
+    app.dependency_overrides[get_repositories] = lambda: repos
+    try:
+        council_id = grouped()
+        confirm(council_id)
+        approve(council_id, "C", IDEA_C)
+        scans(council_id, "C")
+        takes(council_id, "C")
+        mounted = tmp_path / "mounted"
+        repos.rename(mounted)                                   # прежнего корня больше нет
+        app.dependency_overrides[get_repositories] = lambda: mounted
+        passes(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_repositories)
+    assert streams_of(council_id)["C"].decisions_search.traced == 1
+
+
+def test_a_replaced_copy_at_the_scanned_root_leaves_no_trail(tmp_path):
+    """На прежнем месте — другой клон того же проекта: коммит в нём есть, а метки нет. Прежний
+    корень не берётся — иначе след прочли бы из чужой копии."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("project", repo))
+    scan.repositories[0].commit_sha = head(repo)
+    scan.repositories[0].checkout = checkout_of(repo, mark=True)
+    assert scanned_commits(rerooted(scan, tmp_path)) == {repo.resolve(): head(repo)}
+    repo.rename(tmp_path / "original")
+    git(tmp_path, "clone", "-q", str(tmp_path / "original"), str(repo))
+    assert rerooted(scan, tmp_path).repositories[0].root == ""
+    assert scanned_commits(rerooted(scan, tmp_path)) == {}
+
+
+def test_a_copy_without_a_root_still_counts_for_the_paths_of_the_others(tmp_path):
+    """В скане две рабочие копии, а одну теперь не найти: пути карты всё так же с папкой копии,
+    и след по другой находится."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("api", repo), ("front", tmp_path / "front"), paths=("api/app.py",))
+    scan.repositories[1].root = ""                                  # её не найти
+    assert evidence_files(scan) == [(repo, "app.py", "api/app.py")]

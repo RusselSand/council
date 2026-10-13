@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .models import CodeTrail, ProjectDecision, RepositoryScan
 from .notes import Catalog, declared_issues, issues_in
-from .repository import RepositoryError, git_bytes
+from .repository import RepositoryError, git_bytes, has_commit
 from .repository import text_of as reason_text
 from .slicing import BadAnswer
 
@@ -95,8 +95,11 @@ def evidence_files(scan: RepositoryScan,
                    only: Collection[Path] | None = None) -> list[tuple[Path, str, str]]:
     """Файлы, на которые опирается карта: доводы находок и точки входа потоков — (корень
     рабочей копии, путь в ней, путь в карте). У нескольких копий путь в карте начинается с её
-    папки. only — из каких рабочих копий (до предела FILES_MAX: чужие его не съедят)."""
-    roots = {source.name: Path(source.root) for source in scan.repositories if source.root}
+    папки. only — из каких рабочих копий (до предела FILES_MAX: чужие его не съедят). Копия без
+    корня (её не найти или там уже другая) следа не даёт, но в счёт: по числу копий скана пути карты
+    с папкой копии или без неё."""
+    roots = {source.name: Path(source.root) if source.root else None
+             for source in scan.repositories}
     result = scan.result
     shown = [evidence.path for finding in (result.findings if result else [])
              for evidence in finding.evidence]
@@ -107,7 +110,7 @@ def evidence_files(scan: RepositoryScan,
     return files[:FILES_MAX]
 
 
-def entry_on_disk(entry: str, roots: Mapping[str, Path]) -> str:
+def entry_on_disk(entry: str, roots: Mapping[str, Path | None]) -> str:
     """Файл точки входа из карты, сохранённой до entry_file: самое длинное начало до «:», « »
     или «(», что есть файлом в рабочей копии сейчас (в именах бывают и они). Нет — следа по ней
     нет, как и у карт без точек входа."""
@@ -129,19 +132,14 @@ def scanned_commits(scan: RepositoryScan) -> dict[Path, str]:
             and has_commit(Path(source.root), source.commit_sha)}
 
 
-def has_commit(root: Path, sha: str) -> bool:
-    try:
-        git_bytes(root, "cat-file", "-e", f"{sha}^{{commit}}")
-    except RepositoryError:
-        return False
-    return True
-
-
-def located(shown: str, roots: Mapping[str, Path]) -> tuple[Path, str, str] | None:
-    """Путь из карты в рабочей копии: (корень, путь в ней, путь в карте)."""
+def located(shown: str, roots: Mapping[str, Path | None]) -> tuple[Path, str, str] | None:
+    """Путь из карты в рабочей копии: (корень, путь в ней, путь в карте). roots — все копии
+    скана: у нескольких пути карты начинаются с папки копии; копия без корня — None, в ней пути
+    нет."""
     folder, _, rest = shown.partition("/") if len(roots) > 1 else ("", "", shown)
-    if folder in roots and rest and "\\" not in rest:
-        return roots[folder], rest, shown
+    root = roots.get(folder)
+    if root is not None and rest and "\\" not in rest:
+        return root, rest, shown
     return None
 
 

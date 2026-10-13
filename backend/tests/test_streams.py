@@ -1816,6 +1816,72 @@ def test_another_repositories_folder_is_not_taken_for_the_scanned_copy(agents, r
     assert streams_of(council_id)["C"].issues is None
 
 
+def test_the_scanned_copy_seen_from_another_place_is_still_cut_with_code(agents, repos, tmp_path):
+    """Сканировали снаружи докера, а режут внутри: тот же каталог репозиториев виден по другому
+    пути. Это та же рабочая копия — в ней сканированный коммит, — и задачи режут с её кодом."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    mounted = tmp_path / "mounted"
+    shutil.copytree(repos, mounted / "project")                     # тот же репозиторий, с .git
+    app.dependency_overrides[get_repositories] = lambda: mounted
+    res = approves(council_id, "C")
+    assert res.status_code == 200
+    issues = streams_of(council_id)["C"].issues
+    assert (issues.state, issues.code) == ("done", True)
+    assert agents.seen == ["app.py"]
+
+
+def test_a_copy_scanned_by_an_absolute_path_is_found_where_the_folder_is_seen_now(
+        agents, repos, tmp_path):
+    """Путь ввели абсолютным, а каталог репозиториев теперь виден по-другому: прежнего пути нет,
+    но копию находят по её месту в каталоге и узнают по метке."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    assert scans(council_id, "C", path=str(repos.resolve())).status_code == 202
+    takes(council_id, "C")
+    passes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    assert streams_of(council_id)["C"].scan.repositories[0].within == "project"
+    mounted = tmp_path / "mounted"
+    shutil.copytree(repos, mounted / "project")
+    repos.rename(tmp_path / "gone")                                 # прежнего пути нет
+    app.dependency_overrides[get_repositories] = lambda: mounted
+    res = approves(council_id, "C")
+    assert res.status_code == 200
+    assert streams_of(council_id)["C"].issues.code
+
+
+def test_another_clone_with_the_scanned_commit_is_not_the_scanned_copy(agents, repos, tmp_path):
+    """По тому же пути — клон того же проекта, и сканированный коммит в нём есть, но это другая
+    рабочая копия: карта могла описывать правки, которых в ней нет."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    assert streams_of(council_id)["C"].scan.repositories[0].checkout   # скан поставил метку
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(repos), str(other / "project")], check=True,
+                   capture_output=True)
+    app.dependency_overrides[get_repositories] = lambda: other
+    res = approves(council_id, "C")
+    assert res.status_code == 422 and "другая" in res.json()["detail"]
+
+
 def test_a_scan_that_does_not_know_its_root_is_scanned_again_before_the_cut(agents, repos):
     """Скан, сделанный до того, как совет стал помнить корень рабочей копии: та ли это копия,
     не проверить — её не читают, а сканируют заново."""
