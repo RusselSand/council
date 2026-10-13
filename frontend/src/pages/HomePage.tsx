@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
-import { api, councilPath, notesOf, type Council, type Settings } from '../api'
+import { api, councilPath, foldersOf, type Council, type Settings } from '../api'
 import { formatDate, formatToday } from '../i18n'
 import { attention, councilLight } from '../light'
 import { useLoad } from '../useLoad'
@@ -38,11 +38,11 @@ const TILES = ['go', 'idle', 'yours', 'failed'] as const
 
 function Summary({ councils, settings }: Readonly<{ councils: Council[]; settings: Settings }>) {
   const { t } = useTranslation()
-  const lights = councils.map(council => councilLight(council, notesOf(council, settings)))
+  const lights = councils.map(council => councilLight(council, foldersOf(council, settings)))
   const tile = (kind: (typeof TILES)[number]) =>
     lights.filter(light => (kind === 'go' ? light === 'running' || light === 'done' : light === kind)).length
   const streams = councils.reduce((sum, council) => sum + (council.streams?.length ?? 0), 0)
-  const pending = councils.flatMap(council => attention(council, notesOf(council, settings)).map(item => ({ ...item, council })))
+  const pending = councils.flatMap(council => attention(council, foldersOf(council, settings)).map(item => ({ ...item, council })))
 
   return (
     <>

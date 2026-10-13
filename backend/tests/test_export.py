@@ -608,3 +608,32 @@ def test_an_issue_file_reads_back_as_written():
     back = issue_parsed(issue_rendered(note))
     assert (back.id, back.type, back.body, back.links) == (
         "ISS-0012", "issue", "# Поиск\n\nИщется.", ("OUT-0003", "ADR-0007", "ISS-0011"))
+
+
+def test_a_number_in_a_file_name_is_taken_even_if_the_file_says_another(root, issues):
+    issues.mkdir()
+    # Файл задачи ISS-0008 назван ISS-0009.md: новая задача ISS-0009 легла бы в него.
+    named = issues / "ISS-0009.md"
+    named.write_text("---\nid: ISS-0008\n---\n\n# Чужая\n", encoding="utf-8")
+    record, notes, _, _ = export(root, TASKED, issues=issues)
+    assert [n.id for n in record.numbers] == ["ISS-0010", "ISS-0011", "ISS-0012"]
+    assert named.read_text(encoding="utf-8") == "---\nid: ISS-0008\n---\n\n# Чужая\n"
+    assert {n.id for n in notes if n.type == "issue"} == {"ISS-0010", "ISS-0011"}
+
+
+def test_an_issue_after_one_that_gets_no_file_gets_none_either(root, issues):
+    tasks = TASKS.model_copy(update={"issues": [
+        TASKS.issues[0],
+        TASKS.issues[1].model_copy(update={"depends_on": ["I1", "I4"]}),
+        TASKS.issues[2],
+        Issue(id="I4", title="Хранилище секретов", user_story="…", outcome_ids=["O2"]),
+        Issue(id="I5", title="Отчёт о деплое", user_story="…", outcome_ids=["O1"],
+              depends_on=["I2"])]})
+    notes, _, numbers, skipped = draft(root, TASKED.model_copy(update={"issues": tasks}),
+                                       issues=issues)
+    # I4 — без номера: её итог не выгружается. I2 ждёт её, а I5 — I2: агент начал бы их раньше.
+    assert [(n.id, n.issue_id) for n in numbers] == [
+        ("ISS-0008", "I1"), ("ISS-0009", "I2"), ("ISS-0010", "I3"), ("ISS-0011", "I5")]
+    assert [n.id for n in notes if n.type == "issue"] == ["ISS-0008"]
+    assert any(r.startswith("ISS-0009 ") and "после I4" in r for r in skipped)
+    assert any(r.startswith("ISS-0011 ") and "после ISS-0009" in r for r in skipped)

@@ -427,6 +427,12 @@ export const notesOf = (council: Council, settings: Settings): string | null =>
 export const issuesOf = (council: Council, settings: Settings): string | null =>
   projectOf(council, settings)?.issues_root ?? null
 
+/** Куда выгружают потоки совета: каталог заметок и папка задач его проекта. По ним выгрузка — выгрузка. */
+export interface Folders { notes: string | null; issues: string | null }
+
+export const foldersOf = (council: Council, settings: Settings): Folders =>
+  ({ notes: notesOf(council, settings), issues: issuesOf(council, settings) })
+
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message) }

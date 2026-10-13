@@ -685,6 +685,7 @@ export const en: Dict = {
   'notes.whereIssues': 'Issues folder: {{root}}',
   'notes.noIssues': 'The project has no issues folder — issues are only lines in their outcomes. Set it on the Projects page.',
   'notes.outdated': 'The export is for earlier issues: they were cut again. Build the draft and export again.',
+  'notes.issuesElsewhere': 'Issue files were exported to another issues folder — the project was edited. Build the draft and export again.',
   'notes.elsewhere': 'The export went to another notes catalog: {{root}}. Build the draft and export to the current one.',
   'notes.build': 'Build the notes',
   'notes.rebuild': 'Build again',

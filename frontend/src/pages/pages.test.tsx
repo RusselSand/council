@@ -1770,8 +1770,10 @@ describe('Поток: решения и итоги', () => {
       current: null }
     const filed: NotesDraft = { ...DRAFT, issues_root: '/issues', notes: [...DRAFT.notes, issue] }
     let draft = filed
+    let exportRecord: NotesExport | null = null
     fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: draft }), project: PROJECT.id }),
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: draft, notes: exportRecord }),
+                        project: PROJECT.id }),
       settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, issues: 'kromka-api/issues', issues_root: '/issues' }] }),
     }))
     renderAt('/councils/demo-1/streams/A')
@@ -1789,6 +1791,15 @@ describe('Поток: решения и итоги', () => {
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.movedIssues'])).toBeTruthy()
     expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
+    cleanup()
+    // Выгружали, когда папка задач была другой: заметки на месте, а файлов задач здесь нет — выгружать снова.
+    draft = { ...filed, run: 'n2' }
+    exportRecord = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '/old-issues',
+                     notes: [], numbers: DRAFT.numbers }
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.issuesElsewhere'])).toBeTruthy()
+    expect(screen.getByRole('button', { name: ru['notes.write'] })).toBeTruthy()
   })
 
   it('папку проекта сменили в другой вкладке — черновик, собранный после, записать можно', async () => {

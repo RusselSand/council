@@ -19,6 +19,7 @@
 """
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from .notes import FRONTMATTER, Note, NotesError, issue_key, scalar
@@ -85,6 +86,14 @@ def loaded(root: Path | None) -> dict[str, Note]:
         if twin is not note:
             raise NotesError(f"Два файла задачи {note.id}: {twin.path} и {path}")
     return found
+
+
+def occupied(files: Mapping[str, Note]) -> set[str]:
+    """Номера, под чьим именем лежит файл другой задачи (ISS-0009.md с id ISS-0008): задача с
+    таким номером легла бы в этот файл и затёрла его."""
+    return {issue_key(note.path.stem) for note in files.values()
+            if note.path is not None and ISSUE.fullmatch(note.path.stem)
+            and issue_key(note.path.stem) != note.id}
 
 
 def path_of(root: Path, note: Note) -> Path:

@@ -311,21 +311,23 @@ def issue_parts(stream: Stream, numbers: Sequence[IssueNumber], refs: Mapping[st
                 fragments: Mapping[int, LabeledFragment], words: Mapping[str, str]
                 ) -> tuple[list[tuple[Part, str]], list[str]]:
     """Файлы задач — с номером каждой. Файлом ложится задача с номером, которую ничто не держит:
-    без решения её не сделать (а держат её и задачи, после которых её делать, — issues.py). Ссылки
-    и текст — с номерами заметок, что лягут в каталог: ids — их номера по ключу части."""
+    без решения её не сделать (а держат её и задачи, после которых её делать, — issues.py). И
+    только если файлом ложится каждая задача, после которой её делать: иначе агент взялся бы за
+    неё раньше, не зная, что её что-то ждёт. Ссылки и текст — с номерами заметок, что лягут в
+    каталог: ids — их номера по ключу части."""
     issues = {issue.id: issue for issue in (stream.issues.issues if stream.issues else [])}
     titles = {outcome.id: outcome.title
               for outcome in (stream.outcomes.outcomes if stream.outcomes else [])}
     texts = {part.key: part.text for part in parts}
     by_issue = {number.issue_id: number for number in numbers}
+    held = held_issues(numbers, issues)
     found: list[tuple[Part, str]] = []
-    skipped: list[str] = []
+    skipped = [f"{number.id} «{number.title}» файлом не ложится: {held[number.issue_id]}"
+               for number in numbers if number.issue_id in held]
     for number in numbers:
-        issue = issues[number.issue_id]
-        if issue.blocked_by:
-            skipped.append(f"{number.id} «{issue.title}» файлом не ложится: её держит "
-                           f"{', '.join(issue.blocked_by)} — без решения задачу не сделать")
+        if number.issue_id in held:
             continue
+        issue = issues[number.issue_id]
         outcomes = [(ids[refs[name]], titles[name]) for name in issue.outcome_ids
                     if name in refs]
         adrs = [(ids[refs[name]], texts[refs[name]]) for name in issue.adr_ids if name in refs]
@@ -337,6 +339,34 @@ def issue_parts(stream: Stream, numbers: Sequence[IssueNumber], refs: Mapping[st
         links = tuple(dict.fromkeys(name for name, _ in (*outcomes, *adrs, *after)))
         found.append((Part(number.key, "issue", text, links), number.id))
     return found, skipped
+
+
+def held_issues(numbers: Sequence[IssueNumber], issues: Mapping[str, Issue]) -> dict[str, str]:
+    """Задачи с номером, что файлом не лягут, — и почему: держит открытый вопрос или пробел,
+    задача, после которой её делать, без номера (её итоги не выгружаются) или сама не ложится
+    файлом — по цепочке."""
+    by_issue = {number.issue_id: number for number in numbers}
+    held: dict[str, str] = {}
+    for number in numbers:
+        issue = issues[number.issue_id]
+        missing = [name for name in issue.depends_on if name not in by_issue]
+        if issue.blocked_by:
+            held[number.issue_id] = (f"её держит {', '.join(issue.blocked_by)} — без решения "
+                                     "задачу не сделать")
+        elif missing:
+            held[number.issue_id] = (f"её делают после {', '.join(missing)}, а у той нет "
+                                     "номера: её итоги не выгружаются")
+    changed = True
+    while changed:
+        changed = False
+        for number in numbers:
+            before = [by_issue[name].id for name in issues[number.issue_id].depends_on
+                      if name in held]
+            if number.issue_id not in held and before:
+                held[number.issue_id] = (f"её делают после {', '.join(before)}, а та файлом "
+                                         "не ложится")
+                changed = True
+    return held
 
 
 def issue_text(issue: Issue, number: str, outcomes: Sequence[tuple[str, str]],
@@ -371,22 +401,24 @@ def line(text: str) -> str:
 
 def numbered_issues(stream: Stream, catalog: Catalog, previous: NotesExport | None,
                     exported: set[str] | None = None, reserved: Collection[str] = (),
-                    files: Collection[str] = ()) -> list[IssueNumber]:
+                    files: Collection[str] = (),
+                    occupied: Collection[str] = ()) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию) — прежний номер, новая —
     следующий после самого большого в каталоге, прежней выгрузке и папке задач (files — номера
     её файлов: новая задача не ляжет в чужой файл). Прежний номер, которого в каталоге уже нет
-    (строку задачи убрали руками), мог занять другой поток — тогда новый. exported — итоги, что
-    лягут в каталог: задача без них номера не получает. reserved — номера из выгрузок других
-    потоков: заняты, даже если строку задачи из каталога убрали."""
+    (строку задачи убрали руками), мог занять другой поток — тогда новый; как и номер, под чьим
+    именем в папке задач лежит файл другой задачи (occupied). exported — итоги, что лягут в
+    каталог: задача без них номера не получает. reserved — номера из выгрузок других потоков:
+    заняты, даже если строку задачи из каталога убрали."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
     # Занятым считается и номер, который лишь упомянут: новая задача под ним сделала бы
     # упоминание ссылкой на себя.
     ours = {note.id for note in previous.notes} if previous else set()
     foreign = {issue for note in catalog.notes.values() if note.id not in ours
-               for issue in issues_in(note.body)} | set(reserved)
+               for issue in issues_in(note.body)} | set(reserved) | set(occupied)
     used = [int(found.group(1)) for note in catalog.notes.values()
             for issue in issues_in(note.body) if (found := ISSUE.fullmatch(issue))]
-    used += [int(found.group(1)) for number in (*known.values(), *reserved, *files)
+    used += [int(found.group(1)) for number in (*known.values(), *reserved, *files, *occupied)
              if (found := ISSUE.fullmatch(number))]
     top = max(used, default=0)
     numbers: list[IssueNumber] = []
@@ -432,7 +464,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     parts, skipped, numbers, refs = parts_of(
         stream, fragments, catalog, words,
         lambda exported: numbered_issues(stream, catalog, previous, exported, reserved,
-                                         shelf.files))
+                                         shelf.files, issue_files.occupied(shelf.files)))
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
