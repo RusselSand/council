@@ -394,6 +394,9 @@ def has_commit(root: Path, sha: str) -> bool:
 
 # Файл метки рабочей копии в её каталоге git: git посторонних файлов там не замечает.
 CHECKOUT = "spec-council-checkout"
+# Метки ставят по одной: два скана одной копии разом иначе поставили бы разные, и один запомнил
+# бы не ту, что на диске. Замок — только на метки, не советов: в нём лишь пара файлов, не git.
+MARKING = threading.Lock()
 
 
 def checkout_of(root: Path, *, mark: bool = False) -> str:
@@ -409,9 +412,19 @@ def checkout_of(root: Path, *, mark: bool = False) -> str:
     mark_now = mark_in(path)
     if mark_now or not mark:
         return mark_now
-    # Метка появляется целиком или никак: сначала — во временном файле рядом, потом — жёсткой
-    # ссылкой, а та не перезапишет метку, которую тем временем поставил другой скан. Пустая или
-    # битая метка (прерванная запись) — не метка: её заменяют.
+    with MARKING:
+        return marked(path)
+
+
+def marked(path: Path) -> str:
+    """Метка в файле path — та, что уже есть, или новая. Появляется она целиком или никак:
+    сначала — во временном файле рядом, потом — жёсткой ссылкой, а та не перезапишет метку,
+    которую тем временем поставил другой процесс. Жёстких ссылок нет — заменой, если метки всё ещё
+    нет; сканы одного сервера ставят метки по одной (MARKING), и каждый вернёт ту, что на диске.
+    Пустая или битая метка (прерванная запись) — не метка: её заменяют."""
+    mark_now = mark_in(path)
+    if mark_now:
+        return mark_now
     made = uuid4().hex
     part = path.with_name(f"{CHECKOUT}-{made}.part")
     try:
@@ -421,7 +434,7 @@ def checkout_of(root: Path, *, mark: bool = False) -> str:
         except FileExistsError:
             if not mark_in(path):
                 os.replace(part, path)
-        except OSError:                    # жёстких ссылок нет: заменой, если метки всё ещё нет
+        except OSError:
             if not mark_in(path):
                 os.replace(part, path)
     except OSError:

@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -1189,3 +1191,22 @@ def test_a_mark_appears_whole_and_a_broken_one_is_replaced(repo, monkeypatch):
     monkeypatch.setattr(os, "link", no_links)
     assert len(checkout_of(repo, mark=True)) == 32
     assert [p.name for p in marker.parent.glob(f"{repository.CHECKOUT}*")] == [marker.name]
+
+
+def test_concurrent_scans_without_hard_links_all_get_the_mark_on_disk(repo, monkeypatch):
+    """Жёстких ссылок нет, а копию сканируют разом несколько советов: метку ставит один, и все
+    запоминают ту, что на диске."""
+    def no_links(source, target):
+        raise OSError(1, "Operation not permitted")
+
+    real_replace = os.replace
+
+    def slow_replace(source, target):
+        time.sleep(0.05)                    # окно, в котором другой скан тоже не видит метки
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "link", no_links)
+    monkeypatch.setattr(os, "replace", slow_replace)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        marks = list(pool.map(lambda _: checkout_of(repo, mark=True), range(6)))
+    assert len(set(marks)) == 1 and marks[0] == checkout_of(repo)
