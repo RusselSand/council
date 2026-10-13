@@ -14,7 +14,7 @@
 ничто их не держит) переносятся, а не нарезаются заново: они уже в разработке.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable, Mapping
 
 from .models import (
     Choice,
@@ -81,22 +81,35 @@ def kept_work(stream: Stream) -> list[QuestionWork]:
     return list(works.values())
 
 
-def carried_analyses(stream: Stream, choices: list[Choice]) -> dict[str, QuestionAnalysis]:
+def carried_analyses(stream: Stream, choices: list[Choice],
+                     anew: Collection[str] = ()) -> dict[str, QuestionAnalysis]:
     """Проверка того же выбора по тем же вопросам — нынешняя или из прежней работы: её не
-    повторяют."""
+    повторяют, пока выбор по вопросам, от которых она зависит, тот же (holds). anew — вопросы,
+    которые человек просит перепроверить: их проверку не переносят."""
     keys = keys_of(stream.scope or [])
     analyzed = analyzed_of(stream.analysis)
     works = {work.key: work for work in stream.earlier}
+    now = {choice.question_id: choice_entry(choice) for choice in choices}
     carried = {}
     for choice in choices:
+        if choice.question_id in anew:
+            continue
         entry = choice_entry(choice)
         found = analyzed.get(entry)
         work = works.get(keys.get(choice.question_id, ""))
         if found is None and work is not None and choice_entry(work.choice) == entry:
             found = work.analysis
-        if found is not None:
+        if found is not None and holds(found, now):
             carried[choice.question_id] = found
     return carried
+
+
+def holds(found: QuestionAnalysis, now: Mapping[str, str]) -> bool:
+    """Проверка держится, пока выбор по вопросам, от которых она зависит, тот же, что был при
+    ней: противоречие с соседним вопросом могло уйти вместе с его прежним выбором. Проверка,
+    которая выбора не запомнила (её делали до того, как стали помнить), а от вопросов зависит, —
+    уже не держится: что тогда было выбрано, не узнать."""
+    return all(now.get(name) in found.context for name in found.depends_on)
 
 
 def earlier_choices(stream: Stream) -> dict[str, Choice]:

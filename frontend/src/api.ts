@@ -234,6 +234,8 @@ export interface Choice { question_id: string; proposal: string | null; text?: s
 export interface QuestionAnalysis {
   question_id: string; verdict: 'validated' | 'conflict' | 'recommended' | 'none'; proposal: string | null
   constraint_conflicts: number[]; risk_ids: number[]; depends_on: string[]
+  /** Выбор по вопросам из depends_on, каким он был при проверке («Q2: P5»): поменялся — проверяют заново. */
+  context: string[]
   reason: string | null; rationale: string | null
 }
 /** Проверка выбора: по вопросу за раз, готовые — в analyses по мере проверки; choices — к какому выбору. */
@@ -565,6 +567,10 @@ export const api = {
   /** Проверить выбор заново: после сбоя или без подключения к моделям. */
   checkChoices: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/analysis`, { method: 'POST' }),
+  /** Перепроверить выбор по одному вопросу: проверка остальных переносится. До того, как решения зафиксированы. */
+  recheckChoice: (id: string, group: string, question: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/analysis/${encodeURIComponent(question)}`,
+                     { method: 'POST' }),
   /** Решения по каждому отобранному вопросу; совет сразу собирает из них итоги. analysisRun — к какой проверке выбора. */
   approveDecisions: (id: string, at: GroupsVersion, group: string, analysisRun: string, decisions: DecisionDraft[]) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/decisions`, {
