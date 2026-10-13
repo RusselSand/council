@@ -1161,3 +1161,31 @@ def test_a_scan_record_takes_the_mark_found_outside_the_lock(repo, monkeypatch):
     monkeypatch.setattr(repository, "git_bytes", no_git)
     record = scanned(Source("", str(repo), found))
     assert record.checkout == found.checkout
+
+
+def test_a_mark_appears_whole_and_a_broken_one_is_replaced(repo, monkeypatch):
+    marker = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
+                                 check=True, capture_output=True, text=True).stdout.strip())
+    marker = marker / repository.CHECKOUT
+    marker.write_text("", encoding="ascii")                         # запись прервалась
+    mark = checkout_of(repo, mark=True)
+    assert len(mark) == 32 and checkout_of(repo) == mark            # пустую заменили
+    marker.unlink()
+    # Пока ставили, метку поставил другой скан: его метка и остаётся, а не пустота и не наша.
+    other = "a" * 32
+
+    def raced(source, target):
+        Path(target).write_text(f"{other}\n", encoding="ascii")
+        raise FileExistsError(target)
+
+    monkeypatch.setattr(os, "link", raced)
+    assert checkout_of(repo, mark=True) == other
+    # Жёстких ссылок нет — метку ставят заменой, и временного файла не остаётся.
+    marker.unlink()
+
+    def no_links(source, target):
+        raise OSError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "link", no_links)
+    assert len(checkout_of(repo, mark=True)) == 32
+    assert [p.name for p in marker.parent.glob(f"{repository.CHECKOUT}*")] == [marker.name]

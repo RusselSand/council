@@ -406,23 +406,38 @@ def checkout_of(root: Path, *, mark: bool = False) -> str:
     except RepositoryError:
         return ""
     path = Path(os.fsdecode(found)) / CHECKOUT
-    try:
-        mark_now = path.read_text(encoding="ascii").strip()
-    except FileNotFoundError:
-        mark_now = ""
-    except (OSError, UnicodeError):
-        return ""
+    mark_now = mark_in(path)
     if mark_now or not mark:
         return mark_now
+    # Метка появляется целиком или никак: сначала — во временном файле рядом, потом — жёсткой
+    # ссылкой, а та не перезапишет метку, которую тем временем поставил другой скан. Пустая или
+    # битая метка (прерванная запись) — не метка: её заменяют.
     made = uuid4().hex
+    part = path.with_name(f"{CHECKOUT}-{made}.part")
     try:
-        with path.open("x", encoding="ascii", newline="\n") as file:
-            file.write(f"{made}\n")
-    except FileExistsError:
-        return checkout_of(root)           # её только что поставил другой скан
+        part.write_text(f"{made}\n", encoding="ascii", newline="\n")
+        try:
+            os.link(part, path)
+        except FileExistsError:
+            if not mark_in(path):
+                os.replace(part, path)
+        except OSError:                    # жёстких ссылок нет: заменой, если метки всё ещё нет
+            if not mark_in(path):
+                os.replace(part, path)
     except OSError:
         return ""
-    return made
+    finally:
+        part.unlink(missing_ok=True)
+    return mark_in(path)
+
+
+def mark_in(path: Path) -> str:
+    """Метка из файла — 32 шестнадцатеричных знака; нет файла, пустой или не метка — пусто."""
+    try:
+        text = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return ""
+    return text if re.fullmatch(r"[0-9a-f]{32}", text) else ""
 
 
 def same_copy(source: ScannedRepository, root: Path) -> bool:
