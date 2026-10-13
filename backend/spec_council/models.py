@@ -297,6 +297,9 @@ class ScannedRepository(BaseModel):
     name: str = ""
     path: str = ""
     root: str = ""
+    # Метка рабочей копии в её каталоге git (repository.checkout_of): по ней узнают ту же копию,
+    # как бы ни был виден каталог репозиториев, и отличают от другого клона. "" — скан до меток.
+    checkout: str = ""
     commit_sha: str = ""
     # Есть незакоммиченные правки: модели читают рабочую копию, а не коммит.
     dirty: bool = False

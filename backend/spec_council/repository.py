@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
+from uuid import uuid4
 
 from .ideas import reason_of
 from .models import (
@@ -385,14 +386,50 @@ def has_commit(root: Path, sha: str) -> bool:
     return True
 
 
+# Файл метки рабочей копии в её каталоге git: git посторонних файлов там не замечает.
+CHECKOUT = "spec-council-checkout"
+
+
+def checkout_of(root: Path, *, mark: bool = False) -> str:
+    """Метка рабочей копии — свой номер в её каталоге git. Каталог git свой у каждого клона и
+    каждого worktree, а номер в нём один и тот же, как бы ни был виден каталог репозиториев:
+    снаружи докера (C:\\…\\repo) и внутри (/repos/repo). mark — поставить, если её ещё нет (скан).
+    Не прочитать и не поставить — пусто."""
+    try:
+        found = git_bytes(root, "rev-parse", "--absolute-git-dir").removesuffix(b"\n")
+    except RepositoryError:
+        return ""
+    path = Path(os.fsdecode(found)) / CHECKOUT
+    try:
+        mark_now = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        mark_now = ""
+    except (OSError, UnicodeError):
+        return ""
+    if mark_now or not mark:
+        return mark_now
+    made = uuid4().hex
+    try:
+        with path.open("x", encoding="ascii", newline="\n") as file:
+            file.write(f"{made}\n")
+    except FileExistsError:
+        return checkout_of(root)           # её только что поставил другой скан
+    except OSError:
+        return ""
+    return made
+
+
 def same_copy(source: ScannedRepository, root: Path) -> bool:
-    """По пути скана — та же рабочая копия, что сканировали. Тот же корень — та же. Другой корень
-    бывает и у той же копии: тот же каталог репозиториев виден по-другому (сканировали снаружи
-    докера — C:\\…\\repo, а теперь внутри — /repos/repo); тогда копия та же, если в ней есть
-    сканированный коммит: другой репозиторий по тому же пути его не знает."""
+    """По пути скана — та же рабочая копия, что сканировали: с той же меткой (checkout_of). Другой
+    клон или worktree того же проекта — уже другая копия, хоть коммит в нём и тот же: карта могла
+    описывать правки, которых в нём нет. Скан без метки (сделан раньше) — по корню; корень другой
+    (каталог репозиториев виден по-другому) — та же, если скан был без правок и сканированный
+    коммит в ней есть: правок, которые не узнать, у такого скана нет."""
+    if source.checkout:
+        return checkout_of(root) == source.checkout
     if os.path.normcase(str(root)) == os.path.normcase(source.root):
         return True
-    return bool(source.commit_sha) and has_commit(root, source.commit_sha)
+    return not source.dirty and bool(source.commit_sha) and has_commit(root, source.commit_sha)
 
 
 def rerooted(scan: RepositoryScan, base: Path | None) -> RepositoryScan:
@@ -847,6 +884,7 @@ def scanned(source: Source) -> ScannedRepository:
     """Что скан помнит о рабочей копии."""
     found = source.found
     return ScannedRepository(name=source.name, path=source.path, root=str(found.root),
+                             checkout=checkout_of(found.root, mark=True),
                              commit_sha=found.commit_sha, dirty=found.dirty,
                              files=len(found.files), outside=found.outside,
                              omitted=capped(found.omitted), omitted_count=len(found.omitted))

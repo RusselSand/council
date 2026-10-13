@@ -1838,6 +1838,27 @@ def test_the_scanned_copy_seen_from_another_place_is_still_cut_with_code(agents,
     assert agents.seen == ["app.py"]
 
 
+def test_another_clone_with_the_scanned_commit_is_not_the_scanned_copy(agents, repos, tmp_path):
+    """По тому же пути — клон того же проекта, и сканированный коммит в нём есть, но это другая
+    рабочая копия: карта могла описывать правки, которых в ней нет."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    choose(council_id, "C", ["Q1", "Q2"])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None)])
+    decide(council_id, "C", DECIDED)
+    assert streams_of(council_id)["C"].scan.repositories[0].checkout   # скан поставил метку
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(repos), str(other / "project")], check=True,
+                   capture_output=True)
+    app.dependency_overrides[get_repositories] = lambda: other
+    res = approves(council_id, "C")
+    assert res.status_code == 422 and "другая" in res.json()["detail"]
+
+
 def test_a_scan_that_does_not_know_its_root_is_scanned_again_before_the_cut(agents, repos):
     """Скан, сделанный до того, как совет стал помнить корень рабочей копии: та ли это копия,
     не проверить — её не читают, а сканируют заново."""

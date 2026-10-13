@@ -15,6 +15,7 @@ from spec_council.repository import (
     Context,
     Inventory,
     RepositoryError,
+    checkout_of,
     context_prompt,
     inventory,
     inventory_prompt,
@@ -22,6 +23,7 @@ from spec_council.repository import (
     located,
     map_of,
     merged,
+    same_copy,
     sha_prompt,
     snapshot,
     snapshot_all,
@@ -1107,3 +1109,39 @@ def test_a_file_name_that_is_not_utf8_is_scanned_as_it_is(repo, tmp_path):
     into, _, copied = copy(found, tmp_path)
     assert name in copied
     assert os.path.exists(os.fsencode(into) + b"/bad-\xff.py")
+
+
+def head_of(root):
+    return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_a_working_copy_is_known_by_its_mark_however_the_folder_is_seen(repo, tmp_path):
+    mark = checkout_of(repo, mark=True)
+    assert mark and checkout_of(repo) == mark                       # одна и та же
+    # git метки не замечает: рабочая копия чистая, как и была.
+    assert subprocess.run(["git", "-C", str(repo), "status", "--porcelain"], check=True,
+                          capture_output=True, text=True).stdout == ""
+    scanned = ScannedRepository(path="project", root=str(tmp_path / "elsewhere" / "project"),
+                                checkout=mark, commit_sha=head_of(repo))
+    # Тот же каталог, видный по-другому (снаружи докера и в нём), — та же копия: метка с ней.
+    seen = tmp_path / "seen" / "project"
+    shutil.copytree(repo, seen)
+    assert same_copy(scanned, repo) and same_copy(scanned, seen)
+    # Клон и worktree того же проекта — другие копии, хоть коммит в них тот же.
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
+    git(repo, "worktree", "add", "-q", str(tmp_path / "tree"))
+    assert checkout_of(clone) == "" and not same_copy(scanned, clone)
+    assert not same_copy(scanned, tmp_path / "tree")
+    assert checkout_of(clone, mark=True) not in ("", mark)
+
+
+def test_a_scan_without_a_mark_is_known_by_its_root_or_clean_commit(repo, tmp_path):
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True, capture_output=True)
+    old = ScannedRepository(path="project", root=str(repo), commit_sha=head_of(repo))
+    assert same_copy(old, repo)                                     # тот же корень
+    assert same_copy(old, clone)                                    # чистый — по коммиту
+    # С правками — нет: карта могла описывать их, а в другой копии их не узнать.
+    assert not same_copy(old.model_copy(update={"dirty": True}), clone)
