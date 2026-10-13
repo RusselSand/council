@@ -1,7 +1,8 @@
 """Выгрузка потока в заметки проекта (notes.py): IDEA, отобранные вопросы, их варианты,
 принятые решения и утверждённые итоги — каждое своей заметкой, со ссылками на ближайшие
 вышестоящие. Задачи заметками не становятся: они строками в теле своего итога, с номерами на
-весь проект (ISS-0012), — их пишут в финальный коммит.
+весь проект (ISS-0012), — их пишут в финальный коммит. Если у проекта есть папка задач, каждая
+задача, которую ничто не держит, ложится туда ещё и файлом (issue_files.py) — для coding agent.
 
 Выгрузка — в два хода. Черновик (drafted): какие заметки лягут, под какими номерами, с каким
 текстом и что с ними будет — новая, перепишется, уже такая, правили руками. Запись (written):
@@ -12,19 +13,21 @@
 решение — по вопросу и выбранному варианту (выбрали другой — это другое решение и новая
 заметка); итог и задача — по названию. Совет написал бы то же, что в прошлый раз, — остаётся
 то, что тогда записали, с правками человека. Файл, который правили руками после выгрузки,
-совет не трогает. Исчезнувшее само не удаляется.
+совет не трогает. Исчезнувшее само не удаляется. Файл задачи узнаётся по её номеру.
 """
 
 import hashlib
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import issue_files
 from .models import (
     Decision,
     ExportedNote,
+    Issue,
     IssueNumber,
     LabeledFragment,
     NotePlan,
@@ -39,10 +42,19 @@ from .proposals import found_by_question
 from .questions import same_question
 from .slicing import BadAnswer
 
-# Связки в тексте заметок — на языке работы; перевод, если нужен, — потом, целиком.
+# Связки в тексте заметок и файлов задач — на языке работы; перевод, если нужен, — потом,
+# целиком.
 WORDS = {
-    "russian": {"because": "потому что", "criteria": "Критерии готовности", "issues": "Задачи"},
-    "english": {"because": "because", "criteria": "Acceptance criteria", "issues": "Issues"},
+    "russian": {"because": "потому что", "criteria": "Критерии готовности", "issues": "Задачи",
+                "entry": "Где менять", "now": "Что там сейчас", "scope": "Что сделать",
+                "outcomes": "Итоги", "decisions": "Решения", "keep": "Соблюдать",
+                "risks": "Риски", "after": "После задач",
+                "commit": "В финальном коммите укажите номер задачи — {id}."},
+    "english": {"because": "because", "criteria": "Acceptance criteria", "issues": "Issues",
+                "entry": "Where to change", "now": "What is there now", "scope": "To do",
+                "outcomes": "Outcomes", "decisions": "Decisions", "keep": "Keep",
+                "risks": "Risks", "after": "After the issues",
+                "commit": "Put the issue number {id} into the final commit."},
 }
 ALIASES = {"русский": "russian", "ru": "russian", "en": "english", "английский": "english"}
 ISSUE = re.compile(r"ISS-(\d+)")
@@ -123,6 +135,33 @@ class Part:
     links: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class Shelf:
+    """Куда ложится выгрузка: заметки — в каталог root, файлы задач — в папку issues (None — у
+    проекта её нет: задачи только строками в итогах). files — файлы задач, что в ней уже лежат,
+    по номеру."""
+
+    catalog: Catalog
+    root: Path
+    issues: Path | None = None
+    files: Mapping[str, Note] = field(default_factory=dict)
+
+    def held(self, note_id: str, kind: str) -> Note | None:
+        """Что лежит на месте заметки или файла задачи сейчас."""
+        return (self.files if kind == "issue" else self.catalog.notes).get(note_id)
+
+    def path(self, note_id: str, kind: str) -> Path:
+        """Где файл: прочитанный — там, откуда прочли, новый — на своём месте."""
+        held = self.held(note_id, kind) or Note(note_id, kind, "")
+        if kind == "issue" and self.issues is not None:
+            return issue_files.path_of(self.issues, held)
+        return path_of(self.root, held)
+
+
+def file_text(note: Note) -> str:
+    return issue_files.rendered(note) if note.type == "issue" else rendered(note)
+
+
 def question_key(question: OpenQuestion) -> str:
     if question.source == "user" and question.source_question_id is not None:
         return f"q:F{question.source_question_id}"
@@ -174,10 +213,10 @@ def criterion(item: str) -> str:
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
              words: Mapping[str, str],
              number: Callable[[set[str]], list[IssueNumber]]
-             ) -> tuple[list[Part], list[str], list[IssueNumber]]:
+             ) -> tuple[list[Part], list[str], list[IssueNumber], dict[str, str]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
-    выгружается — с причиной, и номера задач: number раздаёт их задачам тех итогов, что лягут в
-    каталог."""
+    выгружается — с причиной, номера задач — number раздаёт их задачам тех итогов, что лягут в
+    каталог, — и какой частью ложится каждое решение потока (ADR-n) и каждый итог (O1)."""
     found = found_by_question(stream.proposals, stream.choices)
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
     questions: list[Part] = []
@@ -200,14 +239,14 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
                 if any(adr_of[name] not in external for name in outcome.adr_ids
                        if name in adr_of)}
     numbers = number(exported)
-    outcomes, skipped = outcome_parts(stream, numbers, adr_of, external, words, taken)
+    outcomes, skipped, outcome_of = outcome_parts(stream, numbers, adr_of, external, words, taken)
     numbered = {n.issue_id for n in numbers}
     skipped += [f"{issue.id} «{issue.title}» без номера: её итоги не выгружаются, и номеру "
                 "негде закрепиться в каталоге"
                 for issue in (stream.issues.issues if stream.issues else [])
                 if issue.id not in numbered]
-    return [Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-            *outcomes], skipped, numbers
+    return ([Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
+             *outcomes], skipped, numbers, adr_of | outcome_of)
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -237,15 +276,16 @@ def question_parts(question: OpenQuestion, options: list[dict[str, str]],
 
 def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mapping[str, str],
                   external: set[str], words: Mapping[str, str],
-                  taken: set[str]) -> tuple[list[Part], list[str]]:
-    """Итоги со своими задачами. Итог ссылается только на решения своей идеи: без них он не
-    выгружается."""
+                  taken: set[str]) -> tuple[list[Part], list[str], dict[str, str]]:
+    """Итоги со своими задачами — и ключ части каждого, что ляжет. Итог ссылается только на
+    решения своей идеи: без них он не выгружается."""
     by_outcome: dict[str, list[IssueNumber]] = {}
     for number in numbers:
         for outcome_id in number.outcome_ids:
             by_outcome.setdefault(outcome_id, []).append(number)
     parts: list[Part] = []
     skipped: list[str] = []
+    outcome_of: dict[str, str] = {}
     outcomes = stream.outcomes.outcomes if stream.outcomes else []
     keys = keyed([f"o:{same_question(outcome.title)}" for outcome in outcomes],
                  [same_question(outcome.behavior) for outcome in outcomes], taken)
@@ -262,17 +302,82 @@ def outcome_parts(stream: Stream, numbers: Sequence[IssueNumber], adr_of: Mappin
         text = outcome_text(outcome.title, outcome.behavior, outcome.acceptance_criteria,
                             by_outcome.get(outcome.id, []), words)
         parts.append(Part(key, "outcome", text, tuple(dict.fromkeys(own))))
-    return parts, skipped
+        outcome_of[outcome.id] = key
+    return parts, skipped, outcome_of
+
+
+def issue_parts(stream: Stream, numbers: Sequence[IssueNumber], refs: Mapping[str, str],
+                parts: Sequence[Part], ids: Mapping[str, str],
+                fragments: Mapping[int, LabeledFragment], words: Mapping[str, str]
+                ) -> tuple[list[tuple[Part, str]], list[str]]:
+    """Файлы задач — с номером каждой. Файлом ложится задача с номером, которую ничто не держит:
+    без решения её не сделать (а держат её и задачи, после которых её делать, — issues.py). Ссылки
+    и текст — с номерами заметок, что лягут в каталог: ids — их номера по ключу части."""
+    issues = {issue.id: issue for issue in (stream.issues.issues if stream.issues else [])}
+    titles = {outcome.id: outcome.title
+              for outcome in (stream.outcomes.outcomes if stream.outcomes else [])}
+    texts = {part.key: part.text for part in parts}
+    by_issue = {number.issue_id: number for number in numbers}
+    found: list[tuple[Part, str]] = []
+    skipped: list[str] = []
+    for number in numbers:
+        issue = issues[number.issue_id]
+        if issue.blocked_by:
+            skipped.append(f"{number.id} «{issue.title}» файлом не ложится: её держит "
+                           f"{', '.join(issue.blocked_by)} — без решения задачу не сделать")
+            continue
+        outcomes = [(ids[refs[name]], titles[name]) for name in issue.outcome_ids
+                    if name in refs]
+        adrs = [(ids[refs[name]], texts[refs[name]]) for name in issue.adr_ids if name in refs]
+        after = [(by_issue[name].id, by_issue[name].title) for name in issue.depends_on
+                 if name in by_issue]
+        text = issue_text(issue, number.id, outcomes, adrs, after,
+                          [fragments[i].text for i in issue.constraint_ids if i in fragments],
+                          [fragments[i].text for i in issue.risk_ids if i in fragments], words)
+        links = tuple(dict.fromkeys(name for name, _ in (*outcomes, *adrs, *after)))
+        found.append((Part(number.key, "issue", text, links), number.id))
+    return found, skipped
+
+
+def issue_text(issue: Issue, number: str, outcomes: Sequence[tuple[str, str]],
+               adrs: Sequence[tuple[str, str]], after: Sequence[tuple[str, str]],
+               keep: Sequence[str], risks: Sequence[str], words: Mapping[str, str]) -> str:
+    """Задача для coding agent: кому и зачем, где менять и что там сейчас, что сделать, когда
+    готово, на чём стоит, что соблюдать и после каких задач, — и номер для финального коммита."""
+    lines = [f"# {line(issue.title)}", "", issue.user_story.strip()]
+
+    def section(title: str, items: Iterable[str]) -> None:
+        items = list(items)
+        if items:
+            lines.extend(["", f"## {title}", *items])
+
+    section(words["entry"], (f"- {line(item)}" for item in issue.main_entry_points))
+    section(words["now"], [issue.current_state.strip()] if issue.current_state.strip() else [])
+    section(words["scope"], (f"- {line(item)}" for item in issue.scope))
+    section(words["criteria"], (f"- {line(item)}" for item in issue.acceptance_criteria))
+    section(words["outcomes"], (f"- {name}: {line(text)}" for name, text in outcomes))
+    section(words["decisions"], (f"- {name}: {line(text)}" for name, text in adrs))
+    section(words["keep"], (f"- {line(text)}" for text in keep))
+    section(words["risks"], (f"- {line(text)}" for text in risks))
+    section(words["after"], (f"- {name}: {line(text)}" for name, text in after))
+    lines += ["", words["commit"].format(id=number)]
+    return "\n".join(lines)
+
+
+def line(text: str) -> str:
+    """Пункт списка — одной строкой: перенос внутри разорвал бы список."""
+    return " ".join(text.split())
 
 
 def numbered_issues(stream: Stream, catalog: Catalog, previous: NotesExport | None,
-                    exported: set[str] | None = None,
-                    reserved: Collection[str] = ()) -> list[IssueNumber]:
+                    exported: set[str] | None = None, reserved: Collection[str] = (),
+                    files: Collection[str] = ()) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию) — прежний номер, новая —
-    следующий после самого большого в каталоге и прежней выгрузке. Прежний номер, которого в
-    каталоге уже нет (строку задачи убрали руками), мог занять другой поток — тогда новый.
-    exported — итоги, что лягут в каталог: задача без них номера не получает. reserved —
-    номера из выгрузок других потоков: заняты, даже если строку задачи из каталога убрали."""
+    следующий после самого большого в каталоге, прежней выгрузке и папке задач (files — номера
+    её файлов: новая задача не ляжет в чужой файл). Прежний номер, которого в каталоге уже нет
+    (строку задачи убрали руками), мог занять другой поток — тогда новый. exported — итоги, что
+    лягут в каталог: задача без них номера не получает. reserved — номера из выгрузок других
+    потоков: заняты, даже если строку задачи из каталога убрали."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
     # Занятым считается и номер, который лишь упомянут: новая задача под ним сделала бы
     # упоминание ссылкой на себя.
@@ -281,7 +386,7 @@ def numbered_issues(stream: Stream, catalog: Catalog, previous: NotesExport | No
                for issue in issues_in(note.body)} | set(reserved)
     used = [int(found.group(1)) for note in catalog.notes.values()
             for issue in issues_in(note.body) if (found := ISSUE.fullmatch(issue))]
-    used += [int(found.group(1)) for number in (*known.values(), *reserved)
+    used += [int(found.group(1)) for number in (*known.values(), *reserved, *files)
              if (found := ISSUE.fullmatch(number))]
     top = max(used, default=0)
     numbers: list[IssueNumber] = []
@@ -312,20 +417,23 @@ def digest_of(path: Path) -> str:
         return ""
 
 
-def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-            root: Path, previous: NotesExport | None, words: Mapping[str, str],
+def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: Shelf,
+            previous: NotesExport | None, words: Mapping[str, str],
             language: str, reserved: Collection[str] = ()
             ) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber], list[str]]:
-    """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие;
-    номера задач; что не выгружается. language — язык заметок: не тот, что у прошлой выгрузки, —
-    прежние тексты не берутся, их напишет перевод заново (файлы, правленные руками, — нет).
-    reserved — номера заметок и задач из выгрузок других потоков: их заметку могли удалить
-    руками, но номер всё ещё их — ни новой заметке, ни задаче его не дают, а прежний номер
-    потока, который записан и за другим, — уже не его."""
-    parts, skipped, numbers = parts_of(
+    """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет, а за ними — файлы
+    задач, если у проекта есть папка задач; исчезнувшие; номера задач; что не выгружается.
+    language — язык заметок: не тот, что у прошлой выгрузки, — прежние тексты не берутся, их
+    напишет перевод заново (файлы, правленные руками, — нет). reserved — номера заметок и задач
+    из выгрузок других потоков: их заметку могли удалить руками, но номер всё ещё их — ни новой
+    заметке, ни задаче его не дают, а прежний номер потока, который записан и за другим, — уже
+    не его."""
+    catalog = shelf.catalog
+    parts, skipped, numbers, refs = parts_of(
         stream, fragments, catalog, words,
-        lambda exported: numbered_issues(stream, catalog, previous, exported, reserved))
-    before = {note.key: note for note in previous.notes} if previous else {}
+        lambda exported: numbered_issues(stream, catalog, previous, exported, reserved,
+                                         shelf.files))
+    before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
     reuse = previous is not None and previous.language == language
@@ -342,7 +450,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
     for part in parts:
         if part.key not in ids:
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
-    notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), catalog, root, reuse)
+    notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
     claimed = set(alias.values())
@@ -351,24 +459,42 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: C
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
                 if key not in claimed and old.id in catalog.notes and old.id not in reserved]
-    return notes, vanished, numbers, skipped
+    if shelf.issues is None:
+        return notes, vanished, numbers, skipped
+    tasks, held_back = issue_parts(stream, numbers, refs, parts, ids, fragments, words)
+    # Файл задачи — по её номеру: номер держится за задачу (numbered_issues), а с ним и файл.
+    filed = {note.id: note for note in previous.notes if note.type == "issue"} if previous else {}
+    for part, number in tasks:
+        old = filed.get(number)
+        notes.append(planned(part, {**ids, part.key: number}, old, old.key if old else None,
+                             shelf, reuse))
+    current = {number for _, number in tasks}
+    vanished += [VanishedNote(id=old.id, type="issue", text=shelf.files[old.id].body)
+                 for old in filed.values()
+                 if old.id not in current and old.id in shelf.files and old.id not in reserved]
+    return notes, vanished, numbers, skipped + held_back
 
 
 def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: str | None,
-            catalog: Catalog, root: Path, reuse: bool) -> NotePlan:
+            shelf: Shelf, reuse: bool) -> NotePlan:
     note_id = ids[part.key]
     links = [ids.get(link, link) for link in part.links]
     text = old.written if old and reuse and old.generated == part.text else part.text
     plan = NotePlan(key=part.key, id=note_id, type=part.type, text=text, generated=part.text,
                     links=links, action="create", was=was)
-    return settled(plan, old, catalog, root)
+    return settled(plan, old, shelf)
 
 
-def export_in(record: NotesExport | None, root: Path | None) -> NotesExport | None:
+def export_in(record: NotesExport | None, root: Path | None,
+              issues: Path | None = None) -> NotesExport | None:
     """Выгрузка потока — если она в этот каталог. В другой (проект или его папку сменили) — её
-    номера здесь ничего не значат: под ними тут чужие заметки."""
+    номера здесь ничего не значат: под ними тут чужие заметки. Файлы задач — её, только если
+    и папка задач та же (issues): в другой их нет."""
     if record is None or root is None or record.root != str(root):
         return None
+    if record.issues_root and record.issues_root != (str(issues) if issues else ""):
+        return record.model_copy(update={
+            "issues_root": "", "notes": [note for note in record.notes if note.type != "issue"]})
     return record
 
 
@@ -377,13 +503,12 @@ def previous_of(plan: NotePlan, before: Mapping[str, ExportedNote]) -> ExportedN
     return before.get(plan.was) if plan.was else None
 
 
-def settled(plan: NotePlan, old: ExportedNote | None, catalog: Catalog,
-            root: Path) -> NotePlan:
-    """Что будет с заметкой при записи — по тому, что лежит в каталоге сейчас."""
-    held = catalog.notes.get(plan.id)
+def settled(plan: NotePlan, old: ExportedNote | None, shelf: Shelf) -> NotePlan:
+    """Что будет с заметкой (или файлом задачи) при записи — по тому, что лежит там сейчас."""
+    held = shelf.held(plan.id, plan.type)
     if held is None:
         return plan.model_copy(update={"action": "create", "current": None})
-    path = path_of(root, held)
+    path = shelf.path(plan.id, plan.type)
     if old is not None and digest_of(path) != old.digest:
         return plan.model_copy(update={"action": "edited", "current": held.body})
     if held.body == plan.text.strip() and list(held.links) == plan.links:
@@ -392,8 +517,8 @@ def settled(plan: NotePlan, old: ExportedNote | None, catalog: Catalog,
 
 
 def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
-            edits: Mapping[str, str], delete: Sequence[str], root: Path,
-            previous: NotesExport | None, catalog: Catalog,
+            edits: Mapping[str, str], delete: Sequence[str], shelf: Shelf,
+            previous: NotesExport | None,
             keep: Callable[[list[ExportedNote]], None] | None = None) -> list[ExportedNote]:
     """Записывает подтверждённое: заметки с правками человека (edits — по ключу), удаляет
     отмеченные исчезнувшие. Файлы, правленные руками, — не трогает. Вернёт, что выгружено, —
@@ -401,12 +526,9 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
 
     Сначала номера в правках и пустой текст, потом временные файлы, подмена и удаление одним
     шагом с откатом (committed), потом keep — запись о выгрузке. Отказ на любом шаге, и в keep
-    тоже, вернёт каталог как был: файлы и запись о них не разойдутся. Заметка из каталога —
-    там, где лежит."""
-
-    def where(note_id: str, kind: str) -> Path:
-        return path_of(root, catalog.notes.get(note_id) or Note(note_id, kind, ""))
-
+    тоже, вернёт каталог (и папку задач) как был: файлы и запись о них не разойдутся. Заметка
+    из каталога — там, где лежит."""
+    where = shelf.path
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
     texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
@@ -422,7 +544,7 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
         for plan in changed:
             path = where(plan.id, plan.type)
             note = Note(plan.id, plan.type, texts[plan.key], tuple(plan.links))
-            staged.append((staged_file(path, rendered(note)), path))
+            staged.append((staged_file(path, file_text(note)), path))
     except NotesError:
         for part, _ in staged:
             part.unlink(missing_ok=True)
@@ -471,7 +593,8 @@ def graph_problems(catalog: Catalog, notes: Sequence[NotePlan], vanished: Sequen
     deletable(vanished, delete)
     after = dict(catalog.notes)
     for plan in notes:
-        if plan.action != "edited":
+        # Файл задачи — не заметка графа.
+        if plan.action != "edited" and plan.type != "issue":
             after[plan.id] = Note(plan.id, plan.type, edits.get(plan.key, plan.text),
                                   tuple(plan.links))
     for note_id in delete:

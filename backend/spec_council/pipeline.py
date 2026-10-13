@@ -91,7 +91,7 @@ from .design import as_prompt as design_prompt
 from .design import context_prompt as design_context
 from .design import judged_design
 from .design import map_of as design_map_of
-from .export import previous_of, settled, translations, untranslated
+from .export import Shelf, previous_of, settled, translations, untranslated
 from .figma import Fetcher, FigmaError, Link
 from .figma import snapshot as figma_snapshot
 from .grouping import StructureOption, judged_structure, structure_options
@@ -1480,12 +1480,11 @@ class NotesRun(CouncilRun[NotesDraft]):
     what = "перевод заметок"
 
     def __init__(self, council_id: str, draft: NotesDraft, previous: NotesExport | None,
-                 catalog: Catalog, root: Path, judge: str, runner: Runner,
+                 shelf: Shelf, judge: str, runner: Runner,
                  report: Callable[[NotesDraft], None]) -> None:
         super().__init__(council_id, [], judge, runner, report, draft)
         self.previous = {note.key: note for note in previous.notes} if previous else {}
-        self.catalog = catalog
-        self.root = root
+        self.shelf = shelf
 
     def work(self) -> dict[str, Any]:
         sources = untranslated(self.state.notes)
@@ -1499,7 +1498,7 @@ class NotesRun(CouncilRun[NotesDraft]):
         else:
             self._skip(StepName.notes_translation)
         notes = [settled(note.model_copy(update={"text": found.get(note.key, note.text)}),
-                         previous_of(note, self.previous), self.catalog, self.root)
+                         previous_of(note, self.previous), self.shelf)
                  for note in self.state.notes]
         return {"notes": notes}
 

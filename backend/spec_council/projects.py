@@ -1,10 +1,11 @@
-"""Проекты: рабочие копии и папка документации, которые совет берёт по проекту, а не вводит в
-каждом потоке заново. Совет выбирает проект на «Вводе»: шаг «Репозиторий» подставляет его
-рабочие копии, «Решения проекта» и «Документация» работают с его папкой.
+"""Проекты: рабочие копии, папка документации и папка задач, которые совет берёт по проекту, а
+не вводит в каждом потоке заново. Совет выбирает проект на «Вводе»: шаг «Репозиторий»
+подставляет его рабочие копии, «Решения проекта» и «Документация» работают с его папкой, а
+«Документация» кладёт ещё и файлы задач в папку задач.
 
 Пути — как у скана: от каталога репозиториев (COUNCIL_REPOS) и только внутри него, без него —
-абсолютные. Папка документации — там же: в докере каталог репозиториев смонтирован на запись, и
-заметки ложатся рядом с кодом, в репозиторий проекта.
+абсолютные. Папки документации и задач — там же: в докере каталог репозиториев смонтирован на
+запись, и заметки с задачами ложатся рядом с кодом, в репозиторий проекта.
 
 Проекты — файлы <id>.json в подкаталоге projects каталога советов: советы читаются из *.json
 самого каталога, и проект за совет не примут.
@@ -22,6 +23,9 @@ from .repository import RepositoryError, located, placed, top_of
 from .store import kept, writable
 
 log = logging.getLogger(__name__)
+
+# Что из формы проекта сохраняется.
+SAVED = {"name", "repositories", "notes", "issues"}
 
 
 class ProjectError(ValueError):
@@ -47,7 +51,7 @@ class Projects:
 
     def create_project(self, draft: ProjectDraft) -> Project:
         project = Project(id=uuid4().hex[:8], updated_at=datetime.now(UTC),
-                          **draft.model_dump(include={"name", "repositories", "notes"}))
+                          **draft.model_dump(include=SAVED))
         with self._lock:
             self._keep(project)
             self._projects[project.id] = project
@@ -60,7 +64,7 @@ class Projects:
                 return None
             project = Project(id=project_id, revision=before.revision + 1,
                               updated_at=datetime.now(UTC),
-                              **draft.model_dump(include={"name", "repositories", "notes"}))
+                              **draft.model_dump(include=SAVED))
             self._keep(project)
             self._projects[project_id] = project
             return project
@@ -122,8 +126,12 @@ def checked[D: ProjectDraft](draft: D, base: Path | None) -> D:
         if root in roots:
             raise ProjectError(f"{roots[root]} и {path} — одна и та же рабочая копия {root}")
         roots[root] = path
-    if draft.notes:
-        notes_root(draft.notes, base)
+    notes = notes_root(draft.notes, base) if draft.notes else None
+    if draft.issues:
+        if notes is None:
+            raise ProjectError("Папка задач — только вместе с папкой документации: задачи "
+                               "выгружаются вместе с заметками")
+        issues_root(draft.issues, base, notes)
     return draft.model_copy(update={"name": name})
 
 
@@ -134,6 +142,23 @@ def notes_root(text: str, base: Path | None) -> Path:
     родитель (docs/reasoning, где docs — файл, не создать)."""
     if not text.strip():
         raise ProjectError("Укажите папку документации или оставьте поле пустым")
+    return folder_of(text, base)
+
+
+def issues_root(text: str, base: Path | None, notes: Path) -> Path:
+    """Папка задач — как папка документации, но не она и не внутри неё: Causa читает заметкой
+    каждый .md в папке заметок, со вложенными, и файл задачи сломал бы ей весь каталог."""
+    if not text.strip():
+        raise ProjectError("Укажите папку задач или оставьте поле пустым")
+    path = folder_of(text, base)
+    if path.is_relative_to(notes):
+        raise ProjectError(f"Папка задач {path} — внутри папки документации {notes}: Causa "
+                           "прочла бы задачи заметками. Выберите папку рядом, например "
+                           "docs/issues")
+    return path
+
+
+def folder_of(text: str, base: Path | None) -> Path:
     try:
         path = placed(text, base)
     except RepositoryError as exc:
@@ -145,13 +170,21 @@ def notes_root(text: str, base: Path | None) -> Path:
 
 
 def viewed(project: Project, base: Path | None) -> ProjectView:
-    """Проект для экрана: с папкой документации, как её найдёт сервер, или с тем, почему её
-    больше не найти."""
+    """Проект для экрана: с папками документации и задач, как их найдёт сервер, или с тем,
+    почему одну из них больше не найти."""
     view = ProjectView(**project.model_dump())
     if not project.notes:
         return view
     try:
-        return view.model_copy(update={"notes_root": str(notes_root(project.notes, base))})
+        notes = notes_root(project.notes, base)
+    except ProjectError as exc:
+        return view.model_copy(update={"problem": str(exc)})
+    view = view.model_copy(update={"notes_root": str(notes)})
+    if not project.issues:
+        return view
+    try:
+        return view.model_copy(update={"issues_root": str(issues_root(project.issues, base,
+                                                                      notes))})
     except ProjectError as exc:
         return view.model_copy(update={"problem": str(exc)})
 

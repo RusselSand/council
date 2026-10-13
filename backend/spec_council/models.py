@@ -789,7 +789,8 @@ class Issue(BaseModel):
     acceptance_criteria: list[str] = []
 
 
-NoteType = Literal["idea", "open_question", "proposal", "adr", "outcome"]
+# issue — не заметка графа, а файл задачи в папке задач проекта (issue_files.py).
+NoteType = Literal["idea", "open_question", "proposal", "adr", "outcome", "issue"]
 
 
 class NotePlan(BaseModel):
@@ -846,6 +847,8 @@ class NotesDraft(BaseModel):
     language: str = ""
     # Каталог, для которого собран: номера и действия — его. Записать в другой — 409.
     root: str = ""
+    # Папка задач, для которой собран; "" — у проекта её нет, задачи только строками в итогах.
+    issues_root: str = ""
     steps: list[Step] = []
     notes: list[NotePlan] = []
     vanished: list[VanishedNote] = []
@@ -879,6 +882,8 @@ class NotesExport(BaseModel):
     language: str
     # Каталог, куда записали: номера выгрузки заняты только в нём.
     root: str = ""
+    # Папка, куда записали файлы задач: в другой их файлов нет. "" — не записывали.
+    issues_root: str = ""
     notes: list[ExportedNote] = []
     numbers: list[IssueNumber] = []
 
@@ -1179,6 +1184,7 @@ class ProjectDraft(BaseModel):
     name: str = Field(max_length=PROJECT_NAME_MAX)
     repositories: list[str] = Field(default=[], max_length=REPOSITORIES_MAX)
     notes: str = ""
+    issues: str = ""
 
 
 class ProjectEdit(ProjectDraft):
@@ -1201,15 +1207,19 @@ class Project(BaseModel):
     # Папка документации: туда шаг «Документация» выгружает заметки потоков, оттуда «Решения
     # проекта» берут прошлые решения. Пусто — папки нет, и потоки не выгрузить.
     notes: str = ""
+    # Папка задач: туда же, на «Документации», ложится файл на каждую задачу — для coding agent.
+    # Только вместе с папкой документации и не внутри неё. Пусто — задачи только строками в итогах.
+    issues: str = ""
     updated_at: datetime
 
 
 class ProjectView(Project):
-    """Проект на экране. notes_root — папка документации, как её находит сервер: по этому пути
-    выгрузка помнит, куда записала. None — папки у проекта нет или путь больше не годится
-    (problem — почему: например, каталог репозиториев поменяли)."""
+    """Проект на экране. notes_root и issues_root — папки документации и задач, как их находит
+    сервер: по этим путям выгрузка помнит, куда записала. None — папки у проекта нет или путь
+    больше не годится (problem — почему: например, каталог репозиториев поменяли)."""
 
     notes_root: str | None = None
+    issues_root: str | None = None
     problem: str | None = None
 
 

@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf,
+  api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, issuesOf, LINKS_MAX, notesOf, outcomeReady, projectOf,
   REPOSITORIES_MAX, runningFrom, sameChoice, startOrFollow,
   streamOf, structureIsStale, type Choice, type Council, type Decision, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
   type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type OutcomeTouch, type QuestionAnalysis,
@@ -15,7 +15,7 @@ import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
 import {
-  CHAIN, chainLight, currentStep, exported, exportedCount, exportedTo, openable, streamLight, type ChainStep,
+  CHAIN, chainLight, currentStep, exported, exportedCount, exportedFiles, exportedTo, openable, streamLight, type ChainStep,
 } from '../light'
 import { useAction } from '../useAction'
 
@@ -43,14 +43,14 @@ export function StreamsStage({ council, settings, onChange }: Readonly<{
   // Свой экземпляр на поток: открытый шаг и черновик идеи — у каждого потока свои.
   return <StreamPage key={stream.group} council={council} structure={structure} stream={stream}
                      models={settings.models} repositories={settings.repositories} figma={settings.figma}
-                     notes={notesOf(council, settings)} known={projectOf(council, settings)?.repositories ?? []}
-                     onChange={onChange} />
+                     notes={notesOf(council, settings)} issues={issuesOf(council, settings)}
+                     known={projectOf(council, settings)?.repositories ?? []} onChange={onChange} />
 }
 
-function StreamPage({ council, structure, stream, models, repositories, figma, notes, known, onChange }: Readonly<{
+function StreamPage({ council, structure, stream, models, repositories, figma, notes, issues, known, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null; figma: boolean
-  /** Каталог заметок — папка документации проекта совета; known — рабочие копии проекта. */
-  notes: string | null; known: string[]
+  /** Каталог заметок — папка документации проекта совета; issues — его папка задач; known — рабочие копии проекта. */
+  notes: string | null; issues: string | null; known: string[]
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -155,7 +155,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'notes' && (
           // Новый черновик — и правки заново, к его заметкам.
           <NotesStep key={stream.notes_draft?.run ?? ''} council={council} structure={structure} stream={stream}
-                     group={group} root={notes} onChange={onChange} />
+                     group={group} root={notes} issues={issues} onChange={onChange} />
         )}
         {view === 'issues' && (
           <IssuesStep council={council} stream={stream} group={group} notes={notes} onChange={onChange}
@@ -1272,16 +1272,18 @@ function ProjectDecisions({ council, structure, stream, group, notes, onChange }
 }
 
 const ACTION_PILL = { create: 'pill ready', update: 'pill open', same: 'pill', edited: 'pill blocked' } as const
-const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome'] as const
+const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome', 'issue'] as const
 
 /**
  * Шаг «Документация» — после задач. Совет собирает черновик выгрузки потока в заметки проекта (IDEA,
- * вопросы, варианты, решения, итоги — файлом на заметку, в формате Causa): номера, тексты и что с каждой
- * будет. Человек правит тексты, отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после
- * прошлой выгрузки, совет не трогает.
+ * вопросы, варианты, решения, итоги — файлом на заметку, в формате Causa) и, если у проекта есть папка задач,
+ * файл на каждую задачу, которую ничто не держит: номера, тексты и что с каждым будет. Человек правит тексты,
+ * отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после прошлой выгрузки, совет не трогает.
  */
-function NotesStep({ council, structure, stream, group, root, onChange }: Readonly<{
+function NotesStep({ council, structure, stream, group, root, issues, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group; root: string | null
+  /** Папка задач проекта; null — задачи только строками в итогах. */
+  issues: string | null
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -1296,7 +1298,10 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
   const stale = !!draft && stream.issues?.run !== draft.issues
   // Проект совета или его папку сменили после сборки: черновик — к прежней папке.
   const moved = !!draft && draft.state === 'done' && !!root && draft.root !== root
-  const ready = draft?.state === 'done' && !stale && !moved
+  // Папку задач проекта сменили, задали или убрали после сборки.
+  const movedIssues = !!draft && draft.state === 'done' && draft.issues_root !== (issues ?? '')
+  const ready = draft?.state === 'done' && !stale && !moved && !movedIssues
+  const files = draft?.notes.filter(note => note.type === 'issue').length ?? 0
   const written = !!draft && stream.notes?.run === draft.run && exported(stream, root)
   // Записанное — с правками человека: они есть только в выгрузке, черновик их не знает.
   const wrote = new Map(written ? stream.notes?.notes.map(note => [note.key, note.written]) : [])
@@ -1326,10 +1331,12 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
       </section>
       <section className="card panel" aria-label={t('notes.title')}>
         {root ? <p className="repo-summary">{t('notes.where', { root })}</p> : <p className="fragment-note">{t('notes.noRoot')}</p>}
+        {root && <p className="repo-summary">{issues ? t('notes.whereIssues', { root: issues }) : t('notes.noIssues')}</p>}
         {stream.notes && (
           <p className={exported(stream, root) ? 'check ok' : 'fragment-note'}>
             {t(exported(stream, root) ? 'notes.written' : stream.notes.root === root ? 'notes.outdated' : 'notes.elsewhere',
                { count: exportedCount(stream), root: stream.notes.root })}
+            {exported(stream, root) && exportedFiles(stream) > 0 && ` ${t('notes.filesWritten', { count: exportedFiles(stream) })}`}
           </p>
         )}
         <div className="stream-actions">
@@ -1342,6 +1349,7 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
         {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
         {stale && <p className="fragment-note">{t('notes.stale')}</p>}
         {moved && !stale && <p className="fragment-note">{t('notes.moved')}</p>}
+        {movedIssues && !moved && !stale && <p className="fragment-note">{t('notes.movedIssues')}</p>}
         {ready && (
           <>
             <p className="repo-summary">{t('notes.language', { language: draft.language })}</p>
@@ -1416,7 +1424,10 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
             )}
             {act.error && <p className="error-text" role="alert">{act.error}</p>}
             <div className="stream-actions spread">
-              <span className="muted">{t('notes.count', { count: draft.notes.length })}</span>
+              <span className="muted">
+                {t('notes.count', { count: draft.notes.length - files })}
+                {files > 0 && ` · ${t('notes.files', { count: files })}`}
+              </span>
               <button className="btn-primary large" disabled={locked || written || !root} onClick={write}>
                 {t(written ? 'notes.done' : 'notes.write')}
               </button>

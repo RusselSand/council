@@ -5,9 +5,10 @@ import { FieldList, listField } from '../components/FieldList'
 import { useLoad } from '../useLoad'
 
 /**
- * Проекты: рабочие копии и папка документации, которые совет берёт по проекту, а не вводит в каждом потоке.
- * Проект выбирают на «Вводе» совета: его репозитории подставляются в шаг «Репозиторий» каждого потока, а его
- * папка — каталог заметок. Рабочие копии предлагаются из каталога репозиториев сервера — отметить галочкой.
+ * Проекты: рабочие копии, папка документации и папка задач, которые совет берёт по проекту, а не вводит в каждом
+ * потоке. Проект выбирают на «Вводе» совета: его репозитории подставляются в шаг «Репозиторий» каждого потока, его
+ * папка документации — каталог заметок, а в папку задач «Документация» кладёт файлы задач. Рабочие копии
+ * предлагаются из каталога репозиториев сервера — отметить галочкой.
  */
 export function ProjectsPage() {
   const { t } = useTranslation()
@@ -68,7 +69,7 @@ export function ProjectsPage() {
 /** Отказ сервера его словами, иначе — общая фраза. */
 const reason = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback)
 
-/** Проект в списке: его рабочие копии, папка документации и что с ней не так. Удаление — со вторым шагом. */
+/** Проект в списке: его рабочие копии, папки документации и задач и что с ними не так. Удаление — со вторым шагом. */
 function ProjectCard({ project, locked, onEdit, onRemoved }: Readonly<{
   /** locked — открыта форма другого проекта: править и удалять этот — после неё. */
   project: Project; locked: boolean; onEdit: () => void; onRemoved: () => void
@@ -118,6 +119,14 @@ function ProjectCard({ project, locked, onEdit, onRemoved }: Readonly<{
       {project.notes
         ? <p className="project-paths">{project.notes}</p>
         : <p className="muted">{t('projects.noNotes')}</p>}
+      {project.notes && (
+        <>
+          <p className="select-label project-label">{t('projects.issuesTitle')}</p>
+          {project.issues
+            ? <p className="project-paths">{project.issues}</p>
+            : <p className="muted">{t('projects.noIssues')}</p>}
+        </>
+      )}
       {project.problem && <p className="error-text">{project.problem}</p>}
       {error && <p className="error-text" role="alert">{error}</p>}
     </section>
@@ -136,12 +145,14 @@ function ProjectForm({ project, copies, onSaved, onCancel, onOutdated }: Readonl
   const { t } = useTranslation()
   const nameId = useId()
   const notesId = useId()
+  const issuesId = useId()
   const offered = copies.paths
   const [name, setName] = useState(project?.name ?? '')
   const [picked, setPicked] = useState(() => new Set(project?.repositories.filter(path => offered.includes(path)) ?? []))
   const [paths, setPaths] = useState(() => (project?.repositories ?? [])
     .filter(path => !offered.includes(path)).map(path => listField(path)))
   const [notes, setNotes] = useState(project?.notes ?? '')
+  const [issues, setIssues] = useState(project?.issues ?? '')
   // Версия, которую открыли: правку к ней, а не к той, что пришла бы с новым списком.
   const [revision] = useState(project?.revision ?? 0)
   const [busy, setBusy] = useState(false)
@@ -156,7 +167,7 @@ function ProjectForm({ project, copies, onSaved, onCancel, onOutdated }: Readonl
 
   const save = async (event: FormEvent) => {
     event.preventDefault()
-    const draft: ProjectDraft = { name, repositories, notes }
+    const draft: ProjectDraft = { name, repositories, notes, issues }
     setBusy(true); setError(null)
     try {
       onSaved(project ? await api.updateProject(project.id, draft, revision) : await api.createProject(draft))
@@ -207,6 +218,12 @@ function ProjectForm({ project, copies, onSaved, onCancel, onOutdated }: Readonl
       <input id={notesId} className="text-field project-mono" value={notes} readOnly={busy}
              placeholder={root ? t('projects.notesPlaceholder', { root }) : t('projects.notesAbsolute')}
              onChange={e => setNotes(e.target.value)} />
+
+      <label className="select-label project-label" htmlFor={issuesId}>{t('projects.issuesTitle')}</label>
+      <p className="panel-hint">{t('projects.issuesHint')}</p>
+      <input id={issuesId} className="text-field project-mono" value={issues} readOnly={busy}
+             placeholder={root ? t('projects.issuesPlaceholder', { root }) : t('projects.notesAbsolute')}
+             onChange={e => setIssues(e.target.value)} />
 
       {error && <p className="error-text" role="alert">{error}</p>}
       <div className="stream-actions spread">

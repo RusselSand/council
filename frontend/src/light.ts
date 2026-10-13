@@ -73,8 +73,13 @@ export const exported = (stream: Stream, notes: string | null): boolean =>
 export const exportedTo = (stream: Stream, notes: string | null): boolean =>
   !!stream.notes && notes !== null && stream.notes.root === notes
 
-/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
-export const exportedCount = (stream: Stream): number => stream.notes?.notes.filter(note => !note.kept).length ?? 0
+/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие и файлы задач — не в счёт. */
+export const exportedCount = (stream: Stream): number =>
+  stream.notes?.notes.filter(note => !note.kept && note.type !== 'issue').length ?? 0
+
+/** Сколько файлов задач выгружено — в папку задач проекта. */
+export const exportedFiles = (stream: Stream): number =>
+  stream.notes?.notes.filter(note => !note.kept && note.type === 'issue').length ?? 0
 
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
