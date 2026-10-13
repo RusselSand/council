@@ -67,6 +67,7 @@ def test_the_judge_validates_flags_a_conflict_recommends_or_holds_back():
     assert validated == Analysis("validated", "P2", (), (5,), ("Q2",), "", "Бот — точка входа.")
     conflict = judged_analysis({"status": "conflict", "proposal_id": "P2", "reason": "против F4",
                                 "validation": {"constraint_conflicts": ["F4"]},
+                                "fixes": [{"question_id": "Q2", "change": "Решите Q2."}],
                                 "rationale": None}, CHOSEN)
     assert (conflict.kind, conflict.conflicts, conflict.reason, conflict.rationale) == (
         "conflict", (4,), "против F4", None)
@@ -81,7 +82,8 @@ def test_the_judge_validates_flags_a_conflict_recommends_or_holds_back():
 
 def test_a_problem_the_judge_names_is_a_conflict_whatever_the_status():
     found = judged_analysis({"status": "validated", "proposal_id": "P2",
-                             "validation": {"constraint_conflicts": ["F4"]}}, CHOSEN)
+                             "validation": {"constraint_conflicts": ["F4"]},
+                             "fixes": [{"question_id": "Q2", "change": "Решите Q2."}]}, CHOSEN)
     assert found.kind == "conflict"
 
 
@@ -94,6 +96,12 @@ def test_a_problem_the_judge_names_is_a_conflict_whatever_the_status():
     ({"status": "recommended", "proposal_id": "P1", "rationale": {"text": "x" * 2001}}, OPEN,
      "длиннее"),
     ({"status": "accepted"}, OPEN, "status"),
+    # Проблема без того, что с ней делать: ни одной правки — или ни одной годной.
+    ({"status": "conflict", "proposal_id": "P2"}, CHOSEN, "без правок"),
+    ({"status": "conflict", "proposal_id": "P2",
+      "fixes": [{"question_id": "Q9", "change": "Чужой вопрос."}]}, CHOSEN, "без правок"),
+    ({"status": "validated", "proposal_id": "P2", "validation": {"constraint_conflicts": ["F4"]}},
+     CHOSEN, "без правок"),
 ])
 def test_a_judge_answer_out_of_form_is_bad(answer, where, problem):
     with pytest.raises(BadAnswer, match=problem):

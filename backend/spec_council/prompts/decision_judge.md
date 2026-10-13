@@ -72,9 +72,10 @@ one. Each fix:
 - `why` — what it conflicts with, briefly and with IDs: the choice on another question (Q12, P22),
   a constraint (F7), an accepted ADR.
 
-One fix — one change. Every problem in `reason` has at least one fix. Wording of the chosen
-PROPOSAL is changed in this OPEN QUESTION: the user will take their own option with the
-corrected text.
+One fix — one change. Every problem in `reason` has at least one fix: a problem without
+`fixes` is an invalid answer. Wording of the chosen PROPOSAL is changed in this OPEN QUESTION:
+the user will take their own option with the corrected text. A question you name in a fix is
+also a question the decision depends on: list it in `depends_on_question_ids` too.
 
 ### Rationale
 
@@ -176,7 +177,7 @@ the input. JSON keys, IDs and enum values stay exactly as specified below.
   "validation": {
     "constraint_conflicts": ["F7"],
     "risk_ids": [],
-    "depends_on_question_ids": []
+    "depends_on_question_ids": ["Q4"]
   },
   "reason": "The chosen option copies the logs to the cloud, and F7 keeps them on site.",
   "fixes": [

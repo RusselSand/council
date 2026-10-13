@@ -1078,16 +1078,25 @@ class DecisionRun(CouncilRun[DecisionAnalysis]):
 
 def analysis_of_question(question: OpenQuestion, verdict: Analysis,
                          entries: Mapping[str, str]) -> QuestionAnalysis:
-    """Проверка вопроса — и выбор по вопросам, от которых она зависит, как он был при ней
-    (entries — выбор по каждому вопросу потока, «Q2: P5»)."""
-    return QuestionAnalysis(
+    """Проверка вопроса — и выбор по вопросам, на которые она опирается, как он был при ней
+    (entries — выбор по каждому вопросу потока, «Q2: P5»): от которых зависит и где судья велел
+    что-то поправить. Там выбрали другое — проверку повторяют (work.holds)."""
+    found = QuestionAnalysis(
         question_id=question.id, verdict=verdict.kind, proposal=verdict.proposal,
         constraint_conflicts=list(verdict.conflicts), risk_ids=list(verdict.risks),
-        depends_on=list(verdict.depends_on),
-        context=[entries[name] for name in verdict.depends_on if name in entries],
-        reason=verdict.reason or None, rationale=verdict.rationale,
+        depends_on=list(verdict.depends_on), reason=verdict.reason or None,
+        rationale=verdict.rationale,
         fixes=[DecisionFix(question_id=fix.question, change=fix.change, why=fix.why)
                for fix in verdict.fixes])
+    return found.model_copy(update={"context": [entries[name] for name in rests_on(found)
+                                                if name in entries]})
+
+
+def rests_on(found: QuestionAnalysis) -> list[str]:
+    """Другие вопросы, на выбор по которым опирается проверка: от которых зависит и где судья
+    велел что-то поправить."""
+    fixed = [fix.question_id for fix in found.fixes if fix.question_id != found.question_id]
+    return list(dict.fromkeys([*found.depends_on, *fixed]))
 
 
 def offered(question: OpenQuestion, fragments: dict[int, LabeledFragment],

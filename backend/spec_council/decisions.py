@@ -95,7 +95,8 @@ def checked(data: dict, context: Context, field: str) -> Analysis:
 
 def fixes_of(value: object, context: Context) -> tuple[Fix, ...]:
     """Правки судьи: только в этом вопросе и других вопросах потока, и у каждой сказано, что
-    поменять. Правка с чужим вопросом или без сути отбрасывается, как чужой номер."""
+    поменять. Правка с чужим вопросом или без сути отбрасывается, как чужой номер, но хоть одна
+    должна остаться: проблема без того, что с ней делать, — негодный ответ."""
     known = context.questions | {context.question}
     found: list[Fix] = []
     for item in value if isinstance(value, list) else []:
@@ -108,6 +109,8 @@ def fixes_of(value: object, context: Context) -> tuple[Fix, ...]:
         if len(change) + len(why) > FIX_MAX:
             raise BadAnswer(f"правка длиннее {FIX_MAX} знаков")
         found.append(Fix(question, change, why))
+    if not found:
+        raise BadAnswer("проблема без правок: не сказано, что поправить")
     return tuple(found)
 
 

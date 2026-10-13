@@ -31,7 +31,7 @@ from .models import (
     QuestionWork,
     Stream,
 )
-from .pipeline import choice_entry, decisions_key, outcome_print, question_key
+from .pipeline import choice_entry, decisions_key, outcome_print, question_key, rests_on
 
 
 def keys_of(scope: Iterable[OpenQuestion]) -> dict[str, str]:
@@ -105,11 +105,12 @@ def carried_analyses(stream: Stream, choices: list[Choice],
 
 
 def holds(found: QuestionAnalysis, now: Mapping[str, str]) -> bool:
-    """Проверка держится, пока выбор по вопросам, от которых она зависит, тот же, что был при
-    ней: противоречие с соседним вопросом могло уйти вместе с его прежним выбором. Проверка,
-    которая выбора не запомнила (её делали до того, как стали помнить), а от вопросов зависит, —
-    уже не держится: что тогда было выбрано, не узнать."""
-    return all(now.get(name) in found.context for name in found.depends_on)
+    """Проверка держится, пока выбор по вопросам, на которые она опирается, тот же, что был при
+    ней: противоречие с соседним вопросом могло уйти вместе с его прежним выбором. Опирается она
+    на вопросы, от которых зависит, и на те, где судья велел что-то поправить (rests_on).
+    Проверка, которая выбора не запомнила (её делали до того, как стали помнить), а на вопросы
+    опирается, — уже не держится: что тогда было выбрано, не узнать."""
+    return all(now.get(name) in found.context for name in rests_on(found))
 
 
 def earlier_choices(stream: Stream) -> dict[str, Choice]:
