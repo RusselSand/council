@@ -15,6 +15,7 @@ from spec_council.repository import (
     Context,
     Inventory,
     RepositoryError,
+    Source,
     checkout_of,
     context_prompt,
     inventory,
@@ -24,6 +25,7 @@ from spec_council.repository import (
     map_of,
     merged,
     same_copy,
+    scanned,
     sha_prompt,
     snapshot,
     snapshot_all,
@@ -1145,3 +1147,17 @@ def test_a_scan_without_a_mark_is_known_by_its_root_or_clean_commit(repo, tmp_pa
     assert same_copy(old, clone)                                    # чистый — по коммиту
     # С правками — нет: карта могла описывать их, а в другой копии их не узнать.
     assert not same_copy(old.model_copy(update={"dirty": True}), clone)
+
+
+def test_a_scan_record_takes_the_mark_found_outside_the_lock(repo, monkeypatch):
+    """Метку ставит и читает working_copy — вне замка советов. Запись скана (под замком) git не
+    зовёт: только переносит найденное."""
+    found = working_copy(str(repo), None, mark=True)
+    assert found.checkout == checkout_of(repo) and found.checkout
+
+    def no_git(*args, **kwargs):
+        raise AssertionError("git под замком")
+
+    monkeypatch.setattr(repository, "git_bytes", no_git)
+    record = scanned(Source("", str(repo), found))
+    assert record.checkout == found.checkout

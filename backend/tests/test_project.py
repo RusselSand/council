@@ -36,7 +36,7 @@ from spec_council.project import (
     selected,
     trails_of,
 )
-from spec_council.repository import rerooted
+from spec_council.repository import checkout_of, rerooted
 from spec_council.slicing import BadAnswer
 from tests.test_streams import (
     DECIDED,
@@ -658,9 +658,11 @@ def test_the_trail_is_found_where_the_repositories_folder_is_seen_now(tmp_path):
     scan.repositories[0].commit_sha = head(repo)
     assert scanned_commits(scan) == {}                                  # по старому корню — никак
     assert scanned_commits(rerooted(scan, tmp_path)) == {repo.resolve(): head(repo)}
-    # По тому же пути — другой репозиторий: сканированного коммита нет, корень прежний.
+    # По тому же пути — другой репозиторий: сканированного коммита нет — корня нет, и следа тоже:
+    # прежний корень мог привести в чужую копию.
     scan.repositories[0].commit_sha = "0" * 40
-    assert rerooted(scan, tmp_path).repositories[0].root == str(tmp_path / "elsewhere" / "project")
+    assert rerooted(scan, tmp_path).repositories[0].root == ""
+    assert scanned_commits(rerooted(scan, tmp_path)) == {}
 
 
 def test_the_trail_is_found_in_the_copy_where_it_is_when_the_selection_runs(agents, tmp_path):
@@ -688,3 +690,17 @@ def test_the_trail_is_found_in_the_copy_where_it_is_when_the_selection_runs(agen
     finally:
         app.dependency_overrides.pop(get_repositories)
     assert streams_of(council_id)["C"].decisions_search.traced == 1
+
+
+def test_a_replaced_copy_at_the_scanned_root_leaves_no_trail(tmp_path):
+    """На прежнем месте — другой клон того же проекта: коммит в нём есть, а метки нет. Прежний
+    корень не берётся — иначе след прочли бы из чужой копии."""
+    repo = project_with(tmp_path, "Поиск по базе ISS-0003")
+    scan = scan_of(("project", repo))
+    scan.repositories[0].commit_sha = head(repo)
+    scan.repositories[0].checkout = checkout_of(repo, mark=True)
+    assert scanned_commits(rerooted(scan, tmp_path)) == {repo.resolve(): head(repo)}
+    repo.rename(tmp_path / "original")
+    git(tmp_path, "clone", "-q", str(tmp_path / "original"), str(repo))
+    assert rerooted(scan, tmp_path).repositories[0].root == ""
+    assert scanned_commits(rerooted(scan, tmp_path)) == {}

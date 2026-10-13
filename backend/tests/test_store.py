@@ -242,7 +242,7 @@ def test_a_scan_and_a_cut_saved_with_one_repository_read_as_a_list_of_one():
         "steps": []})
     assert (scan.run, scan.idea, scan.rounds) == ("r1", "Идея", 1)
     assert [r.model_dump() for r in scan.repositories] == [{
-        "name": "", "path": "project", "root": "/repos/project", "checkout": "",
+        "name": "", "path": "project", "root": "/repos/project", "checkout": "", "within": "",
         "commit_sha": "abc", "dirty": True, "files": 2, "outside": 1,
         "omitted": ["vendor/ — подмодуль не скачан"], "omitted_count": 1}]
     old = {"state": "done", "run": "i1", "outcomes": "o1", "steps": []}

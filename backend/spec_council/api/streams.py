@@ -310,7 +310,8 @@ def scan_repository(council_id: str, group: str, edit: ScanRepository, store: St
     with council_lock:
         plan()
     try:
-        sources = sources_of([(path, working_copy(path, repositories)) for path in edit.paths])
+        sources = sources_of([(path, working_copy(path, repositories, mark=True))
+                              for path in edit.paths])
         fits(merged(sources))
     except RepositoryError as exc:
         raise HTTPException(422, str(exc)) from None
@@ -1536,7 +1537,8 @@ def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
     уже другая рабочая копия: читать её под картой прежней нельзя. Но тот же каталог, видный
     по-другому (снаружи докера и в нём), — та же копия (same_copy)."""
     try:
-        found = working_copy(source.path, repositories)
+        found = working_copy(source.within if source.within and repositories is not None
+                             else source.path, repositories)
     except RepositoryError as exc:
         raise HTTPException(422, f"Рабочую копию {source.path} не прочитать: {exc}") from None
     if not same_copy(source, found.root):

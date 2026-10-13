@@ -26,7 +26,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
@@ -99,6 +99,10 @@ class Inventory:
     # Чего нет в снимке, хоть оно и в рабочей копии: нескачанные подмодули и ссылки (их не
     # копируем — за ссылкой может быть что угодно), с причиной; модели должны это знать.
     omitted: tuple[str, ...] = ()
+    # Метка рабочей копии (checkout_of) и её корень от каталога репозиториев — по ним копию
+    # находят и узнают, как бы ни был виден каталог (working_copy).
+    checkout: str = ""
+    within: str = ""
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -365,16 +369,18 @@ def placed(text: str, base: Path | None) -> Path:
     return path.resolve()
 
 
-def working_copy(text: str, base: Path | None) -> Inventory:
+def working_copy(text: str, base: Path | None, *, mark: bool = False) -> Inventory:
     """Рабочая копия по тексту человека — целиком внутри каталога репозиториев: корень git
     может оказаться выше выбранной папки. Корень — одним дешёвым вызовом git, до обхода: чужую
-    рабочую копию не читаем даже ради отказа."""
+    рабочую копию не читаем даже ради отказа. С её меткой (mark — поставить, если её нет: скан)
+    и корнем от каталога репозиториев. Всё это — git и файлы, и потому вне замка советов."""
     root = top_of(located(text, base))
     if base is not None and not root.is_relative_to(base.resolve()):
         raise RepositoryError(f"Корень рабочей копии {root} вне каталога репозиториев {base}")
     found = inventory(root)
     fits(found)
-    return found
+    within = root.relative_to(base.resolve()).as_posix() if base is not None else ""
+    return replace(found, checkout=checkout_of(root, mark=mark), within=within)
 
 
 def has_commit(root: Path, sha: str) -> bool:
@@ -433,21 +439,27 @@ def same_copy(source: ScannedRepository, root: Path) -> bool:
 
 
 def rerooted(scan: RepositoryScan, base: Path | None) -> RepositoryScan:
-    """Скан с корнями рабочих копий, где они сейчас: по их путям от каталога репозиториев, если
-    там та же копия (same_copy). Не найти или уже другая — корень прежний: по нему её не прочесть,
-    как и раньше."""
+    """Скан с корнями рабочих копий, где они сейчас: по их местам от каталога репозиториев
+    (located_again), если там та же копия (same_copy). Не найти или там уже другая — корня нет, и
+    следа по ней не будет: прежний корень мог привести в чужую копию."""
     repositories = []
     for source in scan.repositories:
         try:
-            root = top_of(located(source.path, base))
+            root = top_of(located_again(source, base))
         except RepositoryError:
             root = None
-        if (root is not None and source.root
+        same = (root is not None and bool(source.root)
                 and (base is None or root.is_relative_to(base.resolve()))
-                and same_copy(source, root)):
-            source = source.model_copy(update={"root": str(root)})
-        repositories.append(source)
+                and same_copy(source, root))
+        repositories.append(source.model_copy(update={"root": str(root) if same else ""}))
     return scan.model_copy(update={"repositories": repositories})
+
+
+def located_again(source: ScannedRepository, base: Path | None) -> Path:
+    """Где рабочая копия скана сейчас: по её корню от каталога репозиториев, каким он был при
+    скане (within), — так её находят, и если путь ввели абсолютным, а каталог теперь виден
+    по-другому. Скан до этого — по пути, как его ввели."""
+    return located(source.within if source.within and base is not None else source.path, base)
 
 
 def top_of(path: Path) -> Path:
@@ -884,7 +896,7 @@ def scanned(source: Source) -> ScannedRepository:
     """Что скан помнит о рабочей копии."""
     found = source.found
     return ScannedRepository(name=source.name, path=source.path, root=str(found.root),
-                             checkout=checkout_of(found.root, mark=True),
+                             within=found.within, checkout=found.checkout,
                              commit_sha=found.commit_sha, dirty=found.dirty,
                              files=len(found.files), outside=found.outside,
                              omitted=capped(found.omitted), omitted_count=len(found.omitted))
