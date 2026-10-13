@@ -111,6 +111,17 @@ same wording in every OUTCOME it holds.
 
 Do not answer a gap yourself.
 
+Check the wording of every gap you keep: it becomes an OPEN QUESTION word for word. Fix the
+wording, do not drop a gap because of it:
+
+- two uncertainties in one gap — split it into two gaps;
+- answer options in the text (in parentheses, "A or B", "... or otherwise") — remove them;
+- a long gap — keep one sentence and at most one short condition with the ID of the decision it
+  rests on; move the rest into `reason`.
+
+Drop a gap whose answer already follows unambiguously from the accepted ADRs, and a gap that can
+be decided locally during implementation without changing the behavior of the OUTCOME.
+
 ## 5. Acceptance criteria
 
 Check that every criterion:
@@ -215,6 +226,7 @@ Before answering, check that:
 - no new decisions or requirements have appeared;
 - acceptance criteria are grounded;
 - the blocks match real dependencies;
+- every gap is one neutral question without answer options;
 - all accepted ADRs are taken into account;
 - the result is not based on agent voting.
 
