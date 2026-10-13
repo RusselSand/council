@@ -263,3 +263,24 @@ def test_projects_survive_a_restart_beside_the_councils(tmp_path):
     assert after.get_project(kept.id).repositories == ["back", "front"]
     # Советы того же каталога проекты за советы не принимают.
     assert FileStore(tmp_path).list_councils() == []
+
+
+def test_an_issues_folder_is_shared_only_by_projects_of_one_catalog(repos, projects):
+    assert creates(notes="back/docs/reasoning", issues="back/docs/issues").status_code == 201
+    # Тот же каталог заметок — номера задач общие, папка задач тоже может быть общей.
+    assert creates(name="Тот же каталог", notes="back/docs/reasoning",
+                   issues="back/docs/issues").status_code == 201
+    # Другой каталог нумерует задачи сам: его ISS-0005 лёг бы в файл чужой ISS-0005.
+    res = creates(name="Другой", notes="front/docs", issues="back/docs/issues")
+    assert res.status_code == 422 and "уже у проекта «Кромка»" in res.json()["detail"]
+
+
+@pytest.mark.parametrize(("notes", "issues"), [
+    ("front/docs", "back/docs/reasoning/issues"),     # задачи — в чужой папке документации
+    ("back/docs", ""),                                # чужие задачи — в своей папке документации
+])
+def test_issues_are_not_put_into_another_projects_notes_folder(repos, projects, notes, issues):
+    assert creates(notes="back/docs/reasoning", issues="back/docs/issues").status_code == 201
+    res = creates(name="Другой", notes=notes, issues=issues)
+    assert res.status_code == 422 and "Causa прочла бы" in res.json()["detail"]
+    assert len(projects.list_projects()) == 1

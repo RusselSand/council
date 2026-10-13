@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Response
 
 from ..deps import ProjectsDep, RepositoriesDep, StoreDep
 from ..models import ProjectDraft, ProjectEdit, ProjectView, WorkingCopies
-from ..projects import ProjectError, Projects, checked, viewed, working_copies
+from ..projects import ProjectError, Projects, checked, clashing, viewed, working_copies
 from .councils import council_lock
 
 router = APIRouter(tags=["projects"])
@@ -17,7 +17,8 @@ NOT_FOUND = {404: {"description": MISSING}}
 INVALID = {422: {"description": "Нет названия или оно уже у другого проекта, рабочей копии нет, "
                                 "она вне каталога репозиториев или указана дважды, папка "
                                 "документации или задач вне его, папка задач без папки "
-                                "документации или внутри неё"}}
+                                "документации или внутри неё (и чужой), общая папка задач у "
+                                "проектов с разными папками документации"}}
 
 
 @router.get("/projects")
@@ -31,6 +32,7 @@ def create_project(draft: ProjectDraft, projects: ProjectsDep,
     draft = valid(draft, repositories)
     with council_lock:
         unique(draft, projects)
+        apart(draft, projects, repositories)
         project = projects.create_project(draft)
     return viewed(project, repositories)
 
@@ -53,6 +55,7 @@ def update_project(project_id: str, edit: ProjectEdit, projects: ProjectsDep,
             raise HTTPException(409, "Проект уже поправили, например в другой вкладке, — "
                                      "откройте его заново")
         unique(draft, projects, project_id)
+        apart(draft, projects, repositories, project_id)
         project = projects.update_project(project_id, draft)
     if project is None:
         raise HTTPException(404, MISSING)
@@ -83,6 +86,17 @@ def list_working_copies(repositories: RepositoriesDep) -> WorkingCopies:
 def valid[D: ProjectDraft](draft: D, repositories: Path | None) -> D:
     try:
         return checked(draft, repositories)
+    except ProjectError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+def apart(draft: ProjectDraft, projects: Projects, repositories: Path | None,
+          project_id: str = "") -> None:
+    """Папки проекта не задевают папок других проектов (projects.clashing) — под замком
+    советов, как и название: два запроса разом не заведут одну папку задач на два каталога."""
+    try:
+        clashing(draft, [project for project in projects.list_projects()
+                         if project.id != project_id], repositories)
     except ProjectError as exc:
         raise HTTPException(422, str(exc)) from None
 

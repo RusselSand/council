@@ -158,6 +158,32 @@ def issues_root(text: str, base: Path | None, notes: Path) -> Path:
     return path
 
 
+def clashing(draft: ProjectDraft, others: Iterable[Project], base: Path | None) -> None:
+    """Папки проекта не мешают папкам других проектов, иначе ProjectError. Общая папка задач —
+    только у проектов с одной папкой документации: номера задач у каждого каталога заметок свои,
+    и задачи двух каталогов легли бы в одни файлы. И ни одна папка задач — не внутри чужой папки
+    документации: Causa прочла бы задачи заметками. Чужие папки, которые больше не годятся, не в
+    счёт: их проект сам их не найдёт."""
+    notes = notes_root(draft.notes, base) if draft.notes else None
+    issues = issues_root(draft.issues, base, notes) if draft.issues and notes else None
+    for other in others:
+        try:
+            theirs = notes_root(other.notes, base) if other.notes else None
+            tasks = issues_root(other.issues, base, theirs) if other.issues and theirs else None
+        except ProjectError:
+            continue
+        if issues is not None and issues == tasks and notes != theirs:
+            raise ProjectError(f"Папка задач {issues} уже у проекта «{other.name}» с другой папкой "
+                               "документации: номера задач у каждого каталога свои, и задачи "
+                               "легли бы в одни файлы")
+        if issues is not None and theirs is not None and issues.is_relative_to(theirs):
+            raise ProjectError(f"Папка задач {issues} — внутри папки документации проекта "
+                               f"«{other.name}»: Causa прочла бы задачи заметками")
+        if notes is not None and tasks is not None and tasks.is_relative_to(notes):
+            raise ProjectError(f"Внутри папки документации {notes} — папка задач проекта "
+                               f"«{other.name}»: Causa прочла бы его задачи заметками")
+
+
 def folder_of(text: str, base: Path | None) -> Path:
     try:
         path = placed(text, base)
