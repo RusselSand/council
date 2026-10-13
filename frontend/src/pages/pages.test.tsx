@@ -205,7 +205,7 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis(?:\/Q\d+)?|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -1097,9 +1097,9 @@ describe('Поток: решения и итоги', () => {
             { name: 'decision_judge', state: 'done', runs: [run('fable', 'done')] }],
     analyses: [
       { question_id: 'Q1', verdict: 'validated', proposal: 'F2', constraint_conflicts: [], risk_ids: [],
-        depends_on: ['Q2'], reason: null, rationale: KEPT },
+        depends_on: ['Q2'], context: ['Q2: -'], reason: null, rationale: KEPT },
       { question_id: 'Q2', verdict: 'recommended', proposal: 'P2', constraint_conflicts: [], risk_ids: [],
-        depends_on: [], reason: 'видно сразу', rationale: 'Мера без опросов.' },
+        depends_on: [], context: [], reason: 'видно сразу', rationale: 'Мера без опросов.' },
     ],
   }
   /** Поток A: Q1 — выбран F2 из текста, Q2 — unresolved; выбор проверен. */
@@ -1166,6 +1166,9 @@ describe('Поток: решения и итоги', () => {
     expect(within(first).getByText(ru['decisions.waits'])).toBeTruthy()
   })
 
+  const FIXED_EARLY = [{ question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' as const },
+                       { question_id: 'Q2', proposal: null, rationale: null, rationale_by: null }]
+
   const OWN_CHOICE = [{ question_id: 'Q1', proposal: 'P3', text: 'Хранить в Redis' }, { question_id: 'Q2', proposal: null }]
 
   it('свой вариант из выбора — среди вариантов решения', async () => {
@@ -1181,7 +1184,7 @@ describe('Поток: решения и итоги', () => {
   it('проблема, найденная ИИ, видна, но решению не мешает', async () => {
     const conflict: DecisionAnalysis = { ...CHECKED, analyses: [
       { question_id: 'Q1', verdict: 'conflict', proposal: 'F2', constraint_conflicts: [3], risk_ids: [], depends_on: [],
-        reason: 'Файлы не переживут смену диска.', rationale: null }, CHECKED.analyses[1]] }
+        context: [], reason: 'Файлы не переживут смену диска.', rationale: null }, CHECKED.analyses[1]] }
     openStream(() => deciding({ analysis: conflict }))
     const first = await card('Где хранить состояние?')
     expect(within(first).getByText(ru['decisions.conflict'])).toBeTruthy()
@@ -1189,6 +1192,38 @@ describe('Поток: решения и итоги', () => {
     expect(fix().disabled).toBe(true)                        // обоснования нет — у совета его не было
     fireEvent.change(why('Q1'), { target: { value: 'Диск не меняем.' } })
     expect(fix().disabled).toBe(false)
+  })
+
+  it('противоречие сняли другим вопросом — карточку перепроверяют одну, вписанное на других остаётся', async () => {
+    const conflict: DecisionAnalysis = { ...CHECKED, analyses: [
+      { question_id: 'Q1', verdict: 'conflict', proposal: 'F2', constraint_conflicts: [], risk_ids: [], depends_on: [],
+        context: [], reason: 'Без замера потерь файлы не проверить.', rationale: null }, CHECKED.analyses[1]] }
+    openStream(() => deciding({ analysis: conflict }), () => json(deciding({ analysis: { ...CHECKED, run: 'd2' } })))
+    const second = await card('Как понять, что воркер не теряет результат?')
+    fireEvent.click(within(second).getByRole('button', { name: ru['decisions.accept'] }))
+    fireEvent.change(why('Q2'), { target: { value: 'Своё обоснование.' } })
+    // Обоснования нет у Q1 — кнопка не горит, и видно почему.
+    expect(fix().disabled).toBe(true)
+    expect(screen.getByText(ru['decisions.unjustified'].replace('{{ids}}', 'Q1'))).toBeTruthy()
+
+    const first = await card('Где хранить состояние?')
+    fireEvent.click(within(first).getByRole('button', { name: ru['decisions.recheck'] }))
+    expect(await within(first).findByText(ru['decisions.validated'])).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'analysis/Q1', body: undefined }])
+    expect(why('Q1').value).toBe(KEPT)                                  // совет дал обоснование
+    await card('Как понять, что воркер не теряет результат?')
+    expect(why('Q2').value).toBe('Своё обоснование.')                   // вписанное — на месте
+    expect(fix().disabled).toBe(false)
+    expect(screen.queryByText(ru['decisions.unjustified'], { exact: false })).toBeNull()
+  })
+
+  it('решения зафиксированы — перепроверить карточку нельзя', async () => {
+    openStream(() => deciding({ decisions: FIXED_EARLY }))
+    const chain = await screen.findByRole('region', { name: /Цепочка/ })
+    fireEvent.click(within(chain).getByRole('button', { name: /Решения/ }))
+    const first = await card('Где хранить состояние?')
+    expect(within(first).getByText(ru['decisions.validated'])).toBeTruthy()
+    expect(within(first).queryByRole('button', { name: ru['decisions.recheck'] })).toBeNull()
   })
 
   it('пока ИИ проверяет выбор, решения не зафиксировать, а выбор не поменять', async () => {

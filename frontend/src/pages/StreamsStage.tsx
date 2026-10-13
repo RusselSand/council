@@ -142,8 +142,9 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
                        onBack={() => setView('questions')} onApproved={() => setView('decisions')} />
         )}
         {view === 'decisions' && (
-          // Новая проверка выбора — и решения заново, к её итогам.
-          <DecisionsStep key={stream.analysis?.run ?? ''} council={council} structure={structure}
+          // Другой выбор — и решения заново, к его проверке. Перепроверка одного вопроса (и повтор упавшей) выбора не
+          // меняет: что человек уже решил и вписал на других карточках, остаётся.
+          <DecisionsStep key={stream.analysis?.choices.join('\n') ?? ''} council={council} structure={structure}
                          stream={stream} group={group} onChange={onChange} approve={fixing} focus={focus}
                          onBack={() => open('options')} onApproved={() => open('outcomes')} />
         )}
@@ -1902,6 +1903,10 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
   // Пока ИИ собирает итоги по решениям или нарезает их на задачи, их не поменять: сервер ответит 423.
   const assembling = runningFrom(stream, 'outcomes')
   const canApprove = !busy && !sought && !assembling && !stale && analysis !== null && complete
+  // Без обоснования решение не зафиксировать: каким вопросам его не хватает — видно у кнопки.
+  const unjustified = decided.filter(q => squash(rationaleOf(q.id, picked.get(q.id) ?? '')) === '')
+  // Перепроверить выбор по одному вопросу можно, пока решения не зафиксированы и совет не занят.
+  const canRecheck = !busy && !sought && !assembling && !stale && analysis !== null && stream.decisions === null
   useEffect(() => {
     if (focus) document.getElementById(`decision-${focus}-title`)?.scrollIntoView?.({ block: 'center' })
   }, [focus])
@@ -1914,6 +1919,8 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
   ]
   const check = () => void retry.go(() => startOrFollow(
     () => api.checkChoices(council.id, group.id), council, c => streamOf(c, group.id)?.analysis))
+  const recheck = (question: string) => void retry.go(() => startOrFollow(
+    () => api.recheckChoice(council.id, group.id, question), council, c => streamOf(c, group.id)?.analysis))
   const submit = () => void approve.go(async () => {
     try {
       return await api.approveDecisions(council.id, { run: structure.run, revision: structure.revision },
@@ -1974,13 +1981,18 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
                           byAi={value !== null && squash(rationale) === squash(suggested(question.id, value) ?? '')}
                           fixed={fixed !== undefined && fixed.proposal === value
                             && (value === null || fixed.rationale === squash(rationale))}
-                          busy={busy} onPick={proposal => setPicked(before => new Map(before).set(question.id, proposal))}
+                          busy={busy} onRecheck={canRecheck ? () => recheck(question.id) : undefined}
+                          onPick={proposal => setPicked(before => new Map(before).set(question.id, proposal))}
                           onRationale={text => value && setWritten(before => new Map(before).set(`${question.id}:${value}`, text))} />
           )
         }}
       </Slider>
+      {analysis?.state === 'done' && retry.error && <p className="error-text" role="alert">{retry.error}</p>}
       {approve.error && <p className="error-text" role="alert">{approve.error}</p>}
       {assembling && <p className="fragment-note">{t('decisions.belowRunning')}</p>}
+      {unjustified.length > 0 && !sought && (
+        <p className="fragment-note">{t('decisions.unjustified', { ids: unjustified.map(q => q.id).join(', ') })}</p>
+      )}
       <div className="stream-actions spread">
         <span className="muted">{t('decisions.count', { count: decisionSlides.filter(slide => slide.light === 'done').length,
                                                           total: scope.length })}</span>
@@ -1994,10 +2006,14 @@ function DecisionsStep({ council, structure, stream, group, onChange, approve, f
  * Вопрос на шаге «Решения»: выбор человека, что о нём сказал совет, черновик ADR и само решение —
  * вариант или «оставить открытым».
  */
-function DecisionCard({ question, n, options, choice, said, sought, value, rationale, byAi, fixed, busy, onPick, onRationale }: Readonly<{
+function DecisionCard({ question, n, options, choice, said, sought, value, rationale, byAi, fixed, busy, onRecheck, onPick,
+  onRationale }: Readonly<{
   question: OpenQuestion; n: number; options: { id: string; text: string }[]; choice: string | null
   said: QuestionAnalysis | undefined; sought: boolean; value: string | null; rationale: string; byAi: boolean
-  fixed: boolean; busy: boolean; onPick: (proposal: string | null) => void; onRationale: (text: string) => void
+  fixed: boolean; busy: boolean
+  /** Перепроверить выбор по этому вопросу; нет — сейчас нельзя (решения зафиксированы или совет занят). */
+  onRecheck?: () => void
+  onPick: (proposal: string | null) => void; onRationale: (text: string) => void
 }>) {
   const { t } = useTranslation()
   const name = `decision-${question.id}`
@@ -2046,6 +2062,11 @@ function DecisionCard({ question, n, options, choice, said, sought, value, ratio
       </div>
       {choice && <p className="decision-choice">{t('decisions.yourChoice')} <strong>{choice} · {textOf(choice)}</strong></p>}
       {verdict}
+      {onRecheck && said && (
+        <p className="fragment-note">
+          <button className="btn-link" onClick={onRecheck}>{t('decisions.recheck')}</button> {t('decisions.recheckHint')}
+        </p>
+      )}
       <div className="adr">
         <p className="adr-head">ADR-{n} · {t(fixed ? 'decisions.fixed' : 'decisions.draft')}</p>
         <dl className="adr-rows">
