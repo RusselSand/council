@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
+  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotePlan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
   Project, ProjectDraft, RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure, WorkingCopies,
 } from '../api'
@@ -30,8 +30,8 @@ const SETTINGS: Settings = {
 
 /** Проект с репозиториями и папкой документации: совет с ним выгружает заметки в notes_root. */
 const PROJECT: Project = {
-  id: 'p1', name: 'Кромка', repositories: ['kromka-api', 'kromka-front'], notes: 'kromka-api/docs',
-  updated_at: '2026-10-09T10:00:00Z', revision: 0, notes_root: '/notes', problem: null,
+  id: 'p1', name: 'Кромка', repositories: ['kromka-api', 'kromka-front'], notes: 'kromka-api/docs', issues: '',
+  updated_at: '2026-10-09T10:00:00Z', revision: 0, notes_root: '/notes', issues_root: null, problem: null,
 }
 
 const json = (body: unknown, status = 200) =>
@@ -1720,7 +1720,7 @@ describe('Поток: решения и итоги', () => {
   const atStart = () => confirmed()
 
   const DRAFT: NotesDraft = {
-    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', steps: [], error: null,
+    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', steps: [], error: null,
     notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', text: 'Хочу воркер.', generated: 'Хочу воркер.', links: [],
         action: 'create', current: null },
@@ -1738,12 +1738,13 @@ describe('Поток: решения и итоги', () => {
   it('документация: черновик заметок — правка текста, удаление исчезнувшего, запись', async () => {
     const replies = [deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT }),
                      deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT,
-                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } })]
+                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } })]
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }),
              () => json(replies[streamCalls.length - 1]))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
     expect(screen.getByText('Каталог заметок: /notes')).toBeTruthy()
+    expect(screen.getByText(ru['notes.noIssues'])).toBeTruthy()            // у проекта нет папки задач
     fireEvent.click(screen.getByRole('button', { name: ru['notes.build'] }))
     expect(await screen.findByText('O2 «Мера» не выгружается: у него нет решений этой идеи')).toBeTruthy()
     expect(screen.getByText(ru['notes.editedNote'])).toBeTruthy()
@@ -1760,6 +1761,45 @@ describe('Поток: решения и итоги', () => {
       { group: 'A', action: 'notes', body: { run: 'g1', revision: 0, draft: 'n1',
                                              edits: { idea: 'Воркер не теряет результат.' }, delete: ['ADR-0003'] } }])
     expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('документация с папкой задач: файлы задач — в черновике, а черновик к другой папке задач не записать', async () => {
+    const issue: NotePlan = {
+      key: 'i:сохранять', id: 'ISS-0012', type: 'issue', text: '# Сохранять состояние в файлы\n\nКак воркер…',
+      generated: '# Сохранять состояние в файлы\n\nКак воркер…', links: ['OUT-0003', 'ADR-0005'], action: 'create',
+      current: null }
+    const filed: NotesDraft = { ...DRAFT, issues_root: '/issues', notes: [...DRAFT.notes, issue] }
+    let draft = filed
+    let exportRecord: NotesExport | null = null
+    fetchMock.mockImplementation(server({
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: draft, notes: exportRecord }),
+                        project: PROJECT.id }),
+      settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, issues: 'kromka-api/issues', issues_root: '/issues' }] }),
+    }))
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText('Папка задач: /issues')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: ru['notes.type.issue'] })).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: 'Текст заметки ISS-0012' }) as HTMLTextAreaElement).value)
+      .toBe('# Сохранять состояние в файлы\n\nКак воркер…')
+    expect(screen.getByText('→ OUT-0003, ADR-0005')).toBeTruthy()
+    expect(screen.getByText('3 заметки · 1 файл задачи')).toBeTruthy()
+    cleanup()
+    // Папку задач проекта сменили после сборки: черновик — к прежней.
+    draft = { ...filed, issues_root: '/old-issues' }
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.movedIssues'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
+    cleanup()
+    // Выгружали, когда папка задач была другой: заметки на месте, а файлов задач здесь нет — выгружать снова.
+    draft = { ...filed, run: 'n2' }
+    exportRecord = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '/old-issues',
+                     notes: [], numbers: DRAFT.numbers }
+    renderAt('/councils/demo-1/streams/A')
+    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    expect(await screen.findByText(ru['notes.issuesElsewhere'])).toBeTruthy()
+    expect(screen.getByRole('button', { name: ru['notes.write'] })).toBeTruthy()
   })
 
   it('папку проекта сменили в другой вкладке — черновик, собранный после, записать можно', async () => {
@@ -1813,7 +1853,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
-    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', numbers: DRAFT.numbers, notes: [
+    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', numbers: DRAFT.numbers, notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
         links: [], digest: 'd1', kept: false },
       { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
@@ -1838,7 +1878,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
              () => json(atStart()))
     const issue = await card('Сохранять состояние в файлы')
     expect(within(issue).getByText('ISS-0012')).toBeTruthy()
@@ -1848,7 +1888,7 @@ describe('Поток: решения и итоги', () => {
   it('сохранённые и перенесённые задачи — с номером из выгрузки прежней нарезки, новые — без', async () => {
     const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
                                          outcome_ids: ['O2'] }]
-    const before = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers }
+    const before = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers }
     // Выгружали нарезку i1; потом её нарезали заново без выгрузки (i2, I1 перенесена), а теперь поправили отбор —
     // нарезку сняли, I1 сохранена: номер у неё тот же, через сколько нарезок ни перенеси.
     const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'] }
@@ -1866,7 +1906,7 @@ describe('Поток: решения и итоги', () => {
     const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'],
                                     issues: [CUT.issues[0], { ...CUT.issues[1], title: 'Другая задача' }] }
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: recut, earlier_issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers } }),
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers } }),
              () => json(atStart()))
     expect(within(await card('Сохранять состояние в файлы')).getByText('ISS-0012')).toBeTruthy()
     expect(within(await card('Другая задача')).queryByText('ISS-0013')).toBeNull()
@@ -1874,7 +1914,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка: номеров у задач нет', async () => {
     openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', notes: [], numbers: DRAFT.numbers } }),
+                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
              () => json(atStart()), '/other')
     const issue = await card('Сохранять состояние в файлы')
     expect(within(issue).queryByText('ISS-0012')).toBeNull()
@@ -2814,6 +2854,7 @@ describe('Проекты', () => {
     const kromka = await card('Кромка')
     expect(within(kromka).getByText('kromka-api')).toBeTruthy()
     expect(within(kromka).getByText('kromka-api/docs')).toBeTruthy()
+    expect(within(kromka).getByText(ru['projects.noIssues'])).toBeTruthy()    // папки задач нет
     const old = await card('Старый')
     expect(within(old).getByText(ru['projects.noRepositories'])).toBeTruthy()
     expect(within(old).getByText('Путь вне каталога репозиториев /repos')).toBeTruthy()
@@ -2837,12 +2878,17 @@ describe('Проекты', () => {
     fireEvent.click(within(form).getByRole('button', { name: ru['projects.addPath'] }))   // пустой путь не уйдёт
     fireEvent.change(within(form).getByRole('textbox', { name: ru['projects.notesTitle'] }),
                      { target: { value: 'kromka-api/docs' } })
+    expect(within(form).getByText(ru['projects.issuesHint'])).toBeTruthy()
+    fireEvent.change(within(form).getByRole('textbox', { name: ru['projects.issuesTitle'] }),
+                     { target: { value: 'kromka-api/issues' } })
     fireEvent.click(create)
     const saved = await card('Кромка')
     // Отмеченные — в порядке каталога, а не кликов; потом вписанные.
     expect(calls).toEqual([{ method: 'POST', url: '/api/projects', body: {
-      name: 'Кромка', repositories: ['kromka-api', 'kromka-front', 'libs/shared'], notes: 'kromka-api/docs' } }])
+      name: 'Кромка', repositories: ['kromka-api', 'kromka-front', 'libs/shared'], notes: 'kromka-api/docs',
+      issues: 'kromka-api/issues' } }])
     expect(within(saved).getByText('libs/shared')).toBeTruthy()
+    expect(within(saved).getByText('kromka-api/issues')).toBeTruthy()
     expect(screen.queryByRole('form')).toBeNull()
   })
 
@@ -2856,7 +2902,7 @@ describe('Проекты', () => {
     fireEvent.click(within(form).getByRole('button', { name: ru['projects.save'] }))
     expect((await within(form).findByRole('alert')).textContent).toBe('deep/repo: Каталога нет')
     expect(calls).toEqual([{ method: 'PUT', url: '/api/projects/p1', body: {
-      name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs', revision: 3 } }])
+      name: 'Кромка', repositories: ['kromka-api', 'deep/repo'], notes: 'kromka-api/docs', issues: '', revision: 3 } }])
   })
 
   it('пока форма открыта, другую не открыть; проект поправили в другой вкладке — список с сервера', async () => {

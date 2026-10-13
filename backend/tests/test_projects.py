@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from spec_council.api.councils import council_lock
 from spec_council.app import app
-from spec_council.deps import council_notes, get_projects, get_repositories
+from spec_council.deps import council_issues, council_notes, get_projects, get_repositories
 from spec_council.models import ProjectDraft
 from spec_council.projects import FileProjects, Projects
 from spec_council.store import FileStore, InMemoryStore
@@ -67,6 +67,29 @@ def test_a_project_keeps_its_working_copies_and_notes_folder(repos, projects):
             res.json()["revision"]) == (["front"], "", None, 1)
 
 
+def test_a_project_keeps_its_issues_folder_beside_the_notes(repos, projects):
+    res = creates(notes="back/docs/reasoning", issues="back/docs/issues")
+    assert res.status_code == 201
+    project = res.json()
+    assert project["issues_root"] == str((repos / "back/docs/issues").resolve())
+    # Папка документации внутри папки задач не мешает: задачи читаются только с её верхнего
+    # уровня.
+    assert creates(name="Другой", notes="front/issues/reasoning",
+                   issues="front/issues").status_code == 201
+    res = client.put(f"/api/projects/{project['id']}",
+                     json={"name": "Кромка", "notes": "back/docs/reasoning", "revision": 0})
+    assert (res.json()["issues"], res.json()["issues_root"]) == ("", None)
+
+
+def test_a_project_whose_issues_folder_no_longer_fits_tells_why(repos, projects, tmp_path):
+    app.dependency_overrides[get_repositories] = lambda: None
+    creates(notes=str(repos / "docs"), issues=str(tmp_path / "issues"))
+    app.dependency_overrides[get_repositories] = lambda: repos
+    shown = client.get("/api/projects").json()[0]
+    assert shown["notes_root"] == str((repos / "docs").resolve())
+    assert shown["issues_root"] is None and "вне каталога репозиториев" in shown["problem"]
+
+
 def test_an_edit_of_an_older_version_is_refused(repos, projects):
     project = creates(repositories=["back"], notes="back/docs").json()
     # Одна вкладка сменила папку…
@@ -100,6 +123,12 @@ def test_project_names_differ_in_more_than_case(repos, projects):
     ({"repositories": ["back", "back/."]}, "одна и та же рабочая копия"),
     ({"notes": "../notes"}, "вне каталога репозиториев"),
     ({"notes": "  "}, "Укажите папку документации"),
+    ({"issues": "back/issues"}, "только вместе с папкой документации"),
+    ({"notes": "docs", "issues": "  "}, "Укажите папку задач"),
+    ({"notes": "docs", "issues": "../issues"}, "вне каталога репозиториев"),
+    # Causa читает заметкой каждый .md в папке заметок: задачам там не место.
+    ({"notes": "docs", "issues": "docs"}, "внутри папки документации"),
+    ({"notes": "docs", "issues": "docs/issues"}, "внутри папки документации"),
 ])
 def test_a_project_with_wrong_paths_is_not_saved(repos, projects, draft, why):
     res = creates(**draft)
@@ -206,6 +235,21 @@ def test_the_notes_folder_of_a_council_is_its_projects(tmp_path):
     assert refused.value.status_code == 422 and "«Кромка»" in refused.value.detail
 
 
+def test_the_issues_folder_of_a_council_is_its_projects(tmp_path):
+    store, projects = InMemoryStore(), Projects()
+    project = projects.create_project(ProjectDraft(name="Кромка", notes="back/docs",
+                                                   issues="back/issues"))
+    council = store.create_council(participants=["sol"], judge="sol", project=project.id)
+    assert council_issues(council, projects, tmp_path) == (tmp_path / "back" / "issues").resolve()
+    projects.update_project(project.id, ProjectDraft(name="Кромка", notes="back/docs"))
+    assert council_issues(council, projects, tmp_path) is None       # без папки задач
+    projects.update_project(project.id, ProjectDraft(name="Кромка", notes="back/docs",
+                                                     issues="back/docs/issues"))
+    with pytest.raises(HTTPException) as refused:
+        council_issues(council, projects, tmp_path)
+    assert refused.value.status_code == 422 and "Папка задач проекта" in refused.value.detail
+
+
 def test_projects_survive_a_restart_beside_the_councils(tmp_path):
     before = FileProjects(tmp_path / "projects")
     kept = before.create_project(ProjectDraft(name="Кромка", repositories=["back"], notes="docs"))
@@ -219,3 +263,24 @@ def test_projects_survive_a_restart_beside_the_councils(tmp_path):
     assert after.get_project(kept.id).repositories == ["back", "front"]
     # Советы того же каталога проекты за советы не принимают.
     assert FileStore(tmp_path).list_councils() == []
+
+
+def test_an_issues_folder_is_shared_only_by_projects_of_one_catalog(repos, projects):
+    assert creates(notes="back/docs/reasoning", issues="back/docs/issues").status_code == 201
+    # Тот же каталог заметок — номера задач общие, папка задач тоже может быть общей.
+    assert creates(name="Тот же каталог", notes="back/docs/reasoning",
+                   issues="back/docs/issues").status_code == 201
+    # Другой каталог нумерует задачи сам: его ISS-0005 лёг бы в файл чужой ISS-0005.
+    res = creates(name="Другой", notes="front/docs", issues="back/docs/issues")
+    assert res.status_code == 422 and "уже у проекта «Кромка»" in res.json()["detail"]
+
+
+@pytest.mark.parametrize(("notes", "issues"), [
+    ("front/docs", "back/docs/reasoning/issues"),     # задачи — в чужой папке документации
+    ("back/docs", ""),                                # чужие задачи — в своей папке документации
+])
+def test_issues_are_not_put_into_another_projects_notes_folder(repos, projects, notes, issues):
+    assert creates(notes="back/docs/reasoning", issues="back/docs/issues").status_code == 201
+    res = creates(name="Другой", notes=notes, issues=issues)
+    assert res.status_code == 422 and "Causa прочла бы" in res.json()["detail"]
+    assert len(projects.list_projects()) == 1

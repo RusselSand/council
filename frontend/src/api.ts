@@ -343,7 +343,8 @@ export interface Stream {
    */
   saved_outcomes: Outcome[]; saved_issues: Issue[]
 }
-export type NoteType = 'idea' | 'open_question' | 'proposal' | 'adr' | 'outcome'
+/** issue — не заметка графа, а файл задачи для coding agent в папке задач проекта. */
+export type NoteType = 'idea' | 'open_question' | 'proposal' | 'adr' | 'outcome' | 'issue'
 /**
  * Заметка черновика выгрузки: какая часть потока (key), под каким номером, что предлагается записать
  * (text) и что с ней будет — новая, перепишется, уже такая, правили руками (совет не трогает).
@@ -361,6 +362,8 @@ export interface NotesDraft {
   state: 'running' | 'done' | 'failed'; run: string; issues: string; language: string; steps: Step[]
   /** Каталог заметок, для которого черновик собран: в другой его не записать. */
   root: string
+  /** Папка задач, для которой собран; '' — у проекта её нет, задачи только строками в итогах. */
+  issues_root: string
   notes: NotePlan[]; vanished: VanishedNote[]; numbers: IssueNumber[]; skipped: string[]; error: string | null
 }
 export interface ExportedNote {
@@ -369,7 +372,11 @@ export interface ExportedNote {
   kept: boolean
 }
 /** Последняя выгрузка потока: из какого черновика и к каким задачам. */
-export interface NotesExport { run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[] }
+export interface NotesExport {
+  run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[]
+  /** Папка, куда записали файлы задач; '' — не записывали. */
+  issues_root: string
+}
 
 /** Правка с экрана: меняются только присланные поля. */
 export type CouncilPatch = Partial<Pick<Council, 'name' | 'brief' | 'participants' | 'judge' | 'project'>> & {
@@ -392,19 +399,19 @@ export interface Settings {
 }
 
 /**
- * Проект: рабочие копии и папка документации, которые совет берёт по нему, а не вводит в каждом потоке.
- * Пути — от каталога репозиториев (COUNCIL_REPOS) или, без него, абсолютные. notes_root — папка документации,
- * как её находит сервер (по этому пути выгрузка помнит, куда записала); null — папки нет или она больше не
- * годится, и тогда problem — почему.
+ * Проект: рабочие копии, папка документации и папка задач, которые совет берёт по нему, а не вводит в каждом
+ * потоке. Пути — от каталога репозиториев (COUNCIL_REPOS) или, без него, абсолютные. notes_root и issues_root —
+ * папки документации и задач, как их находит сервер (по этим путям выгрузка помнит, куда записала); null — папки
+ * нет или она больше не годится, и тогда problem — почему.
  */
 export interface Project {
-  id: string; name: string; repositories: string[]; notes: string; updated_at: string
+  id: string; name: string; repositories: string[]; notes: string; issues: string; updated_at: string
   /** Версия: правка несёт ту, что правили; проект с тех пор поправили — 409. */
   revision: number
-  notes_root: string | null; problem: string | null
+  notes_root: string | null; issues_root: string | null; problem: string | null
 }
-/** Проект, как его сохраняют: название, рабочие копии, папка документации ('' — нет). */
-export type ProjectDraft = Pick<Project, 'name' | 'repositories' | 'notes'>
+/** Проект, как его сохраняют: название, рабочие копии, папки документации и задач ('' — нет). */
+export type ProjectDraft = Pick<Project, 'name' | 'repositories' | 'notes' | 'issues'>
 /** Рабочие копии git в каталоге репозиториев — из них отмечают репозитории проекта. root null — каталог не задан. */
 export interface WorkingCopies { root: string | null; paths: string[] }
 
@@ -415,6 +422,16 @@ export const projectOf = (council: Council, settings: Settings): Project | null 
 /** Каталог заметок совета — папка документации его проекта, как её находит сервер; null — потоки не выгрузить. */
 export const notesOf = (council: Council, settings: Settings): string | null =>
   projectOf(council, settings)?.notes_root ?? null
+
+/** Папка задач совета — его проекта, как её находит сервер; null — задачи только строками в итогах. */
+export const issuesOf = (council: Council, settings: Settings): string | null =>
+  projectOf(council, settings)?.issues_root ?? null
+
+/** Куда выгружают потоки совета: каталог заметок и папка задач его проекта. По ним выгрузка — выгрузка. */
+export interface Folders { notes: string | null; issues: string | null }
+
+export const foldersOf = (council: Council, settings: Settings): Folders =>
+  ({ notes: notesOf(council, settings), issues: issuesOf(council, settings) })
 
 /** Ответ сервера не 2xx. Сетевые сбои бросают обычный TypeError от fetch. */
 export class ApiError extends Error {

@@ -17,7 +17,7 @@ from .agents import AgentRunner, launch
 from .config import AppConfig, config_of, fitted
 from .figma import Fetcher, Figma
 from .models import Council
-from .projects import FileProjects, ProjectError, Projects, notes_root
+from .projects import FileProjects, ProjectError, Projects, issues_root, notes_root
 from .store import FileStore, Store
 
 log = logging.getLogger(__name__)
@@ -136,6 +136,29 @@ def get_notes_of(projects: ProjectsDep, repositories: RepositoriesDep) -> NotesO
 
 
 NotesOfDep = Annotated[NotesOf, Depends(get_notes_of)]
+
+
+def council_issues(council: Council, projects: Projects,
+                   repositories: Path | None) -> Path | None:
+    """Папка задач совета — папка задач его проекта. None — у проекта её нет: задачи только
+    строками в итогах. Папка больше не годится — 422 с причиной, как и у папки документации."""
+    project = projects.get_project(council.project) if council.project else None
+    if project is None or not project.issues or not project.notes:
+        return None
+    try:
+        return issues_root(project.issues, repositories, notes_root(project.notes, repositories))
+    except ProjectError as exc:
+        raise HTTPException(422, f"Папка задач проекта «{project.name}»: {exc} — поправьте "
+                                 "проект") from None
+
+
+def get_issues_of(projects: ProjectsDep, repositories: RepositoriesDep) -> NotesOf:
+    """Папка задач по самому совету — как и каталог заметок, для совета, прочитанного под
+    замком советов."""
+    return lambda council: council_issues(council, projects, repositories)
+
+
+IssuesOfDep = Annotated[NotesOf, Depends(get_issues_of)]
 
 
 

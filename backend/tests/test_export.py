@@ -6,7 +6,9 @@ import pytest
 
 from spec_council.export import WORDS as LANGUAGES
 from spec_council.export import (
+    Shelf,
     drafted,
+    export_in,
     graph_problems,
     numbered_issues,
     outcome_text,
@@ -15,6 +17,9 @@ from spec_council.export import (
     words_for,
     written,
 )
+from spec_council.issue_files import loaded
+from spec_council.issue_files import parsed as issue_parsed
+from spec_council.issue_files import rendered as issue_rendered
 from spec_council.models import (
     Choice,
     Decision,
@@ -93,16 +98,20 @@ def root(tmp_path):
     return tmp_path
 
 
-def draft(root, stream=STREAM, previous=None, language="Russian"):
-    return drafted(stream, FRAGMENTS, Catalog.load(root), root, previous, WORDS, language)
+def shelf(root, issues=None):
+    return Shelf(Catalog.load(root), root, issues, loaded(issues))
 
 
-def export(root, stream=STREAM, previous=None, edits=None, delete=()):
-    notes, vanished, numbers, skipped = draft(root, stream, previous)
-    catalog = Catalog.load(root)
-    graph_problems(catalog, notes, vanished, edits or {}, delete)
-    done = written(notes, vanished, edits or {}, delete, root, previous, catalog)
-    return NotesExport(run="r", issues=stream.issues.run, language="Russian", notes=done,
+def draft(root, stream=STREAM, previous=None, language="Russian", issues=None):
+    return drafted(stream, FRAGMENTS, shelf(root, issues), previous, WORDS, language)
+
+
+def export(root, stream=STREAM, previous=None, edits=None, delete=(), issues=None):
+    notes, vanished, numbers, skipped = draft(root, stream, previous, issues=issues)
+    graph_problems(Catalog.load(root), notes, vanished, edits or {}, delete)
+    done = written(notes, vanished, edits or {}, delete, shelf(root, issues), previous)
+    return NotesExport(run="r", issues=stream.issues.run, language="Russian", root=str(root),
+                       issues_root=str(issues) if issues else "", notes=done,
                        numbers=numbers), notes, vanished, skipped
 
 
@@ -408,13 +417,12 @@ def test_an_edit_must_keep_the_numbers_and_the_issue_lines(root):
     notes, _, _, _ = draft(root)
     outcome = next(note for note in notes if "\n- ISS-" in note.text)
     idea = notes[0]
-    catalog = Catalog.load(root)
     wrong = [(outcome, outcome.text.split("\n\n" + WORDS["issues"])[0], "потеряны номера ISS-"),
              (outcome, outcome.text.replace("\n- ISS-", "\nСм. ISS-"), "строки задач не те"),
              (idea, idea.text + " Как в ADR-0042.", "лишние номера ADR-0042")]
     for note, text, problem in wrong:
         with pytest.raises(NotesError, match=f"В правке заметки {note.id} {problem}"):
-            written(notes, [], {note.key: text}, [], root, None, catalog)
+            written(notes, [], {note.key: text}, [], shelf(root), None)
     assert sorted(Catalog.load(root).notes) == sorted(note.id for note in PAST)   # не тронут
 
 
@@ -422,7 +430,7 @@ def test_an_empty_text_anywhere_leaves_the_catalog_as_it_was(root):
     notes, _, _, _ = draft(root)
     last = notes[-1]
     with pytest.raises(NotesError, match=f"У заметки {last.id} пустой текст"):
-        written(notes, [], {last.key: " "}, [], root, None, Catalog.load(root))
+        written(notes, [], {last.key: " "}, [], shelf(root), None)
     assert sorted(note.id for note in Catalog.load(root).notes.values()) == sorted(
         note.id for note in PAST)                                      # ничего не записано
 
@@ -470,3 +478,162 @@ def test_a_translation_keeps_exactly_the_numbers_of_the_source():
                           good["notes"][1]]}
     with pytest.raises(BadAnswer, match="строки задач"):
         translations(reworded, sources)
+
+
+# --- файлы задач
+
+TASKS = ISSUES.model_copy(update={"issues": [
+    Issue(id="I1", title="Запуск деплоя по merge",
+          user_story="Как разработчик, я хочу, чтобы merge выкладывал сборку.",
+          main_entry_points=[".github/workflows/deploy.yml — запуск руками"],
+          current_state="Деплой запускают кнопкой.", scope=["Запускать деплой на push в main."],
+          outcome_ids=["O1"], adr_ids=["ADR-1"], constraint_ids=[3],
+          acceptance_criteria=["Merge в main выкладывает сборку."]),
+    Issue(id="I2", title="Уведомление о деплое", user_story="Как разработчик, я хочу знать, "
+          "что сборка выложена.", outcome_ids=["O1"], depends_on=["I1"]),
+    Issue(id="I3", title="Секреты в CI", user_story="…", outcome_ids=["O1"], blocked_by=["Q2"]),
+]})
+TASKED = STREAM.model_copy(update={"issues": TASKS})
+
+
+@pytest.fixture
+def issues(tmp_path):
+    return tmp_path / "issues"
+
+
+def test_each_free_issue_becomes_a_file_in_the_issues_folder(root, issues):
+    record, notes, _, skipped = export(root, TASKED, issues=issues)
+    filed = [note for note in notes if note.type == "issue"]
+    assert [(n.id, n.action, n.links) for n in filed] == [
+        ("ISS-0008", "create", ["OUT-0002", "ADR-0002"]),
+        ("ISS-0009", "create", ["OUT-0002", "ISS-0008"])]
+    assert (issues / "ISS-0008.md").read_text(encoding="utf-8") == (
+        "---\nid: ISS-0008\noutcomes: [OUT-0002]\nadrs: [ADR-0002]\n---\n\n"
+        "# Запуск деплоя по merge\n\nКак разработчик, я хочу, чтобы merge выкладывал сборку.\n\n"
+        "## Где менять\n- .github/workflows/deploy.yml — запуск руками\n\n"
+        "## Что там сейчас\nДеплой запускают кнопкой.\n\n"
+        "## Что сделать\n- Запускать деплой на push в main.\n\n"
+        "## Критерии готовности\n- Merge в main выкладывает сборку.\n\n"
+        "## Итоги\n- OUT-0002: Деплой по merge\n\n"
+        "## Решения\n- ADR-0002: Деплой запускает CI после merge, потому что рутинные шаги не "
+        "должны требовать ручной координации.\n\n"
+        "## Соблюдать\n- Деплой запускает CI после merge.\n\n"
+        "В финальном коммите укажите номер задачи — ISS-0008.\n")
+    assert (issues / "ISS-0009.md").read_text(encoding="utf-8").startswith(
+        "---\nid: ISS-0009\noutcomes: [OUT-0002]\ndepends_on: [ISS-0008]\n---\n")
+    assert "## После задач\n- ISS-0008: Запуск деплоя по merge" in filed[1].text
+    # Задачу, которую держит открытый вопрос, не сделать: номер у неё есть, файла — нет.
+    assert [n.id for n in record.numbers] == ["ISS-0008", "ISS-0009", "ISS-0010"]
+    assert not (issues / "ISS-0010.md").exists()
+    assert any("ISS-0010" in reason and "Q2" in reason for reason in skipped)
+    # Каталог заметок задачи не задели: в нём их нет, граф цел.
+    catalog = Catalog.load(root)
+    assert catalog.problems() == [] and not any(i.startswith("ISS") for i in catalog.notes)
+    assert {n.id for n in record.notes if n.type == "issue"} == {"ISS-0008", "ISS-0009"}
+
+
+def test_without_an_issues_folder_issues_stay_lines_of_their_outcome(root):
+    notes, _, numbers, _ = draft(root, TASKED)
+    assert not any(note.type == "issue" for note in notes)
+    assert [n.id for n in numbers] == ["ISS-0008", "ISS-0009", "ISS-0010"]
+
+
+def test_issue_files_are_kept_edited_by_hand_and_offered_for_removal(root, issues):
+    plan = by_id(draft(root, TASKED, issues=issues)[0])["ISS-0008"]
+    fixed = plan.text.replace("Деплой запускают кнопкой.", "Деплой запускают из чата.")
+    # Номера правка держит, как и у заметок: номер задачи — для финального коммита.
+    lost = {plan.key: fixed.split("\n\nВ финальном коммите")[0]}
+    with pytest.raises(NotesError, match="потеряны номера ISS-0008"):
+        export(root, TASKED, issues=issues, edits=lost)
+    first, _, _, _ = export(root, TASKED, issues=issues, edits={plan.key: fixed})
+    assert "Деплой запускают из чата." in (issues / "ISS-0008.md").read_text(encoding="utf-8")
+    again, _, _, _ = draft(root, TASKED, previous=first, issues=issues)
+    assert {n.action for n in again} == {"same"}                    # и правка человека осталась
+    assert by_id(again)["ISS-0008"].text == fixed
+
+    path = issues / "ISS-0009.md"
+    path.write_text(path.read_text(encoding="utf-8") + "Агент дописал.\n", encoding="utf-8")
+    edited = by_id(draft(root, TASKED, previous=first, issues=issues)[0])["ISS-0009"]
+    assert edited.action == "edited" and "Агент дописал." in edited.current
+
+    # Задачу I2 убрали: её файл — среди исчезнувших, и удалить его можно.
+    fewer = TASKED.model_copy(update={"issues": TASKS.model_copy(update={
+        "issues": [TASKS.issues[0], TASKS.issues[2]]})})
+    path.write_text(path.read_text(encoding="utf-8").replace("Агент дописал.\n", ""),
+                    encoding="utf-8")
+    _, _, vanished, _ = export(root, fewer, previous=first, issues=issues, delete=["ISS-0009"])
+    assert [(n.id, n.type, n.linked_from) for n in vanished] == [("ISS-0009", "issue", [])]
+    assert not path.exists() and (issues / "ISS-0008.md").exists()
+
+
+def test_files_in_another_issues_folder_are_not_the_previous_ones(root, issues, tmp_path):
+    first, _, _, _ = export(root, TASKED, issues=issues)
+    other = tmp_path / "tasks"
+    notes, vanished, _, _ = draft(root, TASKED, export_in(first, root, other), issues=other)
+    assert [(n.id, n.action) for n in notes if n.type == "issue"] == [
+        ("ISS-0008", "create"), ("ISS-0009", "create")]
+    assert vanished == []                                    # прежняя папка — не здесь
+    assert export_in(first, root, issues) == first
+
+
+def test_a_file_in_the_issues_folder_takes_its_number(root, issues):
+    issues.mkdir()
+    (issues / "ISS-0020.md").write_text("---\nid: ISS-0020\n---\n\n# Чужая\n", encoding="utf-8")
+    (issues / "README.md").write_text("# Задачи проекта\n", encoding="utf-8")   # не задача
+    _, _, numbers, _ = draft(root, TASKED, issues=issues)
+    assert [n.id for n in numbers] == ["ISS-0021", "ISS-0022", "ISS-0023"]
+
+
+def test_an_unreadable_file_under_the_issue_number_is_not_overwritten_silently(root, issues):
+    issues.mkdir()
+    (issues / "iss-0008.md").write_text("Набросок без frontmatter.", encoding="utf-8")
+    # Номер занят файлом: новая задача ляжет дальше.
+    assert draft(root, TASKED, issues=issues)[2][0].id == "ISS-0009"
+    # А задача, у которой этот номер уже был (выгружали без папки задач), видит, что в файле.
+    first, _, _, _ = export(root, TASKED)
+    plan = by_id(draft(root, TASKED, previous=first, issues=issues)[0])["ISS-0008"]
+    assert (plan.action, plan.current) == ("update", "Набросок без frontmatter.")
+
+
+def test_two_files_of_one_issue_stop_the_reading(issues):
+    issues.mkdir()
+    for name in ("ISS-0008.md", "copy.md"):
+        (issues / name).write_text("---\nid: ISS-8\n---\n\nЗадача\n", encoding="utf-8")
+    with pytest.raises(NotesError, match="Два файла задачи ISS-0008"):
+        loaded(issues)
+
+
+def test_an_issue_file_reads_back_as_written():
+    note = Note("ISS-0012", "issue", "# Поиск\n\nИщется.", ("OUT-0003", "ADR-0007", "ISS-0011"))
+    back = issue_parsed(issue_rendered(note))
+    assert (back.id, back.type, back.body, back.links) == (
+        "ISS-0012", "issue", "# Поиск\n\nИщется.", ("OUT-0003", "ADR-0007", "ISS-0011"))
+
+
+def test_a_number_in_a_file_name_is_taken_even_if_the_file_says_another(root, issues):
+    issues.mkdir()
+    # Файл задачи ISS-0008 назван ISS-0009.md: новая задача ISS-0009 легла бы в него.
+    named = issues / "ISS-0009.md"
+    named.write_text("---\nid: ISS-0008\n---\n\n# Чужая\n", encoding="utf-8")
+    record, notes, _, _ = export(root, TASKED, issues=issues)
+    assert [n.id for n in record.numbers] == ["ISS-0010", "ISS-0011", "ISS-0012"]
+    assert named.read_text(encoding="utf-8") == "---\nid: ISS-0008\n---\n\n# Чужая\n"
+    assert {n.id for n in notes if n.type == "issue"} == {"ISS-0010", "ISS-0011"}
+
+
+def test_an_issue_after_one_that_gets_no_file_gets_none_either(root, issues):
+    tasks = TASKS.model_copy(update={"issues": [
+        TASKS.issues[0],
+        TASKS.issues[1].model_copy(update={"depends_on": ["I1", "I4"]}),
+        TASKS.issues[2],
+        Issue(id="I4", title="Хранилище секретов", user_story="…", outcome_ids=["O2"]),
+        Issue(id="I5", title="Отчёт о деплое", user_story="…", outcome_ids=["O1"],
+              depends_on=["I2"])]})
+    notes, _, numbers, skipped = draft(root, TASKED.model_copy(update={"issues": tasks}),
+                                       issues=issues)
+    # I4 — без номера: её итог не выгружается. I2 ждёт её, а I5 — I2: агент начал бы их раньше.
+    assert [(n.id, n.issue_id) for n in numbers] == [
+        ("ISS-0008", "I1"), ("ISS-0009", "I2"), ("ISS-0010", "I3"), ("ISS-0011", "I5")]
+    assert [n.id for n in notes if n.type == "issue"] == ["ISS-0008"]
+    assert any(r.startswith("ISS-0009 ") and "после I4" in r for r in skipped)
+    assert any(r.startswith("ISS-0011 ") and "после ISS-0009" in r for r in skipped)

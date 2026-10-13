@@ -3,10 +3,10 @@ import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, LINKS_MAX, notesOf, outcomeReady, projectOf,
+  api, ApiError, councilPath, earlierOf, groupsConfirmed, issueReady, issuesOf, LINKS_MAX, notesOf, outcomeReady, projectOf,
   REPOSITORIES_MAX, runningFrom, sameChoice, startOrFollow,
   streamOf, structureIsStale, type Choice, type Council, type Decision, type DesignNode, type DesignScan, type Group, type IdeaDiscovery, type Issue,
-  type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type OutcomeTouch, type QuestionAnalysis,
+  type Folders, type IssueGap, type LabeledFragment, type Model, type NotePlan, type OpenQuestion, type Outcome, type OutcomeTouch, type QuestionAnalysis,
   type QuestionOptions, type RepositoryScan, type ScannedRepository, type Settings, type Stream, type Structure,
 } from '../api'
 import { FieldList, listField } from '../components/FieldList'
@@ -15,7 +15,7 @@ import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
 import {
-  CHAIN, chainLight, currentStep, exported, exportedCount, exportedTo, openable, streamLight, type ChainStep,
+  CHAIN, chainLight, currentStep, exported, exportedCount, exportedFiles, exportedNotes, exportedTo, openable, streamLight, type ChainStep,
 } from '../light'
 import { useAction } from '../useAction'
 
@@ -43,17 +43,19 @@ export function StreamsStage({ council, settings, onChange }: Readonly<{
   // Свой экземпляр на поток: открытый шаг и черновик идеи — у каждого потока свои.
   return <StreamPage key={stream.group} council={council} structure={structure} stream={stream}
                      models={settings.models} repositories={settings.repositories} figma={settings.figma}
-                     notes={notesOf(council, settings)} known={projectOf(council, settings)?.repositories ?? []}
-                     onChange={onChange} />
+                     notes={notesOf(council, settings)} issues={issuesOf(council, settings)}
+                     known={projectOf(council, settings)?.repositories ?? []} onChange={onChange} />
 }
 
-function StreamPage({ council, structure, stream, models, repositories, figma, notes, known, onChange }: Readonly<{
+function StreamPage({ council, structure, stream, models, repositories, figma, notes, issues, known, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; models: Model[]; repositories: string | null; figma: boolean
-  /** Каталог заметок — папка документации проекта совета; known — рабочие копии проекта. */
-  notes: string | null; known: string[]
+  /** Каталог заметок — папка документации проекта совета; issues — его папка задач; known — рабочие копии проекта. */
+  notes: string | null; issues: string | null; known: string[]
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
+  // Куда выгружают поток: по обеим папкам выгрузка — выгрузка, и шаг «Документация» зелёный.
+  const folders: Folders = { notes, issues }
   const [chosen, setView] = useState<ChainStep>(currentStep(stream))
   // Утверждение отбора — здесь, а не в шаге: отказ (409) приносит новый поиск, шаг рисуется
   // заново, а ошибка должна остаться видна.
@@ -91,12 +93,12 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
   return (
     <div className="streams-layout">
       <aside className="streams-nav">
-        <StreamList council={council} structure={structure} open={stream.group} notes={notes} />
-        <Chain stream={stream} group={group} view={view} onView={open} notes={notes} />
+        <StreamList council={council} structure={structure} open={stream.group} folders={folders} />
+        <Chain stream={stream} group={group} view={view} onView={open} folders={folders} />
       </aside>
       <div className="streams-main">
-        <Now stream={stream} group={group} notes={notes} />
-        <StepBanner stream={stream} group={group} view={view} notes={notes} />
+        <Now stream={stream} group={group} folders={folders} />
+        <StepBanner stream={stream} group={group} view={view} folders={folders} />
         {(view === 'outcomes' || view === 'issues') && pending > 0 && (
           <section className="card panel pending-questions" aria-label={t('gaps.title')}>
             <p className="pending-text">{t('gaps.pending', { count: pending })}</p>
@@ -155,7 +157,7 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'notes' && (
           // Новый черновик — и правки заново, к его заметкам.
           <NotesStep key={stream.notes_draft?.run ?? ''} council={council} structure={structure} stream={stream}
-                     group={group} root={notes} onChange={onChange} />
+                     group={group} root={notes} issues={issues} onChange={onChange} />
         )}
         {view === 'issues' && (
           <IssuesStep council={council} stream={stream} group={group} notes={notes} onChange={onChange}
@@ -170,8 +172,8 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
   )
 }
 
-function StreamList({ council, structure, open, notes }: Readonly<{
-  council: Council; structure: Structure; open: string; notes: string | null
+function StreamList({ council, structure, open, folders }: Readonly<{
+  council: Council; structure: Structure; open: string; folders: Folders
 }>) {
   const { t } = useTranslation()
   const streams = council.streams ?? []
@@ -189,7 +191,7 @@ function StreamList({ council, structure, open, notes }: Readonly<{
                   {structure.groups.find(g => g.id === stream.group)?.title ?? stream.group}
                 </span>
                 <span className="stream-meta">
-                  <span className={`light-dot ${streamLight(stream, notes)}`} aria-hidden="true" />{whereIs(stream, notes, t)}
+                  <span className={`light-dot ${streamLight(stream, folders)}`} aria-hidden="true" />{whereIs(stream, folders, t)}
                 </span>
               </span>
             </Link>
@@ -201,7 +203,7 @@ function StreamList({ council, structure, open, notes }: Readonly<{
 }
 
 /** Где поток и чей ход. */
-function whereIs(stream: Stream, notes: string | null, t: T): string {
+function whereIs(stream: Stream, folders: Folders, t: T): string {
   const step = currentStep(stream)
   const run = { group: stream.discovery, repository: stream.scan, design: stream.design_scan,
                 questions: stream.questions ?? stream.decisions_search, options: stream.proposals,
@@ -209,21 +211,21 @@ function whereIs(stream: Stream, notes: string | null, t: T): string {
                 notes: stream.notes_draft }[step]
   if (run?.state === 'running') return t(`streams.${step}.seeking`)
   if (run?.state === 'failed') return t(`streams.${step}.failed`)
-  if (step === 'notes' && streamLight(stream, notes) === 'done') return t('streams.notes.done')
+  if (step === 'notes' && streamLight(stream, folders) === 'done') return t('streams.notes.done')
   return t(`streams.${step}.yours`)
 }
 
 /** «Сейчас»: где поток и чей ход — и вся его цепочка сегментами в цветах светофора. */
-function Now({ stream, group, notes }: Readonly<{ stream: Stream; group: Group; notes: string | null }>) {
+function Now({ stream, group, folders }: Readonly<{ stream: Stream; group: Group; folders: Folders }>) {
   const { t } = useTranslation()
-  const light = streamLight(stream, notes)
+  const light = streamLight(stream, folders)
   return (
     <section className="now" aria-labelledby="now-title">
       <p className={`now-caps ${light}`}>{t('now.caps', { group: stream.group, state: t(`now.${light}`) })}</p>
       <h2 id="now-title" className="now-title">{group.title}</h2>
       <ol className="segments">
         {CHAIN.map(step => {
-          const state = chainLight(stream, step, notes)
+          const state = chainLight(stream, step, folders)
           return (
             <li key={step} className={`segment ${state}`}>
               <span className="segment-name">
@@ -248,7 +250,7 @@ function Now({ stream, group, notes }: Readonly<{ stream: Stream; group: Group; 
                 <span className="segment-sub">{outcomesStatus(stream, t)}</span>
               )}
               {step === 'issues' && stream.issues && <span className="segment-sub">{issuesStatus(stream, t)}</span>}
-              {step === 'notes' && stream.issues?.state === 'done' && <span className="segment-sub">{notesStatus(stream, notes, t)}</span>}
+              {step === 'notes' && stream.issues?.state === 'done' && <span className="segment-sub">{notesStatus(stream, folders, t)}</span>}
             </li>
           )
         })}
@@ -258,13 +260,13 @@ function Now({ stream, group, notes }: Readonly<{ stream: Stream; group: Group; 
 }
 
 /** Цепочка шагов потока: пройденные и текущий открываются, дальше — что будет. */
-function Chain({ stream, group, view, onView, notes }: Readonly<{
-  stream: Stream; group: Group; view: ChainStep; onView: (step: ChainStep) => void; notes: string | null
+function Chain({ stream, group, view, onView, folders }: Readonly<{
+  stream: Stream; group: Group; view: ChainStep; onView: (step: ChainStep) => void; folders: Folders
 }>) {
   const { t } = useTranslation()
   const reached = CHAIN.indexOf(currentStep(stream))
   const status = (step: ChainStep, i: number) =>
-    stepStatus(stream, group, step, notes, t) ?? t(i === reached ? 'chain.soon' : 'chain.notStarted')
+    stepStatus(stream, group, step, folders, t) ?? t(i === reached ? 'chain.soon' : 'chain.notStarted')
   return (
     <section className="card panel chain" aria-labelledby="chain-title">
       <h2 id="chain-title" className="panel-title caps">
@@ -272,7 +274,7 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
       </h2>
       <ol className="chain-steps">
         {CHAIN.map((step, i) => {
-          const light = chainLight(stream, step, notes)
+          const light = chainLight(stream, step, folders)
           const state = i === reached ? 'current' : 'later'
           const compact = i !== reached && view !== step
           const body = (
@@ -309,7 +311,7 @@ function Chain({ stream, group, view, onView, notes }: Readonly<{
 }
 
 /** Что с шагом потока — словами, как в цепочке; шаг ещё не начат — null. */
-function stepStatus(stream: Stream, group: Group, step: ChainStep, notes: string | null, t: T): string | null {
+function stepStatus(stream: Stream, group: Group, step: ChainStep, folders: Folders, t: T): string | null {
   if (step === 'group') return groupStatus(stream, group, t)
   if (step === 'repository' && stream.idea) return repositoryStatus(stream, t)
   if (step === 'design' && stream.repository) return designStatus(stream, t)
@@ -320,7 +322,7 @@ function stepStatus(stream: Stream, group: Group, step: ChainStep, notes: string
   if (step === 'outcomes' && stream.saved_outcomes.length > 0) return t('chain.outcomesSaved', { count: stream.saved_outcomes.length })
   if (step === 'issues' && stream.issues) return issuesStatus(stream, t)
   if (step === 'issues' && stream.saved_issues.length > 0) return t('chain.issuesSaved', { count: stream.saved_issues.length })
-  if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, notes, t)
+  if (step === 'notes' && stream.issues?.state === 'done') return notesStatus(stream, folders, t)
   return null
 }
 
@@ -329,11 +331,11 @@ function stepStatus(stream: Stream, group: Group, step: ChainStep, notes: string
  * красная; готовый и не начатый шаг плашки не дают. Причину сбоя и кнопку повтора шаг показывает ниже, а ход
  * каждой модели — колонка справа.
  */
-function StepBanner({ stream, group, view, notes }: Readonly<{
-  stream: Stream; group: Group; view: ChainStep; notes: string | null
+function StepBanner({ stream, group, view, folders }: Readonly<{
+  stream: Stream; group: Group; view: ChainStep; folders: Folders
 }>) {
   const { t } = useTranslation()
-  const light = chainLight(stream, view, notes)
+  const light = chainLight(stream, view, folders)
   if (light !== 'running' && light !== 'yours' && light !== 'failed') return null
   const icon = { running: '◔', yours: '!', failed: '×' }[light]
   return (
@@ -341,7 +343,7 @@ function StepBanner({ stream, group, view, notes }: Readonly<{
       <span className="banner-icon" aria-hidden="true">{icon}</span>
       <span className="banner-text">
         <strong>{t(`banner.${light}`)}</strong> · {light === 'yours' && view !== 'issues'
-          ? t(`chain.${view}.you`) : stepStatus(stream, group, view, notes, t) ?? t(`chain.${view}`)}
+          ? t(`chain.${view}.you`) : stepStatus(stream, group, view, folders, t) ?? t(`chain.${view}`)}
         {light === 'running' && <span className="banner-note"> {t('banner.runningNote')}</span>}
         {light === 'failed' && <span className="banner-note"> {t('banner.failedNote')}</span>}
       </span>
@@ -438,12 +440,12 @@ function designStatus(stream: Stream, t: T): string {
 }
 
 /** Что с документацией потока: черновик переводится, перевод упал, выгружена, черновик ждёт или не собирали. */
-function notesStatus(stream: Stream, notes: string | null, t: T): string {
+function notesStatus(stream: Stream, folders: Folders, t: T): string {
   const draft = stream.notes_draft
   if (draft?.state === 'running') return t('chain.notesTranslating')
   if (draft?.state === 'failed') return t('chain.notesFailed')
-  if (exported(stream, notes)) return t('chain.notesWritten', { count: exportedCount(stream) })
-  if (stream.notes) return t(stream.notes.root === notes ? 'chain.notesOutdated' : 'chain.notesElsewhere')
+  if (exported(stream, folders)) return t('chain.notesWritten', { count: exportedCount(stream) })
+  if (stream.notes) return t(stream.notes.root === folders.notes ? 'chain.notesOutdated' : 'chain.notesElsewhere')
   if (draft) return t('chain.notesDrafted')
   return t('chain.notesNone')
 }
@@ -1187,7 +1189,7 @@ function ProjectDecisions({ council, structure, stream, group, notes, onChange }
   const below = runningFrom(stream, 'questions')
   const locked = act.busy || sought || below || structureIsStale(council)
   const unexported = (council.streams ?? [])
-    .filter(other => other.group !== stream.group && other.decisions && !exported(other, notes)).map(other => other.group)
+    .filter(other => other.group !== stream.group && other.decisions && !exportedNotes(other, notes)).map(other => other.group)
   const toggle = (id: string) => setKeep(before => {
     const next = new Set(before)
     if (!next.delete(id)) next.add(id)
@@ -1272,16 +1274,18 @@ function ProjectDecisions({ council, structure, stream, group, notes, onChange }
 }
 
 const ACTION_PILL = { create: 'pill ready', update: 'pill open', same: 'pill', edited: 'pill blocked' } as const
-const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome'] as const
+const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome', 'issue'] as const
 
 /**
  * Шаг «Документация» — после задач. Совет собирает черновик выгрузки потока в заметки проекта (IDEA,
- * вопросы, варианты, решения, итоги — файлом на заметку, в формате Causa): номера, тексты и что с каждой
- * будет. Человек правит тексты, отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после
- * прошлой выгрузки, совет не трогает.
+ * вопросы, варианты, решения, итоги — файлом на заметку, в формате Causa) и, если у проекта есть папка задач,
+ * файл на каждую задачу, которую ничто не держит: номера, тексты и что с каждым будет. Человек правит тексты,
+ * отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после прошлой выгрузки, совет не трогает.
  */
-function NotesStep({ council, structure, stream, group, root, onChange }: Readonly<{
+function NotesStep({ council, structure, stream, group, root, issues, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group; root: string | null
+  /** Папка задач проекта; null — задачи только строками в итогах. */
+  issues: string | null
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -1296,8 +1300,12 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
   const stale = !!draft && stream.issues?.run !== draft.issues
   // Проект совета или его папку сменили после сборки: черновик — к прежней папке.
   const moved = !!draft && draft.state === 'done' && !!root && draft.root !== root
-  const ready = draft?.state === 'done' && !stale && !moved
-  const written = !!draft && stream.notes?.run === draft.run && exported(stream, root)
+  // Папку задач проекта сменили, задали или убрали после сборки.
+  const movedIssues = !!draft && draft.state === 'done' && draft.issues_root !== (issues ?? '')
+  const ready = draft?.state === 'done' && !stale && !moved && !movedIssues
+  const files = draft?.notes.filter(note => note.type === 'issue').length ?? 0
+  const folders = { notes: root, issues }
+  const written = !!draft && stream.notes?.run === draft.run && exported(stream, folders)
   // Записанное — с правками человека: они есть только в выгрузке, черновик их не знает.
   const wrote = new Map(written ? stream.notes?.notes.map(note => [note.key, note.written]) : [])
   const shown = (note: NotePlan) => wrote.get(note.key) ?? edits[note.key] ?? note.text
@@ -1326,10 +1334,14 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
       </section>
       <section className="card panel" aria-label={t('notes.title')}>
         {root ? <p className="repo-summary">{t('notes.where', { root })}</p> : <p className="fragment-note">{t('notes.noRoot')}</p>}
+        {root && <p className="repo-summary">{issues ? t('notes.whereIssues', { root: issues }) : t('notes.noIssues')}</p>}
         {stream.notes && (
-          <p className={exported(stream, root) ? 'check ok' : 'fragment-note'}>
-            {t(exported(stream, root) ? 'notes.written' : stream.notes.root === root ? 'notes.outdated' : 'notes.elsewhere',
-               { count: exportedCount(stream), root: stream.notes.root })}
+          <p className={exported(stream, folders) ? 'check ok' : 'fragment-note'}>
+            {t(exported(stream, folders) ? 'notes.written'
+               : stream.notes.root !== root ? 'notes.elsewhere'
+               : exportedNotes(stream, root) ? 'notes.issuesElsewhere' : 'notes.outdated',
+               { count: exportedCount(stream), root: stream.notes.root, issues: stream.notes.issues_root })}
+            {exported(stream, folders) && exportedFiles(stream) > 0 && ` ${t('notes.filesWritten', { count: exportedFiles(stream) })}`}
           </p>
         )}
         <div className="stream-actions">
@@ -1342,6 +1354,7 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
         {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
         {stale && <p className="fragment-note">{t('notes.stale')}</p>}
         {moved && !stale && <p className="fragment-note">{t('notes.moved')}</p>}
+        {movedIssues && !moved && !stale && <p className="fragment-note">{t('notes.movedIssues')}</p>}
         {ready && (
           <>
             <p className="repo-summary">{t('notes.language', { language: draft.language })}</p>
@@ -1416,7 +1429,10 @@ function NotesStep({ council, structure, stream, group, root, onChange }: Readon
             )}
             {act.error && <p className="error-text" role="alert">{act.error}</p>}
             <div className="stream-actions spread">
-              <span className="muted">{t('notes.count', { count: draft.notes.length })}</span>
+              <span className="muted">
+                {t('notes.count', { count: draft.notes.length - files })}
+                {files > 0 && ` · ${t('notes.files', { count: files })}`}
+              </span>
               <button className="btn-primary large" disabled={locked || written || !root} onClick={write}>
                 {t(written ? 'notes.done' : 'notes.write')}
               </button>
@@ -2258,8 +2274,8 @@ function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, o
   // задача (тот же I-номер и название, как узнаёт её и выгрузка). Новые — без номера, пока не выгрузят.
   const carried = new Map((run ? run.issues.filter(issue => run.kept.includes(issue.id)) : stream.saved_issues)
     .map(issue => [issue.id, issue.title]))
-  let numbered = exported(stream, notes) ? stream.notes?.numbers ?? [] : []
-  if (!exported(stream, notes) && exportedTo(stream, notes)) {
+  let numbered = exportedNotes(stream, notes) ? stream.notes?.numbers ?? [] : []
+  if (!exportedNotes(stream, notes) && exportedTo(stream, notes)) {
     numbered = (stream.notes?.numbers ?? []).filter(number => carried.get(number.issue_id) === number.title)
   }
   const numbers = new Map(numbered.map(n => [n.issue_id, n.id]))

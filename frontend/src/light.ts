@@ -1,6 +1,6 @@
 import {
   councilPath, issueReady, seeking, structureIsStale,
-  type Council, type DecisionAnalysis, type DecisionsSearch, type DesignScan, type IdeaDiscovery, type IssueDiscovery,
+  type Council, type DecisionAnalysis, type Folders, type DecisionsSearch, type DesignScan, type IdeaDiscovery, type IssueDiscovery,
   type NotesDraft, type OutcomeDiscovery,
   type ProposalDiscovery, type QuestionDiscovery, type RepositoryScan, type Slicing, type Stream, type Structure,
 } from './api'
@@ -63,18 +63,30 @@ export const openable = (stream: Stream, step: ChainStep): boolean =>
   || (step === 'issues' && stream.saved_issues.length > 0)
 
 /**
- * Поток выгружен в заметки — к нынешним задачам и в нынешний каталог (notes — его путь из настроек):
- * нарезали заново или каталог сменили (COUNCIL_NOTES) — выгружать снова.
+ * Поток выгружен — заметки к нынешним задачам и в нынешний каталог, а файлы задач — в нынешнюю папку задач
+ * (folders — их пути из настроек): нарезали заново, каталог или папку задач сменили — выгружать снова.
  */
-export const exported = (stream: Stream, notes: string | null): boolean =>
+export const exported = (stream: Stream, folders: Folders): boolean =>
+  exportedNotes(stream, folders.notes) && stream.notes?.issues_root === (folders.issues ?? '')
+
+/**
+ * Заметки потока выгружены к нынешним задачам и в нынешний каталог (notes — его путь из настроек), где бы ни
+ * лежали файлы задач: номерам задач и решениям потока в каталоге папка задач не важна.
+ */
+export const exportedNotes = (stream: Stream, notes: string | null): boolean =>
   exportedTo(stream, notes) && !!stream.issues && stream.notes?.issues === stream.issues.run
 
 /** Поток выгружали в нынешний каталог (к каким задачам — неважно): каталог сменили — его выгрузка не там. */
 export const exportedTo = (stream: Stream, notes: string | null): boolean =>
   !!stream.notes && notes !== null && stream.notes.root === notes
 
-/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
-export const exportedCount = (stream: Stream): number => stream.notes?.notes.filter(note => !note.kept).length ?? 0
+/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие и файлы задач — не в счёт. */
+export const exportedCount = (stream: Stream): number =>
+  stream.notes?.notes.filter(note => !note.kept && note.type !== 'issue').length ?? 0
+
+/** Сколько файлов задач выгружено — в папку задач проекта. */
+export const exportedFiles = (stream: Stream): number =>
+  stream.notes?.notes.filter(note => !note.kept && note.type === 'issue').length ?? 0
 
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
@@ -82,10 +94,10 @@ export const exportedCount = (stream: Stream): number => stream.notes?.notes.fil
  * проходит их утверждение: до него ход за вами. Задачи — последний шаг: нарезаны, ни одну не
  * держит пробел или открытый вопрос, пробелов нет, каждый итог вошёл в задачу и каждое решение —
  * в итог, а у каждого итога есть критерии готовности — зелёные; иначе ход за вами, как и если не
- * нарезалось ни одной. Документация — выгружена в каталог notes (путь из настроек): выгрузка в
- * другой каталог не в счёт.
+ * нарезалось ни одной. Документация — выгружена в каталог и папку задач folders (пути из настроек):
+ * выгрузка в другой каталог или с файлами задач в другой папке не в счёт.
  */
-export const chainLight = (stream: Stream, step: ChainStep, notes: string | null): Light => {
+export const chainLight = (stream: Stream, step: ChainStep, folders: Folders): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
   if (step === 'repository' && stream.idea) return stream.repository ? 'done' : ofRun(stream.scan) ?? 'yours'
   if (step === 'design' && stream.repository) return stream.design ? 'done' : ofRun(stream.design_scan) ?? 'yours'
@@ -101,7 +113,7 @@ export const chainLight = (stream: Stream, step: ChainStep, notes: string | null
     // Черновик новее выгрузки — его ход важнее прежней выгрузки: переводится, упал или ждёт записи.
     const draft = stream.notes_draft
     if (draft && draft.run !== stream.notes?.run) return ofRun(draft) ?? 'yours'
-    return exported(stream, notes) ? 'done' : ofRun(draft) ?? 'yours'
+    return exported(stream, folders) ? 'done' : ofRun(draft) ?? 'yours'
   }
   return 'idle'
 }
@@ -117,15 +129,15 @@ const issuesLight = (issues: IssueDiscovery, stream: Stream): Light => {
   return ofRun(issues) ?? (ready ? 'done' : 'yours')
 }
 
-/** Поток — цвет его текущего шага. notes — путь каталога заметок из настроек. */
-export const streamLight = (stream: Stream, notes: string | null): Light =>
-  chainLight(stream, currentStep(stream), notes)
+/** Поток — цвет его текущего шага. folders — пути каталога заметок и папки задач из настроек. */
+export const streamLight = (stream: Stream, folders: Folders): Light =>
+  chainLight(stream, currentStep(stream), folders)
 
 /**
  * Этап совета. Ввод готов, когда текст нарезали; нарезка — когда разложили по группам;
  * группы — когда подтвердили и они не устарели. Готовый ход без следующего — ваш ход.
  */
-export function stageLight(council: Council, stage: Stage, notes: string | null): Light {
+export function stageLight(council: Council, stage: Stage, folders: Folders): Light {
   const { slicing, structure, streams } = council
   switch (stage) {
     case 'brief':
@@ -145,15 +157,15 @@ export function stageLight(council: Council, stage: Stage, notes: string | null)
       if (!streams) return 'idle'
       // По устаревшим группам идеи не утверждают и не ищут заново: сначала разложить заново.
       if (structureIsStale(council)) return seeking(council) ? 'running' : 'idle'
-      return strongest(streams.map(stream => streamLight(stream, notes)))
+      return strongest(streams.map(stream => streamLight(stream, folders)))
     case 'history':
       return 'idle'
   }
 }
 
 /** Совет целиком: самое важное из состояний его этапов. Нетронутый — белый, черновик. */
-export const councilLight = (council: Council, notes: string | null): Light =>
-  strongest((['brief', 'slices', 'structure', 'streams'] as const).map(stage => stageLight(council, stage, notes)))
+export const councilLight = (council: Council, folders: Folders): Light =>
+  strongest((['brief', 'slices', 'structure', 'streams'] as const).map(stage => stageLight(council, stage, folders)))
 
 /** Что в совете требует человека: его ход или упавший ход модели — и куда за этим идти. */
 export interface Attention {
@@ -168,7 +180,7 @@ export interface Attention {
   to: string
 }
 
-export function attention(council: Council, notes: string | null): Attention[] {
+export function attention(council: Council, folders: Folders): Attention[] {
   const { id, slicing, structure, streams } = council
   const items: Attention[] = []
   const add = (light: Attention['light'], what: Attention['what'], to: string, group?: string) =>
@@ -186,7 +198,7 @@ export function attention(council: Council, notes: string | null): Attention[] {
   else if (structure?.state === 'done') {
     for (const stream of streams ?? []) {
       const to = councilPath(id, `streams/${stream.group}`)
-      const light = streamLight(stream, notes)
+      const light = streamLight(stream, folders)
       const step = currentStep(stream)
       const where = step === 'group' ? 'idea' : step
       if (light === 'failed') add('failed', `${where}Failed`, to, stream.group)
