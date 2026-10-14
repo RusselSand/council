@@ -1626,6 +1626,9 @@ function QuestionItem({ question, fragments, removed, busy, onToggle }: Readonly
       <div className="question-head">
         <span className="fragment-id">{question.id}</span>
         <span className={fromModels ? 'source-tag ai' : 'source-tag'}>{t(`questions.source.${question.source}`)}</span>
+        {question.technical && (
+          <span className="pill open" title={t('questions.technicalHint')}>{t('questions.technical')}</span>
+        )}
         <span className="question-text">{question.text}</span>
         {question.revisits && <span className="pill blocked">{t('questions.revisits', { id: question.revisits })}</span>}
         {removed && <span className="group-tag">{t('questions.removedTag')}</span>}

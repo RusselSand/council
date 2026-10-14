@@ -500,6 +500,8 @@ export const en: Dict = {
   'questions.hint': 'Keep the questions that need deciding, drop the rest and add your own. No answers are chosen here — that is the next step.',
   'questions.note': 'in the note: {{note}}',
   'questions.revisits': 'revisits {{id}}',
+  'questions.technical': 'technical details',
+  'questions.technicalHint': 'A question about how the system is built inside, not how it behaves. It is usually decided at implementation — keep it if you need it now.',
   'questions.afterDecisions': 'The council will look for questions once you tick the project decisions.',
   'project.title': 'Project decisions',
   'project.hint': 'Past decisions from the project notes that the council found relevant to the idea. Questions, options and decisions take the ticked ones into account: what is decided is not asked again, and a conflict is shown.',

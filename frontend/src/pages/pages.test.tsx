@@ -572,6 +572,16 @@ describe('Поток: группа и идея', () => {
     }
   })
 
+  it('вопрос об устройстве системы помечен «технические детали» — и в отборе он оставлен, как все', async () => {
+    const technical = { ...QUESTIONS_FOUND, questions: [
+      { ...QUESTIONS_FOUND.questions[0], technical: true }, QUESTIONS_FOUND.questions[1]] }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: technical } }))
+    const list = await screen.findByRole('list', { name: ru['questions.found'] })
+    expect(within(list.children[0] as HTMLElement).getByText(ru['questions.technical'])).toBeTruthy()
+    expect(within(list.children[1] as HTMLElement).queryByText(ru['questions.technical'])).toBeNull()
+    expect(screen.getByText('Решать 2 из 2')).toBeTruthy()
+  })
+
   it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))

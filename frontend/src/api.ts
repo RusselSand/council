@@ -178,6 +178,11 @@ export interface OpenQuestion {
   note: string | null
   /** Принятое решение проекта, которое вопрос пересматривает (ADR-0007). */
   revisits: string | null
+  /**
+   * «Технические детали»: вопрос об устройстве системы внутри, а не о её поведении — человек
+   * решает, оставлять ли его. Нет у вопросов, найденных раньше.
+   */
+  technical?: boolean
 }
 /** След решения в коде: коммит с номером задачи, реализовавшей итог решения, в файле карты. */
 export interface CodeTrail { issue: string; outcome: string; commit: string; file: string }

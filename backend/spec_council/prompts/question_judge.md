@@ -111,6 +111,30 @@ Check a question against the IDEA, the source fragments and the related proposal
 
 Do not add your own questions.
 
+## Technical details
+
+Mark every final question with `technical`. Candidates may disagree on the mark: decide it
+yourself by the rule below, not by the number of agents.
+
+`technical: true` — the question is about how the system is built inside: how the parts of the
+code fit together, data contracts between components (which fields a hook, an endpoint or a
+table carries), storage, where something is computed. Such questions are usually decided at
+implementation, after the council; the human decides whether to keep them.
+
+`technical: false` — the question is about how the system behaves or how it is shaped as a
+whole: what the user sees, what other parts of the system can observe, the rules the behavior
+follows, and why.
+
+Examples:
+- "Which data about targets and services does the page receive?" — `true`: a contract of the
+  page's data;
+- "Where are the filter, the search and the counters computed?" — `true`: where the code does it;
+- "Which target is the default one?" — `false`: a rule the user sees in the table and the chips;
+- "What does the page show while the data is loading?" — `false`: visible behavior.
+
+Mark the question; do not drop it and do not reword it because of the mark. The rule is the same
+for every kind of question, `user` included.
+
 ## Accepted project decisions
 
 ACCEPTED PROJECT DECISIONS are ADRs from previous councils of the project that the user
@@ -160,7 +184,8 @@ Return only JSON:
       "source_question_id": null,
       "proposal_ids": ["F1", "F2", "F3"],
       "reason": "F1–F3 propose different answers to one uncertainty about the point of interaction.",
-      "revisits": null
+      "revisits": null,
+      "technical": false
     },
     {
       "id": "Q2",
@@ -169,7 +194,8 @@ Return only JSON:
       "source_question_id": null,
       "proposal_ids": ["F1", "F2"],
       "reason": "F1 and F2 answer one uncertainty about the way of searching.",
-      "revisits": null
+      "revisits": null,
+      "technical": false
     },
     {
       "id": "Q3",
@@ -179,7 +205,8 @@ Return only JSON:
       "source_question_id": "F5",
       "proposal_ids": [],
       "reason": null,
-      "revisits": null
+      "revisits": null,
+      "technical": false
     }
   ]
 }
@@ -198,7 +225,9 @@ For `user`:
 
 For every question:
 - `revisits` is the ID of an accepted project decision this question revisits (see
-  "Accepted project decisions"), otherwise null.
+  "Accepted project decisions"), otherwise null;
+- `technical` is `true` for a question about how the system is built inside, otherwise `false`
+  (see "Technical details").
 
 Before answering, check every generated OPEN QUESTION:
 

@@ -7,7 +7,9 @@ proposal_ids, и только фрагменты-предложения этой
 фрагмента, а не у модели, и судья их не потеряет — пропущенные код вернёт сам. Для заметки у
 такого вопроса есть ещё note — та же неопределённость атомарно, одним предложением, без
 вариантов внутри: её пишет модель. Вопрос, который пересматривает принятое решение проекта,
-называет его в revisits — только из решений, которые человек отобрал для потока.
+называет его в revisits — только из решений, которые человек отобрал для потока. Вопрос о том,
+как система устроена внутри (стыковка частей кода, контракты данных, хранение, где что
+считается), помечен technical: человек видит пометку на отборе и сам решает, оставлять ли его.
 """
 
 import re
@@ -39,6 +41,8 @@ class Candidate:
     # Формулировка для заметки — у вопроса из текста; и какое принятое решение он пересматривает.
     note: str | None = None
     revisits: str | None = None
+    # Вопрос об устройстве системы внутри, а не о её поведении: «технические детали».
+    technical: bool = False
 
     def key(self) -> tuple:
         """Один и тот же вопрос: вопрос из текста — по фрагменту, остальные — по формулировке."""
@@ -98,6 +102,7 @@ def candidate_of(item: object, fragments: Mapping[int, LabeledFragment], what: s
     proposals = proposals_of(item.get("proposal_ids"), fragments)
     reason = reason_of(item.get("reason")) or None
     revisits = revisited(item.get("revisits"), decisions)
+    technical = item.get("technical") is True
     if source == "user":
         number = fragment_number(item.get("source_question_id"))
         fragment = fragments.get(number) if number is not None else None
@@ -105,13 +110,13 @@ def candidate_of(item: object, fragments: Mapping[int, LabeledFragment], what: s
             raise BadAnswer(f"{what}: source_question_id — не вопрос этой группы")
         # Текст — из фрагмента: вопрос пользователя дословен, что бы ни написала модель.
         return Candidate(fragment.text, "user", number, proposals, reason,
-                         note_of(item.get("note")), revisits)
+                         note_of(item.get("note")), revisits, technical)
     text = question_text(item.get("text"), what)
     # Ссылки вторичны: все оказались чужими — вопрос остаётся, но восстановлен он уже не по
     # предложениям группы, а просто недостающий.
     if source == "inferred" and not proposals:
         source = "discovered"
-    return Candidate(text, source, None, proposals, reason, None, revisits)
+    return Candidate(text, source, None, proposals, reason, None, revisits, technical)
 
 
 def question_list(data: dict, fragments: Mapping[int, LabeledFragment],
@@ -136,7 +141,8 @@ def question_list(data: dict, fragments: Mapping[int, LabeledFragment],
 def merged(candidates: Iterable[Candidate]) -> list[Candidate]:
     """Одинаковые вопросы — один, со всеми предложениями; формулировка первого. Если одна
     модель сочла вопрос недостающим, а другая — восстановленным по предложениям, он inferred,
-    с её пояснением: на него уже отвечают предложения группы. От порядка это не зависит."""
+    с её пояснением: на него уже отвечают предложения группы. Технический — если так его
+    пометил хоть один повтор. От порядка это не зависит."""
     found: dict[tuple, Candidate] = {}
     for candidate in candidates:
         known = found.get(candidate.key())
@@ -147,15 +153,17 @@ def merged(candidates: Iterable[Candidate]) -> list[Candidate]:
         found[candidate.key()] = Candidate(
             known.text, wins.source, known.source_question_id,
             tuple(sorted({*known.proposal_ids, *candidate.proposal_ids})), wins.reason,
-            known.note or candidate.note, known.revisits or candidate.revisits)
+            known.note or candidate.note, known.revisits or candidate.revisits,
+            known.technical or candidate.technical)
     return list(found.values())
 
 
 def same_lists(lists: list[list[Candidate]]) -> bool:
-    """Участники сошлись: одни и те же вопросы с теми же предложениями и пересмотрами.
-    Формулировка заметки — не повод звать судью: она только формулировка."""
+    """Участники сошлись: одни и те же вопросы с теми же предложениями, пересмотрами и пометкой
+    «технические детали». Формулировка заметки — не повод звать судью: она только формулировка."""
     def view(candidates: list[Candidate]) -> frozenset:
-        return frozenset((c.key(), c.source, c.proposal_ids, c.revisits) for c in candidates)
+        return frozenset((c.key(), c.source, c.proposal_ids, c.revisits, c.technical)
+                         for c in candidates)
     return len({view(candidates) for candidates in lists}) == 1
 
 
@@ -178,11 +186,13 @@ def with_user_questions(candidates: list[Candidate],
             result[placed[fragment.id]] = Candidate(
                 known.text, "user", fragment.id,
                 tuple(sorted({*known.proposal_ids, *candidate.proposal_ids})), known.reason,
-                known.note or candidate.note, known.revisits or candidate.revisits)
+                known.note or candidate.note, known.revisits or candidate.revisits,
+                known.technical or candidate.technical)
         else:
             placed[fragment.id] = len(result)
             result.append(Candidate(fragment.text, "user", fragment.id, candidate.proposal_ids,
-                                    candidate.reason, candidate.note, candidate.revisits))
+                                    candidate.reason, candidate.note, candidate.revisits,
+                                    candidate.technical))
     return [*result, *(Candidate(f.text, "user", f.id, (), None)
                        for f in asked if f.id not in placed)]
 
@@ -191,7 +201,7 @@ def numbered(candidates: list[Candidate]) -> list[OpenQuestion]:
     return [OpenQuestion(id=f"Q{n}", text=c.text, source=c.source,
                          source_question_id=c.source_question_id,
                          proposal_ids=list(c.proposal_ids), reason=c.reason, note=c.note,
-                         revisits=c.revisits)
+                         revisits=c.revisits, technical=c.technical)
             for n, c in enumerate(candidates, 1)]
 
 
@@ -200,5 +210,6 @@ def as_prompt(candidates: list[Candidate]) -> list[dict]:
     return [{"text": c.text, "source": c.source,
              "source_question_id": f"F{c.source_question_id}" if c.source_question_id else None,
              "proposal_ids": [f"F{i}" for i in c.proposal_ids], "reason": c.reason,
-             **({"note": c.note} if c.source == "user" else {}), "revisits": c.revisits}
+             **({"note": c.note} if c.source == "user" else {}), "revisits": c.revisits,
+             "technical": c.technical}
             for c in candidates]
