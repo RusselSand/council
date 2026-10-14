@@ -646,6 +646,17 @@ def untranslated(notes: Sequence[NotePlan]) -> dict[str, str]:
             if note.text == note.generated and note.action != "edited"}
 
 
+def portions(notes: Sequence[NotePlan]) -> list[dict[str, str]]:
+    """Что переводить, по ходам судьи: заметки — одним, их связки и термины переводятся
+    вместе, а файл задачи — каждый своим: задачи длинные, и все разом не влезли бы в один ответ
+    модели."""
+    sources = untranslated(notes)
+    issues = {note.key for note in notes if note.type == "issue"}
+    together = {key: text for key, text in sources.items() if key not in issues}
+    apart = [{key: text} for key, text in sources.items() if key in issues]
+    return [part for part in (together, *apart) if part]
+
+
 def translations(data: dict, sources: Mapping[str, str]) -> dict[str, str]:
     """Перевод заметок из ответа: каждая — и ровно с теми же номерами заметок и задач внутри.
     Лишний номер тоже негоден: ISS-… в итоге — задача, по нему считают след и новые номера."""

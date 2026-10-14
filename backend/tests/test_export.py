@@ -12,6 +12,7 @@ from spec_council.export import (
     graph_problems,
     numbered_issues,
     outcome_text,
+    portions,
     translations,
     untranslated,
     words_for,
@@ -574,6 +575,20 @@ def test_files_in_another_issues_folder_are_not_the_previous_ones(root, issues, 
         ("ISS-0008", "create"), ("ISS-0009", "create")]
     assert vanished == []                                    # прежняя папка — не здесь
     assert export_in(first, root, issues) == first
+
+
+def test_issue_files_are_translated_one_per_turn_after_the_notes(root, issues):
+    notes, _, _, _ = draft(root, TASKED, issues=issues)
+    files = [note.key for note in notes if note.type == "issue"]
+    assert len(files) == 2
+    parts = portions(notes)
+    assert parts[0] == {n.key: n.text for n in notes if n.type != "issue"}
+    assert [list(part) for part in parts[1:]] == [[key] for key in files]
+    # Заметки перевели в прошлый раз, без папки задач, — теперь переводить только задачи.
+    translated = {n.key: f"EN {n.text}" for n in notes if n.type != "issue"}
+    first, _, _, _ = export(root, TASKED, edits=translated)
+    again, _, _, _ = draft(root, TASKED, previous=first, issues=issues)
+    assert [list(part) for part in portions(again)] == [[key] for key in files]
 
 
 def test_a_file_in_the_issues_folder_takes_its_number(root, issues):

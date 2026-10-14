@@ -91,7 +91,7 @@ from .design import as_prompt as design_prompt
 from .design import context_prompt as design_context
 from .design import judged_design
 from .design import map_of as design_map_of
-from .export import Shelf, previous_of, settled, translations, untranslated
+from .export import Shelf, portions, previous_of, settled, translations
 from .figma import Fetcher, FigmaError, Link
 from .figma import snapshot as figma_snapshot
 from .grouping import StructureOption, judged_structure, structure_options
@@ -1488,14 +1488,16 @@ class IssueRun(CouncilRun[IssueDiscovery]):
 
 
 def translating(judge: str) -> list[Step]:
-    """Перевод заметок — один ход судьи."""
+    """Перевод заметок — шаг судьи: ход на заметки и по ходу на каждый файл задачи."""
     return [Step(name=StepName.notes_translation, runs=[ModelRun(model=judge)])]
 
 
 class NotesRun(CouncilRun[NotesDraft]):
-    """Перевод черновика выгрузки на язык документации (COUNCIL_NOTES_LANGUAGE): один ход
-    судьи, все новые тексты разом. Номера заметок и задач в переводе — те же, иначе ответ
-    негодный. После перевода совет заново смотрит, что с каждой заметкой будет при записи."""
+    """Перевод черновика выгрузки на язык документации (COUNCIL_NOTES_LANGUAGE): ходы судьи
+    по очереди — новые тексты заметок разом, файл задачи — каждый своим ходом (portions). Ход
+    упал — шаг упал, а ответы готовых ходов остаются в лотке: повтор возьмёт их даром. Номера
+    заметок и задач в переводе — те же, иначе ответ негодный. После перевода совет заново
+    смотрит, что с каждой заметкой будет при записи."""
 
     what = "перевод заметок"
 
@@ -1507,15 +1509,15 @@ class NotesRun(CouncilRun[NotesDraft]):
         self.shelf = shelf
 
     def work(self) -> dict[str, Any]:
-        sources = untranslated(self.state.notes)
+        parts = portions(self.state.notes)
         found: dict[str, str] = {}
-        if sources:
+        for part in parts:
             prompt = render("notes_translation", language=self.state.language,
                             notes=as_json([{"key": key, "text": text}
-                                           for key, text in sources.items()]))
-            found = self._ask_judge(StepName.notes_translation, prompt,
-                                    partial(translations, sources=sources))
-        else:
+                                           for key, text in part.items()]))
+            found |= self._ask_judge(StepName.notes_translation, prompt,
+                                     partial(translations, sources=part))
+        if not parts:
             self._skip(StepName.notes_translation)
         notes = [settled(note.model_copy(update={"text": found.get(note.key, note.text)}),
                          previous_of(note, self.previous), self.shelf)
