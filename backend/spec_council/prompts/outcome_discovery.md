@@ -117,6 +117,11 @@ If two OUTCOMES would both implement the same decision, decide which situation t
 about: that OUTCOME implements it, the other relies on it. If the decision cannot be separated
 from either, they are probably one OUTCOME.
 
+An accepted ADR applies within the OPEN QUESTION it answers. Do not extend it to other parts of
+the system — neither in the behavior and acceptance criteria of an OUTCOME nor to find a gap. A
+decision on how a state is shown in a table cell is about the cell, not about a filter that uses
+the same states, even if its wording says "every label".
+
 An answer in which an accepted ADR is implemented by no OUTCOME or by two, or an implemented ADR
 has no line in `adr_notes`, is rejected.
 
@@ -174,7 +179,8 @@ A missing decision can be of two kinds, and they are handled differently:
 - a decision about how the system behaves or how it is shaped as a whole —
   what it does, what the user and the other parts of the system can observe.
   If an OUTCOME needs such a decision and no accepted ADR gives it, record a
-  gap instead of putting an assumption into the specification;
+  gap — see "Response format" for when it is one — instead of putting an
+  assumption into the specification;
 - a decision about how to implement it — storage structures, APIs and their
   routes, algorithms, components, how the parts of the code fit together.
   This is neither a gap nor part of the OUTCOME: do not invent it, do not ask
@@ -248,8 +254,23 @@ Return only JSON:
   ]
 }
 
-If you find a new uncertainty that is not yet
-among the OPEN QUESTIONS, put it into `gaps`.
+If you find a new uncertainty that is not yet among the OPEN QUESTIONS and it is a gap, put it
+into `gaps`.
+
+A gap is a choice about behavior that nobody has made yet. It is a gap only when all of these
+hold:
+
+- there are at least two grounded variants of behavior that lead to substantially different
+  results;
+- neither the IDEA nor the accepted decisions let you choose between them;
+- this OUTCOME cannot be described or checked without the choice. A question that does not block
+  this OUTCOME is not its gap.
+
+The absence of an explicit rule is not a gap by itself: what the accepted decisions do not change
+stays as it is now in the code.
+
+An accepted ADR applies within the OPEN QUESTION it answers: do not extend it to other parts of the
+system to find a gap.
 
 An uncertainty that an OPEN QUESTION already covers is not a gap — even if you would word it
 differently, more precisely or only for this OUTCOME. Put that question's id into `blocked_by`
@@ -305,6 +326,9 @@ Before answering, check that:
   functions, files — except those the human has set;
 - acceptance criteria contain no invented requirements;
 - open questions are listed explicitly;
+- no accepted ADR is extended beyond the OPEN QUESTION it answers;
+- every gap is a choice between at least two grounded variants of behavior that blocks its
+  OUTCOME;
 - every gap is one neutral question without answer options;
 - no OUTCOME is declared ready if a necessary decision is missing.
 

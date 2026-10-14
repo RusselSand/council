@@ -68,6 +68,8 @@ For each proposed OUTCOME, check:
   decision does not say — the decision was attached to the wrong OUTCOME — move the decision to
   the OUTCOME whose situation it is about; this one at most relies on it;
 - whether the decisions of other OUTCOMES its behavior depends on are in `relies_on_adr_ids`;
+- whether it extends an accepted ADR beyond the OPEN QUESTION the ADR answers — to another part
+  of the system: remove that part;
 - whether the project decisions it relies on are in `project_decision_ids`;
 - whether it takes CONSTRAINTS into account correctly;
 - whether it invents handling of RISKS;
@@ -134,6 +136,23 @@ one of its questions remains open.
 If you find a new gap, keep it for returning
 to Question Discovery.
 
+A gap is a choice about behavior that nobody has made yet. It is a gap only when all of these
+hold:
+
+- there are at least two grounded variants of behavior that lead to substantially different
+  results;
+- neither the IDEA nor the accepted decisions let you choose between them;
+- this OUTCOME cannot be described or checked without the choice. A question that does not block
+  this OUTCOME is not its gap.
+
+The absence of an explicit rule is not a gap by itself: what the accepted decisions do not change
+stays as it is now in the code.
+
+An accepted ADR applies within the OPEN QUESTION it answers: do not extend it to other parts of the
+system to find a gap.
+
+Drop every candidate gap that does not meet all of these conditions.
+
 A gap that restates an OPEN QUESTION — even in other words, more precisely or only for one
 OUTCOME — is not a gap: replace it with that question's id in `blocked_by` if the question has
 no accepted ADR, and drop it otherwise. Gaps about the same uncertainty are one gap, with the
@@ -169,7 +188,7 @@ Check that every criterion:
 
 If a criterion is ungrounded, remove it.
 
-If an approved requirement is missing to verify an OUTCOME,
+If verifying an OUTCOME needs a choice that is a gap (see "4. Blocking questions"),
 record a gap.
 
 ## 6. Completeness
@@ -275,6 +294,9 @@ Before answering, check that:
 - no new decisions or requirements have appeared;
 - acceptance criteria are grounded;
 - the blocks match real dependencies;
+- no accepted ADR is extended beyond the OPEN QUESTION it answers;
+- every gap is a choice between at least two grounded variants of behavior that blocks its
+  OUTCOME;
 - every gap is one neutral question without answer options;
 - every accepted ADR is implemented by exactly one OUTCOME — or is in `touches` — and has a line
   in its `adr_notes` that follows from the decision itself;
