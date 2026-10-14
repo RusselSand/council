@@ -845,13 +845,16 @@ def test_a_decision_left_out_of_every_outcome_makes_the_answer_unfit():
 def test_the_judge_and_the_participants_see_the_project_decisions_of_the_stream():
     decision = ProjectDecision(adr_id="ADR-0007", idea="Прошлая идея", question="Где искать?",
                                decision="Искать полнотекстом.")
+    # На пересмотре: его видно, но итог на нём не стоит.
+    reviewed = ProjectDecision(adr_id="ADR-0008", decision="Хранить в Notion.",
+                               status="under_review")
     found = {"outcomes": [result_of("Поиск", adrs=["ADR-1"]) | {
-        "project_decision_ids": ["ADR-7", "ADR-0099"]}]}
+        "project_decision_ids": ["ADR-7", "ADR-0099", "ADR-0008"]}]}
     runner, reports = FakeRunner({("outcome_discovery", "sol"): found,
                                   ("outcome_discovery", "fable"): found}), []
     result = OutcomeRun("c1", FIND, [SEARCH, WHERE], DECIDED, FOUND, GROUP_FRAGMENTS,
                         ["sol", "fable"], "fable", runner, reports.append,
-                        accepted=[decision]).run()
+                        accepted=[decision, reviewed]).run()
     assert [o.project_decision_ids for o in result.outcomes] == [["ADR-0007"]]
     decisions = section(runner.asked["outcome_discovery", "sol"], "ACCEPTED PROJECT DECISIONS")
     assert "Искать полнотекстом." in decisions

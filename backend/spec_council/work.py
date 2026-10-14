@@ -162,7 +162,9 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
     """Итоги, которые закрепляются при новой сборке: были готовы, и каждое их решение — то же
     (тот же вопрос, вариант и обоснование): и те, что итог реализует, и те, на которые
     опирается. Номера решений — по новому отбору: ADR-n — n-й вопрос, и вопросы могли добавить
-    или убрать. released — итоги, которые человек велел пересобрать."""
+    или убрать. Прошлое решение проекта, на которое итог опирается, должно быть по-прежнему
+    отобрано для потока и действовать: сняли отметку или оно уже не действует — итог собирают
+    заново. released — итоги, которые человек велел пересобрать."""
     before = remembered(stream)["earlier_outcomes"]
     if not isinstance(before, OutcomeDiscovery):
         return []
@@ -183,9 +185,12 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
     def by_number(names: Iterable[str]) -> list[str]:
         return sorted(names, key=lambda name: int(name.split("-")[1]))
 
+    chosen = active_decisions(stream)
     kept = []
     for outcome in before.outcomes:
         if outcome.id in set(released) or not outcome_ready(outcome):
+            continue
+        if not set(outcome.project_decision_ids) <= chosen:
             continue
         names = {name: renumbered(name)
                  for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
@@ -197,6 +202,13 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
             "adr_notes": {names[name]: text for name, text in outcome.adr_notes.items()
                           if names.get(name)}}))
     return kept
+
+
+def active_decisions(stream: Stream) -> set[str]:
+    """Прошлые решения проекта, на которые итог может опираться: отобранные для потока и
+    действующие."""
+    return {decision.adr_id for decision in stream.project_decisions or []
+            if decision.status == "active"}
 
 
 def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:

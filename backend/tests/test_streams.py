@@ -129,9 +129,11 @@ class Agents:
             if self.nothing_new and fixed:
                 found["outcomes"] = []
             if (self.touching or self.nothing_new) and fixed:
-                found["touches"] = [{"outcome_id": outcome["id"], "adr_ids": new,
-                                     "reason": "новое решение меняет поведение"}
-                                    for outcome in fixed]
+                # Новое решение — в пометке о закреплённом итоге, а не ещё и в новом итоге.
+                found["touches"] = [{"outcome_id": fixed[0]["id"], "adr_ids": new,
+                                     "reason": "новое решение меняет поведение"}]
+                for outcome in found["outcomes"]:
+                    outcome["adr_ids"], outcome["adr_notes"] = [], {}
             return json.dumps(found)
         if "-issue_dependencies-" in key:
             # Новые задачи — после перенесённых, если так велено.
@@ -1236,10 +1238,9 @@ def test_a_touched_outcome_the_human_rebuilds_is_assembled_again(agents):
     agents.touching = False
     assert settles(council_id, outcomes.run, "O1", rebuild=True).status_code == 200
     stream = streams_of(council_id)["C"]
-    # Пересобирают только O1: другой готовый итог с теми же решениями — закреплён.
-    assert stream.outcomes.run != outcomes.run and stream.outcomes.kept == ["O2"]
-    fixed = json.loads(section(agents.prompts["outcome_discovery"], "FIXED OUTCOMES"))
-    assert [o["id"] for o in fixed] == ["O2"]
+    # O1 пересобирают; O2 своих решений не реализует (новое было в пометке) — не закреплён.
+    assert stream.outcomes.run != outcomes.run and stream.outcomes.kept == []
+    assert json.loads(section(agents.prompts["outcome_discovery"], "FIXED OUTCOMES")) == []
     # Задачу прежнего итога не переносят: итог пересобран.
     assert approves(council_id, "C").status_code == 200
     assert streams_of(council_id)["C"].issues.kept == []

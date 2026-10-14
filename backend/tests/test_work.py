@@ -8,11 +8,14 @@ from spec_council.models import (
     DecisionFix,
     Issue,
     OpenQuestion,
+    Outcome,
+    OutcomeDiscovery,
+    ProjectDecision,
     QuestionAnalysis,
     Stream,
 )
 from spec_council.pipeline import analysis_of_question
-from spec_council.work import carried_analyses, with_new_adrs
+from spec_council.work import carried_analyses, kept_outcomes, with_new_adrs
 
 
 def question(n):
@@ -65,3 +68,22 @@ def test_a_check_remembers_the_choice_of_the_questions_its_fixes_name():
     found = analysis_of_question(question(1), verdict,
                                  {"Q1": "Q1: P1", "Q2": "Q2: P2", "Q3": "Q3: -"})
     assert found.context == ["Q2: P2", "Q3: -"]                 # свой вопрос — не в счёт
+
+
+def test_an_outcome_on_a_project_decision_no_longer_chosen_or_active_is_not_kept():
+    """Отметку с решения проекта сняли или оно больше не действует — итог, который на него
+    опирался, собирают заново: его решения потока те же, но опора уже не та."""
+    decisions = [Decision(question_id="Q1", proposal="P1", rationale="Так.", rationale_by="human")]
+    ready = Outcome(id="O1", title="Поиск", behavior="Ищет.", adr_ids=["ADR-1"],
+                    adr_notes={"ADR-1": "Ищет по слову."}, acceptance_criteria=["Находит."],
+                    project_decision_ids=["ADR-0007"])
+    earlier = OutcomeDiscovery(state="done", steps=[], decisions=["Q1: P1: Так."], outcomes=[ready])
+    chosen = ProjectDecision(adr_id="ADR-0007", decision="Искать полнотекстом.")
+    stream = Stream(group="C", scope=[question(1)], decisions=decisions,
+                    earlier_outcomes=earlier, project_decisions=[chosen])
+    assert [o.id for o in kept_outcomes(stream, stream.scope, decisions)] == ["O1"]
+    unchosen = stream.model_copy(update={"project_decisions": []})
+    assert kept_outcomes(unchosen, stream.scope, decisions) == []
+    reviewed = stream.model_copy(update={"project_decisions": [
+        chosen.model_copy(update={"status": "under_review"})]})
+    assert kept_outcomes(reviewed, stream.scope, decisions) == []

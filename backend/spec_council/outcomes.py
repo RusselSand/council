@@ -213,20 +213,22 @@ def assembly_of(data: dict, context: Context) -> Assembly:
 
 def spread(assembly: Assembly, context: Context) -> None:
     """Каждое принятое решение реализует ровно один итог — новый или закреплённый, — или его
-    называет пометка о закреплённом итоге, который оно задевает. Решение, которое реализуют два
-    итога или ни один, — негодный ответ; опираться на него (relies_on) могут сколько угодно.
-    Закреплённые итоги между собой не сверяются: их уже утверждали."""
+    называет ровно одна пометка о закреплённом итоге, который оно задевает: пометка — тоже место
+    решения, иначе, оставь человек закреплённый итог, решение оказалось бы в двух. Решение,
+    которое реализуют два итога (или итог и пометка, или две пометки) или ни один, — негодный
+    ответ; опираться на него (relies_on) могут сколько угодно. Закреплённые итоги между собой не
+    сверяются: их уже утверждали."""
     owner: dict[str, str] = {adr: name for name, adrs in context.kept.items() for adr in adrs}
     twice: set[str] = set()
-    for n, outcome in enumerate(assembly.outcomes, 1):
-        for adr in outcome.adr_ids:
-            if adr in owner:
-                twice.add(adr)
-            owner[adr] = f"итог {n}"
+    claims = [*(adr for outcome in assembly.outcomes for adr in outcome.adr_ids),
+              *(adr for touch in assembly.touches for adr in touch.adr_ids)]
+    for adr in claims:
+        if adr in owner:
+            twice.add(adr)
+        owner[adr] = "ответ"
     if twice:
         raise BadAnswer(f"решения реализуют два итога: {', '.join(by_number(twice))}")
-    touched = {adr for touch in assembly.touches for adr in touch.adr_ids}
-    missing = context.adrs - set(owner) - touched
+    missing = context.adrs - set(owner)
     if missing:
         raise BadAnswer(f"решения не реализует ни один итог: {', '.join(by_number(missing))}")
 

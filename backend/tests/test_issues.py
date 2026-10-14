@@ -290,3 +290,14 @@ def test_dependencies_between_outcomes_in_a_circle_make_the_answer_unfit_and_blo
     found = dependencies_of({"dependencies": [{"issue_id": "I2", "depends_on": ["I1"]}]},
                             answer, {})
     assert [i.blocked_by for i in found.issues] == [("Q2",), ("Q2",)]
+
+
+def test_a_gap_naming_only_a_foreign_outcome_is_not_retargeted_to_this_one():
+    """Пробел назвал чужой итог — он не про этот: не держит его задачи и отбрасывается. Не
+    назвал ни одного — про итог, который режут."""
+    answer = cut_of("O1", issue(), gaps=[
+        {"question": "Где отчёт?", "reason": "", "outcome_ids": ["O2"]},
+        {"question": "Сколько хранить?", "reason": ""}])
+    assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
+        ("Сколько хранить?", ("O1",))]
+    assert answer.issues[0].blocked_by == ("G1",)

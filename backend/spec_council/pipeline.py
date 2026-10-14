@@ -1204,7 +1204,10 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             frozenset(q["id"] for q in questions if q["status"] == "open"),
             {same_question(q.text): q.id for q in self.scope},
             {outcome.id: frozenset(outcome.adr_ids) for outcome in self.kept},
-            frozenset(decision.adr_id for decision in self.accepted))
+            # Опереться можно только на действующее решение проекта: на пересмотре или заменённое
+            # итог не держит.
+            frozenset(decision.adr_id for decision in self.accepted
+                      if decision.status == "active"))
         values = {
             "idea": self.idea,
             "questions_and_proposals": as_json(questions),

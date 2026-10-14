@@ -119,10 +119,12 @@ def outcomes_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
 
 
 def about(value: object, context: Context) -> tuple[str, ...]:
-    """Про какие итоги пробел: названные моделью, а если не назвала и итог в ходе один — про
-    него."""
+    """Про какие итоги пробел или задача: названные моделью, а если не назвала ни одного и итог
+    в ходе один — про него. Назвала, но только чужие, — ни про какой: чужая ссылка не
+    становится ссылкой на этот итог."""
+    named = [name for name in as_list(value) if isinstance(name, str) and name.strip()]
     found = outcomes_in(value, context.outcomes)
-    if not found and len(context.outcomes) == 1:
+    if not found and not named and len(context.outcomes) == 1:
         return tuple(context.outcomes)
     return found
 
@@ -208,8 +210,7 @@ def candidate_of(item: object, context: Context, gaps: list[Gap], refs: dict[int
     # два — задача не того итога.
     named = [name for name in as_list(item.get("outcome_ids")) if isinstance(name, str)]
     outcome_ids = about(item.get("outcome_ids"), context)
-    foreign = bool(named) and not outcomes_in(named, context.outcomes)
-    if len(outcome_ids) != 1 or len(named) > 1 or foreign:
+    if len(outcome_ids) != 1 or len(named) > 1:
         raise BadAnswer(f"{what}: задача — ровно одного утверждённого итога")
     current = reason_of(item.get("current_state"))
     scope = texts_of(item.get("scope"))

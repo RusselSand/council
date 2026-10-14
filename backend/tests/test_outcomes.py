@@ -159,3 +159,15 @@ def test_an_implemented_decision_needs_a_line_on_what_follows_from_it():
     [found] = outcome_list({"outcomes": [outcome(adr_ids=["ADR-1", "ADR-3"], adr_notes={
         "adr-1": "Поиск по слову.", "ADR-3": "Индекс ночью.", "ADR-9": "чужое"})]}, context)
     assert found.notes == (("ADR-1", "Поиск по слову."), ("ADR-3", "Индекс ночью."))
+
+
+def test_a_decision_in_a_new_outcome_and_in_a_touch_or_in_two_touches_is_in_two_places():
+    """Пометка о закреплённом итоге — тоже место решения: оставь человек тот итог как есть,
+    решение оказалось бы в двух итогах."""
+    context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}),
+                      kept={"O1": frozenset({"ADR-1"}), "O2": frozenset()})
+    touch = {"outcome_id": "O1", "adr_ids": ["ADR-3"], "reason": "меняет поиск"}
+    with pytest.raises(BadAnswer, match="реализуют два итога: ADR-3"):
+        assembly_of({"outcomes": [outcome(adr_ids=["ADR-3"])], "touches": [touch]}, context)
+    with pytest.raises(BadAnswer, match="реализуют два итога: ADR-3"):
+        assembly_of({"outcomes": [], "touches": [touch, {**touch, "outcome_id": "O2"}]}, context)
