@@ -7,6 +7,7 @@ from spec_council.models import (
     DecisionAnalysis,
     DecisionFix,
     Issue,
+    IssueDiscovery,
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
@@ -14,8 +15,8 @@ from spec_council.models import (
     QuestionAnalysis,
     Stream,
 )
-from spec_council.pipeline import analysis_of_question
-from spec_council.work import carried_analyses, kept_outcomes, with_new_adrs
+from spec_council.pipeline import analysis_of_question, decisions_key, outcome_print
+from spec_council.work import carried_analyses, carried_issues, kept_outcomes, with_new_adrs
 
 
 def question(n):
@@ -87,3 +88,41 @@ def test_an_outcome_on_a_project_decision_no_longer_chosen_or_active_is_not_kept
     reviewed = stream.model_copy(update={"project_decisions": [
         chosen.model_copy(update={"status": "under_review"})]})
     assert kept_outcomes(reviewed, stream.scope, decisions) == []
+
+
+DECIDED3 = [Decision(question_id=f"Q{n}", proposal=f"P{n}", rationale="Так.", rationale_by="human")
+            for n in (1, 2, 3)]
+
+
+def ready(**update):
+    return Outcome(id="O1", title="Таблица", behavior="Показывает сервисы.", adr_ids=["ADR-1"],
+                   adr_notes={"ADR-1": "Колонки по таргетам."}, relies_on_adr_ids=["ADR-2"],
+                   acceptance_criteria=["Видна таблица."]).model_copy(update=update)
+
+
+def test_an_outcome_that_only_relies_on_decisions_is_kept_while_they_are_the_same():
+    """Итог может ничего не реализовать и только опираться: он закрепляется, если решения, на
+    которые он опирается, те же; поменялось одно — собирают заново."""
+    relying = ready(adr_ids=[], adr_notes={}, relies_on_adr_ids=["ADR-2"])
+    earlier = OutcomeDiscovery(state="done", steps=[], decisions=decisions_key(DECIDED3),
+                               outcomes=[relying])
+    stream = Stream(group="C", scope=[question(n) for n in (1, 2, 3)], decisions=DECIDED3,
+                    earlier_outcomes=earlier)
+    assert [o.id for o in kept_outcomes(stream, stream.scope, DECIDED3)] == ["O1"]
+    changed = [*DECIDED3[:1], DECIDED3[1].model_copy(update={"rationale": "Иначе."}), DECIDED3[2]]
+    assert kept_outcomes(stream, stream.scope, changed) == []
+
+
+def test_an_issue_is_not_carried_when_its_outcome_relies_on_another_decision_now():
+    """Отпечаток итога номеров решений не держит; итог стал опираться на другое решение — та же
+    по тексту задача на прежнем решении не переносится."""
+    issue = Issue(id="I1", title="Таблица", user_story="As a user, I want a table.",
+                  outcome_ids=["O1"], adr_ids=["ADR-1", "ADR-2"])
+    earlier = IssueDiscovery(state="done", steps=[], issues=[issue],
+                             cut={"O1": outcome_print(ready())}, decisions=decisions_key(DECIDED3))
+    stream = Stream(group="C", scope=[question(n) for n in (1, 2, 3)], decisions=DECIDED3,
+                    earlier_issues=earlier)
+    assert [i.id for i in carried_issues(stream, [ready()])] == ["I1"]
+    other = ready(relies_on_adr_ids=["ADR-3"])
+    assert outcome_print(other) == outcome_print(ready())
+    assert carried_issues(stream, [other]) == []

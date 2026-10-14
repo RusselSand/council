@@ -10,6 +10,7 @@ from spec_council.figma import FigmaError, link_of
 from spec_council.models import (
     Choice,
     Decision,
+    Issue,
     LabeledFragment,
     OpenQuestion,
     Outcome,
@@ -1328,3 +1329,24 @@ def test_an_outcome_cut_sees_the_decisions_it_relies_on_and_its_issues_stand_on_
     adrs = json.loads(given.split("\n\n", 1)[1])                  # после пояснения о role
     assert [(adr["id"], adr["role"]) for adr in adrs] == [("ADR-1", "relies_on")]
     assert [issue.adr_ids for issue in result.issues] == [["ADR-1"], ["ADR-1"]]
+
+
+
+def test_an_issue_may_wait_only_for_carried_issues_of_its_own_outcome():
+    """Режут O2, а перенесённая задача — итога O1: модель её не видит, и ссылка на неё — мимо;
+    порядок между итогами ставит судья зависимостей."""
+    carried = Issue(id="I1", title="Индекс", user_story="As a member, I want an index.",
+                    outcome_ids=["O1"], adr_ids=["ADR-1"])
+    store = {"issues": [task("I2", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[],
+                             depends_on=["I1"])]}
+    runner, reports = FakeRunner({("issue_discovery", "sol"): store,
+                                  ("issue_discovery", "fable"): store,
+                                  ("issue_dependencies", "fable"): {"dependencies": []}}), []
+    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
+                    decisions=DECIDED, proposals=FOUND, outcomes=APPROVED)
+    result = IssueRun("c1", stream, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
+                      reports.append, carried=[carried], cut=["O2"],
+                      copy=copy_as("снимок-1")).run()
+    assert result.state == "done", result.error
+    assert [(i.id, i.outcome_ids, i.depends_on) for i in result.issues] == [
+        ("I1", ["O1"], []), ("I2", ["O2"], [])]

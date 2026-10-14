@@ -194,7 +194,9 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
             continue
         names = {name: renumbered(name)
                  for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
-        if not outcome.adr_ids or None in names.values():
+        # Итог без единого решения ни на чём не стоит; опираться — тоже стоять: такой итог
+        # закрепляется, если не поменялось ни одно из решений, на которые он опирается.
+        if not names or None in names.values():
             continue
         kept.append(outcome.model_copy(update={
             "adr_ids": by_number(names[name] for name in outcome.adr_ids),
@@ -220,11 +222,16 @@ def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
     if not isinstance(before, IssueDiscovery):
         return []
     prints = {outcome.id: outcome_print(outcome) for outcome in outcomes if outcome_ready(outcome)}
+    # Решения итога — и реализуемые, и те, на которые он опирается: задача стоит на всех (их
+    # наследует при нарезке). Отпечаток итога номеров не держит — они сдвигаются с отбором, —
+    # поэтому какие именно это решения, сверяется здесь, по номерам к нынешнему отбору.
+    rests = {outcome.id: {*outcome.adr_ids, *outcome.relies_on_adr_ids} for outcome in outcomes}
     fit = {issue.id: renumbered for issue in before.issues
            if not issue.blocked_by and issue.outcome_ids
            and all(name in prints and before.cut.get(name) == prints[name]
                    for name in issue.outcome_ids)
-           and (renumbered := with_new_adrs(issue, before.decisions, stream)) is not None}
+           and (renumbered := with_new_adrs(issue, before.decisions, stream)) is not None
+           and all(rests[name] <= set(renumbered.adr_ids) for name in issue.outcome_ids)}
     while dropped := [name for name, issue in fit.items()
                       if any(other not in fit for other in issue.depends_on)]:
         for name in dropped:

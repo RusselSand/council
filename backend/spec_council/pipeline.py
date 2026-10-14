@@ -1444,7 +1444,9 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 {outcome.id: Parent(rests, tuple(outcome.constraint_ids),
                                     tuple(outcome.risk_ids), tuple(outcome.blocked_by),
                                     tuple((g.question, g.reason) for g in outcome.gaps))},
-                fixed)
+                # Сослаться можно только на перенесённые задачи этого итога — их модели и видят;
+                # порядок относительно задач других итогов ставит судья зависимостей.
+                frozenset(issue.id for issue in self.carried if outcome.id in issue.outcome_ids))
             values = {
                 "idea": self.idea,
                 "outcome": as_json({
