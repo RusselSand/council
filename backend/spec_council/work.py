@@ -221,7 +221,8 @@ def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
     before = remembered(stream)["earlier_issues"]
     if not isinstance(before, IssueDiscovery):
         return []
-    prints = {outcome.id: outcome_print(outcome) for outcome in outcomes if outcome_ready(outcome)}
+    prints = {outcome.id: outcome_print(outcome, stream.scope or [])
+              for outcome in outcomes if outcome_ready(outcome)}
     # Решения итога — и реализуемые, и те, на которые он опирается: задача стоит на всех (их
     # наследует при нарезке). Отпечаток итога номеров не держит — они сдвигаются с отбором, —
     # поэтому какие именно это решения, сверяется здесь, по номерам к нынешнему отбору.

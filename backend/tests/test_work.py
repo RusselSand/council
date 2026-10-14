@@ -118,11 +118,28 @@ def test_an_issue_is_not_carried_when_its_outcome_relies_on_another_decision_now
     по тексту задача на прежнем решении не переносится."""
     issue = Issue(id="I1", title="Таблица", user_story="As a user, I want a table.",
                   outcome_ids=["O1"], adr_ids=["ADR-1", "ADR-2"])
+    scope = [question(n) for n in (1, 2, 3)]
     earlier = IssueDiscovery(state="done", steps=[], issues=[issue],
-                             cut={"O1": outcome_print(ready())}, decisions=decisions_key(DECIDED3))
-    stream = Stream(group="C", scope=[question(n) for n in (1, 2, 3)], decisions=DECIDED3,
-                    earlier_issues=earlier)
+                             cut={"O1": outcome_print(ready(), scope)},
+                             decisions=decisions_key(DECIDED3))
+    stream = Stream(group="C", scope=scope, decisions=DECIDED3, earlier_issues=earlier)
     assert [i.id for i in carried_issues(stream, [ready()])] == ["I1"]
-    other = ready(relies_on_adr_ids=["ADR-3"])
-    assert outcome_print(other) == outcome_print(ready())
-    assert carried_issues(stream, [other]) == []
+    assert carried_issues(stream, [ready(relies_on_adr_ids=["ADR-3"])]) == []
+
+
+def test_the_print_of_an_outcome_names_decisions_by_their_questions():
+    """Номер ADR сдвигается с отбором, вопрос — нет: тот же итог при другом отборе — тот же
+    отпечаток; строки, переставленные между решениями, или другая опора — другой."""
+    scope = [question(n) for n in (1, 2, 3)]
+    both = ready(adr_ids=["ADR-1", "ADR-2"], relies_on_adr_ids=["ADR-3"],
+                 adr_notes={"ADR-1": "Колонки по таргетам.", "ADR-2": "Чипы по состояниям."})
+    swapped = both.model_copy(update={"adr_notes": {"ADR-1": "Чипы по состояниям.",
+                                                    "ADR-2": "Колонки по таргетам."}})
+    assert outcome_print(swapped, scope) != outcome_print(both, scope)
+    # Вперёд добавили вопрос Q0: те же решения теперь ADR-2…ADR-4.
+    moved = both.model_copy(update={"adr_ids": ["ADR-2", "ADR-3"], "relies_on_adr_ids": ["ADR-4"],
+                                    "adr_notes": {"ADR-2": "Колонки по таргетам.",
+                                                  "ADR-3": "Чипы по состояниям."}})
+    assert outcome_print(moved, [question(0), *scope]) == outcome_print(both, scope)
+    assert outcome_print(both.model_copy(update={"relies_on_adr_ids": ["ADR-1"]}), scope) != (
+        outcome_print(both, scope))

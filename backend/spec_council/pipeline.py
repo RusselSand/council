@@ -355,15 +355,20 @@ def start_outcomes(participants: list[str], judge: str, decisions: list[Decision
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
 
 
-def outcome_print(outcome: Outcome) -> str:
+def outcome_print(outcome: Outcome, scope: Sequence[OpenQuestion] = ()) -> str:
     """Итог, каким его нарезали на задачи: тот же — его задачи переносятся. Номера решений —
-    не в счёт: они сдвигаются вместе с отбором, а итог тот же."""
-    # Новые части — только когда они есть: отпечаток итога без них тот же, что и раньше. Строки
-    # о решениях — без номеров ADR: номера сдвигаются вместе с отбором, а итог тот же.
+    не в счёт: они сдвигаются вместе с отбором, а итог тот же. Где решение важно само — строка
+    «что следует» и на что итог опирается, — оно названо вопросом, по которому принято (scope —
+    отбор, к которому номера ADR итога): вопрос от правки отбора не сдвигается."""
+    def question_of(name: str) -> str:
+        n = int(name.split("-")[1])
+        return scope[n - 1].id if 0 < n <= len(scope) else name
+
+    # Новые части — только когда они есть: отпечаток итога без них тот же, что и раньше.
     extra = {key: value for key, value in (
         ("projects", sorted(outcome.project_decision_ids)),
-        ("notes", sorted(outcome.adr_notes.values())),
-        ("relies", len(outcome.relies_on_adr_ids))) if value}
+        ("notes", sorted([question_of(name), text] for name, text in outcome.adr_notes.items())),
+        ("relies", sorted(question_of(name) for name in outcome.relies_on_adr_ids))) if value}
     return json.dumps([outcome.title, outcome.behavior, sorted(outcome.acceptance_criteria),
                        outcome.constraint_ids, outcome.risk_ids, *([extra] if extra else [])],
                       ensure_ascii=False)
@@ -1552,7 +1557,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         issues = [*self.carried, *issues]
         covered = {name for issue in issues for name in issue.outcome_ids}
         return {"issues": issues, "gaps": gaps, "kept": [issue.id for issue in self.carried],
-                "cut": {outcome.id: outcome_print(outcome) for outcome in self.outcomes},
+                "cut": {outcome.id: outcome_print(outcome, self.scope)
+                        for outcome in self.outcomes},
                 "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
 
 
