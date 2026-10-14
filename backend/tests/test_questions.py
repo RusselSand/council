@@ -5,9 +5,12 @@ import pytest
 from spec_council.models import LabeledFragment
 from spec_council.questions import (
     Candidate,
+    as_prompt,
     merged,
+    misses_user_questions,
     numbered,
     question_list,
+    same_lists,
     same_question,
     with_user_questions,
 )
@@ -118,6 +121,14 @@ def test_questions_from_the_text_are_never_lost_and_are_numbered_in_order():
         ("Q2", "Кто решает, что тред полезный?", "user", 4)]
 
 
+def test_a_list_misses_a_text_question_only_when_it_is_there_in_no_form():
+    asked_as_is = [Candidate("Кто решает, что тред полезный?", "user", 4, (), None)]
+    asked_again = [Candidate("кто решает, что тред полезный", "inferred", None, (1,), "b")]
+    assert not misses_user_questions(asked_as_is, GROUP)
+    assert not misses_user_questions(asked_again, GROUP)
+    assert misses_user_questions([Candidate("Как искать?", "inferred", None, (1,), "a")], GROUP)
+
+
 # --- формулировка заметки и пересмотр решений проекта
 
 DECIDED = frozenset({"ADR-0007", "ADR-0012"})
@@ -155,3 +166,25 @@ def test_merged_questions_keep_the_note_and_the_revisited_decision():
     [both] = merged([first, second])
     assert (both.note, both.revisits, both.proposal_ids) == (
         "Кто решает, полезен ли тред?", "ADR-0012", (1,))
+
+
+def test_a_question_about_how_the_system_is_built_inside_is_marked_technical():
+    """Пометку «технические детали» ставит модель; человек видит её на отборе. Только true —
+    пометка: остальное — не она."""
+    found = question_list({"questions": [
+        ask("Какие данные получает страница?") | {"technical": True},
+        ask("Какой таргет — по умолчанию?", "discovered", proposals=()) | {"technical": "да"},
+        ask("Кто решает, что тред полезный?", "user", "F4", proposals=()) | {"technical": True}]},
+        GROUP)
+    assert [c.technical for c in found] == [True, False, True]
+    [question, *_] = numbered(found)
+    assert question.technical is True
+    assert as_prompt(found)[0]["technical"] is True
+
+
+def test_the_same_question_marked_by_one_model_is_technical_and_marks_differ_for_the_judge():
+    plain, marked = ask(), ask() | {"technical": True}
+    assert [c.technical for c in merged(question_list({"questions": [plain, marked]}, GROUP))] == [
+        True]
+    assert not same_lists([question_list({"questions": [plain]}, GROUP),
+                           question_list({"questions": [marked]}, GROUP)])

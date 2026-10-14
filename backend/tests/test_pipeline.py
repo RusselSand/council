@@ -524,6 +524,19 @@ def test_same_questions_from_everyone_need_no_judge_and_text_questions_stay_word
     assert result.idea == FIND
 
 
+def test_a_text_question_everyone_dropped_goes_to_the_judge_to_be_marked():
+    same = asked((HOW, "inferred", None, ["F2", "F3"]))
+    judged = asked((HOW, "inferred", None, ["F2", "F3"]), ("Кто платит?", "user", "F6", []))
+    judged["questions"][1]["technical"] = True
+    result, runner = question_it({("question_discovery", "sol"): same,
+                                  ("question_discovery", "fable"): same,
+                                  ("question_judge", "fable"): judged})
+    assert {s.name.value: s.state for s in result.steps}["question_judge"] != "skipped"
+    assert ("question_judge", "fable") in runner.asked
+    assert [(q.text, q.source, q.technical) for q in result.questions] == [
+        (HOW, "inferred", False), ("Кто платит за хостинг?", "user", True)]
+
+
 def test_different_lists_go_to_the_judge_and_a_dropped_text_question_comes_back():
     result, runner = question_it({
         ("question_discovery", "sol"): asked((HOW, "inferred", None, ["F2", "F3"])),

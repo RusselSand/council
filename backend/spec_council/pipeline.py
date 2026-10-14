@@ -164,6 +164,7 @@ from .proposals import as_prompt as proposal_prompt
 from .proposals import merged as merged_proposals
 from .questions import (
     as_prompt,
+    misses_user_questions,
     numbered,
     question_list,
     same_lists,
@@ -861,7 +862,10 @@ class QuestionRun(CouncilRun[QuestionDiscovery]):
                                 lambda data: question_list(data, self.fragments,
                                                            self.decision_ids))
         lists = list(answers.values())
-        if len(lists) > 1 and same_lists(lists):
+        # Вопрос из текста, пропущенный всеми, вернётся сам, но без классификации: тогда
+        # список сводит судья — он обязан вернуть все вопросы из текста и пометить каждый.
+        if (len(lists) > 1 and same_lists(lists)
+                and not misses_user_questions(lists[0], self.fragments)):
             self._skip(StepName.question_judge)
             chosen = lists[0]
         else:
