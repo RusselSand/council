@@ -210,7 +210,8 @@ acceptance criteria of a FIXED OUTCOME, do not rewrite that OUTCOME: report it i
 the OUTCOME id, the ADRs that touch it and why. The human decides whether to keep the OUTCOME as
 it is or to assemble it again. A new ADR about the same situation or rule as a FIXED OUTCOME
 changes it: report the touch, do not create a new OUTCOME next to it. An ADR reported in
-`touches` is covered by that report and is not put into a new OUTCOME. Do not report a touch when
+`touches` is covered by that report and is not put into a new OUTCOME. Until the human decides,
+nobody implements it: no OUTCOME relies on it either. Do not report a touch when
 a new ADR adds a different behavior: that is a new OUTCOME.
 
 ## Response format

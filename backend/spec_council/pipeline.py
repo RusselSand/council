@@ -355,18 +355,27 @@ def start_outcomes(participants: list[str], judge: str, decisions: list[Decision
                                         (StepName.outcome_discovery, StepName.outcome_judge)))
 
 
-def outcome_print(outcome: Outcome, scope: Sequence[OpenQuestion] = ()) -> str:
+def project_prints(decisions: Iterable[ProjectDecision]) -> dict[str, str]:
+    """Каждое прошлое решение проекта — номер и отпечаток того, что о нём видят модели."""
+    return {decision.adr_id: fingerprint([decision]) for decision in decisions}
+
+
+def outcome_print(outcome: Outcome, scope: Sequence[OpenQuestion] = (),
+                  projects: Mapping[str, str] | None = None) -> str:
     """Итог, каким его нарезали на задачи: тот же — его задачи переносятся. Номера решений —
     не в счёт: они сдвигаются вместе с отбором, а итог тот же. Где решение важно само — строка
     «что следует» и на что итог опирается, — оно названо вопросом, по которому принято (scope —
-    отбор, к которому номера ADR итога): вопрос от правки отбора не сдвигается."""
+    отбор, к которому номера ADR итога): вопрос от правки отбора не сдвигается. Прошлое решение
+    проекта — с отпечатком его содержания (projects, project_prints): поправили его в каталоге —
+    итог уже не тот."""
+    known = projects or {}
     def question_of(name: str) -> str:
         n = int(name.split("-")[1])
         return scope[n - 1].id if 0 < n <= len(scope) else name
 
     # Новые части — только когда они есть: отпечаток итога без них тот же, что и раньше.
     extra = {key: value for key, value in (
-        ("projects", sorted(outcome.project_decision_ids)),
+        ("projects", sorted([name, known.get(name, "")] for name in outcome.project_decision_ids)),
         ("notes", sorted([question_of(name), text] for name, text in outcome.adr_notes.items())),
         ("relies", sorted(question_of(name) for name in outcome.relies_on_adr_ids))) if value}
     return json.dumps([outcome.title, outcome.behavior, sorted(outcome.acceptance_criteria),
@@ -1191,6 +1200,7 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
         self.accepted = list(accepted)
         super().__init__(council_id, participants, judge, runner, report,
                          start_outcomes(participants, judge, decisions, self.kept))
+        self.state.projects = project_prints(self.accepted)
         self.idea = idea
         self.repository = repository
         self.design = design
@@ -1557,7 +1567,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         issues = [*self.carried, *issues]
         covered = {name for issue in issues for name in issue.outcome_ids}
         return {"issues": issues, "gaps": gaps, "kept": [issue.id for issue in self.carried],
-                "cut": {outcome.id: outcome_print(outcome, self.scope)
+                "cut": {outcome.id: outcome_print(outcome, self.scope,
+                                                  project_prints(self.accepted))
                         for outcome in self.outcomes},
                 "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
 

@@ -171,3 +171,18 @@ def test_a_decision_in_a_new_outcome_and_in_a_touch_or_in_two_touches_is_in_two_
         assembly_of({"outcomes": [outcome(adr_ids=["ADR-3"])], "touches": [touch]}, context)
     with pytest.raises(BadAnswer, match="реализуют два итога: ADR-3"):
         assembly_of({"outcomes": [], "touches": [touch, {**touch, "outcome_id": "O2"}]}, context)
+
+
+def test_no_outcome_relies_on_a_decision_only_a_touch_names():
+    """Решение в пометке пока никто не реализует: оставь человек закреплённый итог как есть —
+    его не будет нигде. Опираться на него нельзя."""
+    context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}),
+                      kept={"O1": frozenset({"ADR-1"})})
+    touch = {"outcome_id": "O1", "adr_ids": ["ADR-3"], "reason": "меняет поиск"}
+    with pytest.raises(BadAnswer, match="только пометка: ADR-3"):
+        assembly_of({"outcomes": [outcome("Отчёт", adr_ids=[], relies_on_adr_ids=["ADR-3"])],
+                     "touches": [touch]}, context)
+    # На решение закреплённого итога — можно.
+    found = assembly_of({"outcomes": [outcome("Отчёт", adr_ids=[], relies_on_adr_ids=["ADR-1"])],
+                         "touches": [touch]}, context)
+    assert found.outcomes[0].relies_on == ("ADR-1",)

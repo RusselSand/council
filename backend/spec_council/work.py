@@ -31,7 +31,14 @@ from .models import (
     QuestionWork,
     Stream,
 )
-from .pipeline import choice_entry, decisions_key, outcome_print, question_key, rests_on
+from .pipeline import (
+    choice_entry,
+    decisions_key,
+    outcome_print,
+    project_prints,
+    question_key,
+    rests_on,
+)
 
 
 def keys_of(scope: Iterable[OpenQuestion]) -> dict[str, str]:
@@ -163,8 +170,9 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
     (тот же вопрос, вариант и обоснование): и те, что итог реализует, и те, на которые
     опирается. Номера решений — по новому отбору: ADR-n — n-й вопрос, и вопросы могли добавить
     или убрать. Прошлое решение проекта, на которое итог опирается, должно быть по-прежнему
-    отобрано для потока и действовать: сняли отметку или оно уже не действует — итог собирают
-    заново. released — итоги, которые человек велел пересобрать."""
+    отобрано для потока, действовать и быть тем же, что видели при сборке: сняли отметку, оно
+    уже не действует или его поправили в каталоге — итог собирают заново. released — итоги,
+    которые человек велел пересобрать."""
     before = remembered(stream)["earlier_outcomes"]
     if not isinstance(before, OutcomeDiscovery):
         return []
@@ -186,17 +194,19 @@ def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Dec
         return sorted(names, key=lambda name: int(name.split("-")[1]))
 
     chosen = active_decisions(stream)
+    contents = project_prints(stream.project_decisions or [])
     kept = []
     for outcome in before.outcomes:
         if outcome.id in set(released) or not outcome_ready(outcome):
             continue
-        if not set(outcome.project_decision_ids) <= chosen:
+        if any(name not in chosen or before.projects.get(name) != contents.get(name)
+               for name in outcome.project_decision_ids):
             continue
         names = {name: renumbered(name)
                  for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
-        # Итог без единого решения ни на чём не стоит; опираться — тоже стоять: такой итог
-        # закрепляется, если не поменялось ни одно из решений, на которые он опирается.
-        if not names or None in names.values():
+        # Итог без единого решения ни на чём не стоит; опираться — тоже стоять, и на решение
+        # проекта тоже: такой итог закрепляется, если не поменялось ни одно из его решений.
+        if not (names or outcome.project_decision_ids) or None in names.values():
             continue
         kept.append(outcome.model_copy(update={
             "adr_ids": by_number(names[name] for name in outcome.adr_ids),
@@ -221,7 +231,8 @@ def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
     before = remembered(stream)["earlier_issues"]
     if not isinstance(before, IssueDiscovery):
         return []
-    prints = {outcome.id: outcome_print(outcome, stream.scope or [])
+    projects = project_prints(stream.project_decisions or [])
+    prints = {outcome.id: outcome_print(outcome, stream.scope or [], projects)
               for outcome in outcomes if outcome_ready(outcome)}
     # Решения итога — и реализуемые, и те, на которые он опирается: задача стоит на всех (их
     # наследует при нарезке). Отпечаток итога номеров не держит — они сдвигаются с отбором, —

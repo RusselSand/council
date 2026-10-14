@@ -15,7 +15,12 @@ from spec_council.models import (
     QuestionAnalysis,
     Stream,
 )
-from spec_council.pipeline import analysis_of_question, decisions_key, outcome_print
+from spec_council.pipeline import (
+    analysis_of_question,
+    decisions_key,
+    outcome_print,
+    project_prints,
+)
 from spec_council.work import carried_analyses, carried_issues, kept_outcomes, with_new_adrs
 
 
@@ -78,8 +83,9 @@ def test_an_outcome_on_a_project_decision_no_longer_chosen_or_active_is_not_kept
     ready = Outcome(id="O1", title="Поиск", behavior="Ищет.", adr_ids=["ADR-1"],
                     adr_notes={"ADR-1": "Ищет по слову."}, acceptance_criteria=["Находит."],
                     project_decision_ids=["ADR-0007"])
-    earlier = OutcomeDiscovery(state="done", steps=[], decisions=["Q1: P1: Так."], outcomes=[ready])
     chosen = ProjectDecision(adr_id="ADR-0007", decision="Искать полнотекстом.")
+    earlier = OutcomeDiscovery(state="done", steps=[], decisions=["Q1: P1: Так."], outcomes=[ready],
+                               projects=project_prints([chosen]))
     stream = Stream(group="C", scope=[question(1)], decisions=decisions,
                     earlier_outcomes=earlier, project_decisions=[chosen])
     assert [o.id for o in kept_outcomes(stream, stream.scope, decisions)] == ["O1"]
@@ -88,6 +94,15 @@ def test_an_outcome_on_a_project_decision_no_longer_chosen_or_active_is_not_kept
     reviewed = stream.model_copy(update={"project_decisions": [
         chosen.model_copy(update={"status": "under_review"})]})
     assert kept_outcomes(reviewed, stream.scope, decisions) == []
+    # Номер тот же, а в каталоге решение поправили: итог стоял на прежнем — собирают заново.
+    edited = stream.model_copy(update={"project_decisions": [
+        chosen.model_copy(update={"decision": "Искать по тегам."})]})
+    assert kept_outcomes(edited, stream.scope, decisions) == []
+    # Итог только на решении проекта — тоже стоит на решении: закрепляется.
+    alone = ready.model_copy(update={"adr_ids": [], "adr_notes": {}})
+    only = stream.model_copy(update={"earlier_outcomes": earlier.model_copy(update={
+        "outcomes": [alone]})})
+    assert [o.id for o in kept_outcomes(only, stream.scope, decisions)] == ["O1"]
 
 
 DECIDED3 = [Decision(question_id=f"Q{n}", proposal=f"P{n}", rationale="Так.", rationale_by="human")
@@ -143,3 +158,13 @@ def test_the_print_of_an_outcome_names_decisions_by_their_questions():
     assert outcome_print(moved, [question(0), *scope]) == outcome_print(both, scope)
     assert outcome_print(both.model_copy(update={"relies_on_adr_ids": ["ADR-1"]}), scope) != (
         outcome_print(both, scope))
+
+
+def test_the_print_of_an_outcome_changes_with_the_content_of_its_project_decision():
+    """Решение проекта поправили, номер тот же: задачи итога на нём не переносятся."""
+    on = ready(project_decision_ids=["ADR-0007"])
+    before = ProjectDecision(adr_id="ADR-0007", decision="Искать полнотекстом.")
+    after = before.model_copy(update={"decision": "Искать по тегам."})
+    scope = [question(n) for n in (1, 2, 3)]
+    assert outcome_print(on, scope, project_prints([before])) != outcome_print(
+        on, scope, project_prints([after]))

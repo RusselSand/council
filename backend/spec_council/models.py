@@ -779,6 +779,9 @@ class OutcomeDiscovery(BaseModel):
     touched: list[OutcomeTouch] = []
     # Принятые решения, не вошедшие ни в один итог.
     uncovered_adr_ids: list[str] = []
+    # Прошлые решения проекта, к которым собирали: номер — отпечаток того, что видели модели
+    # (project.fingerprint). Решение с тех пор поправили — итог на нём не закрепляется.
+    projects: dict[str, str] = {}
     error: str | None = None
 
 

@@ -57,6 +57,10 @@ class Context:
     # Прошлые решения проекта, отобранные для потока: их номера из каталога.
     project_decisions: frozenset[str] = frozenset()
 
+    def adrs_of_kept(self) -> frozenset[str]:
+        """Решения, которые реализуют закреплённые итоги."""
+        return frozenset(adr for adrs in self.kept.values() for adr in adrs)
+
 
 @dataclass(frozen=True)
 class Touch:
@@ -228,6 +232,14 @@ def spread(assembly: Assembly, context: Context) -> None:
         owner[adr] = "ответ"
     if twice:
         raise BadAnswer(f"решения реализуют два итога: {', '.join(by_number(twice))}")
+    # Решение, которое называет только пометка, пока никто не реализует: человек может оставить
+    # закреплённый итог как есть — и решения не будет нигде. Опираться на него нельзя.
+    implemented = {*context.adrs_of_kept(), *(adr for o in assembly.outcomes for adr in o.adr_ids)}
+    pending = {adr for touch in assembly.touches for adr in touch.adr_ids} - implemented
+    leaning = {adr for o in assembly.outcomes for adr in o.relies_on} & pending
+    if leaning:
+        raise BadAnswer("итог опирается на решения, которые называет только пометка: "
+                        f"{', '.join(by_number(leaning))}")
     missing = context.adrs - set(owner)
     if missing:
         raise BadAnswer(f"решения не реализует ни один итог: {', '.join(by_number(missing))}")
