@@ -657,6 +657,8 @@ export const ru = {
   'outcomes.touchedHint': 'Новые решения задевают закреплённые итоги — решите по каждому, оставить или пересобрать: тогда итоги можно утвердить.',
   'outcomes.changes': 'меняется',
   'outcomes.decisions': 'решения',
+  'outcomes.project': 'решение проекта',
+  'outcomes.relies': 'опирается',
   'outcomes.keep': 'соблюдать',
   'outcomes.risks': 'риски',
   'outcomes.doneWhen': 'готово, когда',
@@ -819,6 +821,7 @@ export const ru = {
   'step.outcome_judge': 'Судья итогов',
   'step.issue_discovery': 'Нарезка на задачи',
   'step.issue_judge': 'Судья задач',
+  'step.issue_dependencies': 'Зависимости задач',
 
   'label.idea': 'идея',
   'label.question': 'вопрос',

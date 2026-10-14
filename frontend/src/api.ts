@@ -8,7 +8,8 @@ export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'stru
   | 'design_discovery' | 'design_judge' | 'project_decisions_discovery' | 'project_decisions_judge'
   | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
-  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge' | 'notes_translation'
+  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge' | 'issue_dependencies'
+  | 'notes_translation'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
 export interface Step { name: StepName; state: RunState | 'skipped'; runs: ModelRun[] }
@@ -276,13 +277,18 @@ export interface DecisionDraft { question_id: string; proposal: string | null; r
 /** Неопределённость, которой нет среди вопросов потока: материал для нового поиска вопросов. */
 export interface OutcomeGap { question: string; reason: string }
 /**
- * Итог — законченное изменение системы после принятых решений (O1, O2…). adr_ids — на каких
- * решениях стоит (ADR-n — решение по n-му вопросу отбора); blocked_by — открытые вопросы, без
- * решения которых его поведение не определить: недостающее не додумывается.
+ * Итог — наблюдаемое состояние системы после принятых решений (O1, O2…). adr_ids — какие
+ * решения он реализует (ADR-n — решение по n-му вопросу отбора; каждое реализует ровно один
+ * итог), adr_notes — что из каждого следует в его поведении; relies_on_adr_ids — решения других
+ * итогов, на которые он опирается; project_decision_ids — на какие прошлые решения проекта
+ * опирается; blocked_by — открытые вопросы, без решения которых его поведение не определить:
+ * недостающее не додумывается.
  */
 export interface Outcome {
   id: string; title: string; behavior: string; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
   acceptance_criteria: string[]; blocked_by: string[]; gaps: OutcomeGap[]
+  /** Нет у итогов, собранных раньше. */
+  project_decision_ids?: string[]; adr_notes?: Record<string, string>; relies_on_adr_ids?: string[]
 }
 /** Сборка итогов из решений (decisions — к каким); uncovered_adr_ids — решения, не вошедшие ни в один итог. */
 /** Новое решение задевает закреплённый итог: оставить его как есть или пересобрать — решает человек. */
@@ -298,10 +304,11 @@ export interface OutcomeDiscovery {
 /** Пробел нарезки (G1, G2…): без его решения часть работы не начать — материал для нового вопроса. */
 export interface IssueGap { id: string; question: string; reason: string; outcome_ids: string[] }
 /**
- * Задача для coding agent (I1, I2…) — законченная часть утверждённых итогов: кому и зачем
- * (user_story), где менять и что там сейчас, что именно сделать (scope). depends_on — задачи,
- * результат которых ей нужен; blocked_by — пробелы (G-n) и открытые вопросы, без решения
- * которых её не сделать; acceptance_criteria — когда готовы её итоги (из итогов, не от модели).
+ * Задача для coding agent (I1, I2…) — часть одного утверждённого итога: кому и зачем
+ * (user_story), где менять и что меняем, что именно сделать и где остановиться (scope).
+ * depends_on — задачи, результат которых ей нужен; blocked_by — пробелы (G-n) и открытые
+ * вопросы, без решения которых её не сделать; acceptance_criteria — критерии итога, которые
+ * раньше переносились в задачу (у новых нарезок пусто).
  */
 export interface Issue {
   id: string; title: string; user_story: string; main_entry_points: string[]; current_state: string

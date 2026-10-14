@@ -4,7 +4,15 @@ from dataclasses import replace
 
 import pytest
 
-from spec_council.issues import Context, Parent, as_prompt, issue_set, same_issues
+from spec_council.issues import (
+    Context,
+    Parent,
+    as_prompt,
+    combined,
+    dependencies_of,
+    issue_set,
+    same_issues,
+)
 from spec_council.slicing import BadAnswer
 
 CONTEXT = Context(outcomes=frozenset({"O1", "O2"}), adrs=frozenset({"ADR-1"}),
@@ -23,8 +31,8 @@ def issue(id_="I1", title="Поиск по базе", outcomes=("O1",), **extra)
 
 
 def test_an_issue_keeps_only_references_it_may_have():
-    """Чужие номера — итога, решения, ограничения — отбрасываются, а задача остаётся."""
-    answer = issue_set({"issues": [issue(outcomes=("O1", "O9"), adr_ids=["ADR-1", "ADR-4"],
+    """Чужие номера — решения, ограничения — отбрасываются, а задача остаётся."""
+    answer = issue_set({"issues": [issue(adr_ids=["ADR-1", "ADR-4"],
                                          constraint_ids=["F5", "F6"], risk_ids=["F7", "F2"])]},
                        CONTEXT)
     [found] = answer.issues
@@ -40,6 +48,19 @@ def test_an_issue_without_an_approved_outcome_is_dropped():
     assert [found.name for found in answer.issues] == ["I1"]
     with pytest.raises(BadAnswer, match="утверждённого итога"):
         issue_set({"issues": [issue(outcomes=())]}, CONTEXT)
+
+
+def test_an_issue_is_of_exactly_one_outcome():
+    """Итог режут за раз: задача — его, даже если модель его не назвала; два итога или чужой —
+    задача не того итога."""
+    one = replace(CONTEXT, outcomes=frozenset({"O2"}))
+    answer = issue_set({"issues": [issue(outcomes=()), issue("I2", "Выдача", outcomes=("O2",)),
+                                   issue("I3", "Два", outcomes=("O2", "O1")),
+                                   issue("I4", "Чужой", outcomes=("O1",))]}, one)
+    assert [(found.name, found.outcome_ids) for found in answer.issues] == [
+        ("I1", ("O2",)), ("I2", ("O2",))]
+    with pytest.raises(BadAnswer, match="ровно одного"):
+        issue_set({"issues": [issue(outcomes=("O1", "O2"))]}, CONTEXT)
 
 
 def test_an_answer_without_a_list_of_issues_is_refused_and_an_empty_one_is_honest():
@@ -222,3 +243,61 @@ def test_a_gap_that_is_an_open_question_holds_the_issues_of_the_outcomes_it_name
                        CONTEXT)
     assert [found.blocked_by for found in answer.issues] == [(), ("Q2",)]
     assert answer.gaps == ()
+
+
+def cut_of(outcome, *issues, gaps=(), fixed=()):
+    """Нарезка одного итога, как её разбирает ход по итогу."""
+    return issue_set({"issues": list(issues), "gaps": list(gaps)},
+                     replace(CONTEXT, outcomes=frozenset({outcome}), fixed=frozenset(fixed)))
+
+
+def test_cuts_of_outcomes_get_numbers_through_and_share_a_gap():
+    """Номера в нарезках свои у каждого итога: в общей — сквозные, ссылки внутри итога по ним,
+    перенесённая задача свой номер сохраняет; тот же пробел у двух итогов — один."""
+    gap = {"question": "Где отчёт?", "reason": "нет"}
+    first = cut_of("O1", issue("I1"), issue("I2", "Выдача", depends_on=["I1"], blocked_by=["G1"]),
+                   gaps=[gap])
+    second = cut_of("O2", issue("I1", "Отчёт", outcomes=(), depends_on=["I7"],
+                                blocked_by=["G1"]), gaps=[gap], fixed=["I7"])
+    found = combined([first, second], fixed=["I7"])
+    assert [(i.name, i.outcome_ids, i.depends_on, i.blocked_by) for i in found.issues] == [
+        ("I1", ("O1",), (), ("G1",)), ("I2", ("O1",), ("I1",), ("G1",)),
+        ("I3", ("O2",), ("I7",), ("G1",))]
+    assert [(g.question, g.outcome_ids) for g in found.gaps] == [("Где отчёт?", ("O1", "O2"))]
+
+
+def test_the_judge_adds_dependencies_only_between_outcomes():
+    """Судья зависимостей ставит только «задача после задачи другого итога» — с новой задачи на
+    новую или перенесённую; внутри итога, с перенесённой и на неизвестную — мимо."""
+    answer = combined([cut_of("O1", issue("I1"), issue("I2", "Выдача")),
+                       cut_of("O2", issue("I1", "Отчёт", outcomes=("O2",)))], fixed=["I9"])
+    found = dependencies_of({"dependencies": [
+        {"issue_id": "I3", "depends_on": ["I1", "I9", "I3", "I8"]},
+        {"issue_id": "I2", "depends_on": ["I1"]},
+        {"issue_id": "I9", "depends_on": ["I3"]}]}, answer, {"I9": ["O3"]})
+    assert [(i.name, i.depends_on) for i in found.issues] == [
+        ("I1", ()), ("I2", ()), ("I3", ("I1", "I9"))]
+    with pytest.raises(BadAnswer, match="dependencies"):
+        dependencies_of({}, answer, {})
+
+
+def test_dependencies_between_outcomes_in_a_circle_make_the_answer_unfit_and_blocks_pass_on():
+    answer = combined([cut_of("O1", issue("I1", blocked_by=["Q2"])),
+                       cut_of("O2", issue("I1", "Отчёт", outcomes=("O2",)))])
+    with pytest.raises(BadAnswer, match="по кругу"):
+        dependencies_of({"dependencies": [{"issue_id": "I1", "depends_on": ["I2"]},
+                                          {"issue_id": "I2", "depends_on": ["I1"]}]}, answer, {})
+    found = dependencies_of({"dependencies": [{"issue_id": "I2", "depends_on": ["I1"]}]},
+                            answer, {})
+    assert [i.blocked_by for i in found.issues] == [("Q2",), ("Q2",)]
+
+
+def test_a_gap_naming_only_a_foreign_outcome_is_not_retargeted_to_this_one():
+    """Пробел назвал чужой итог — он не про этот: не держит его задачи и отбрасывается. Не
+    назвал ни одного — про итог, который режут."""
+    answer = cut_of("O1", issue(), gaps=[
+        {"question": "Где отчёт?", "reason": "", "outcome_ids": ["O2"]},
+        {"question": "Сколько хранить?", "reason": ""}])
+    assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
+        ("Сколько хранить?", ("O1",))]
+    assert answer.issues[0].blocked_by == ("G1",)

@@ -4,6 +4,8 @@ You are given:
 - the IDEA;
 - OPEN QUESTIONS and PROPOSALS;
 - accepted ADRs;
+- accepted PROJECT DECISIONS: decisions of earlier councils of the project that the human marked
+  as relevant to this IDEA;
 - CONSTRAINTS and RISKS;
 - independently formed OUTCOME candidates.
 
@@ -19,16 +21,34 @@ You do not make new product or architectural decisions.
 
 ## What an OUTCOME is
 
-An OUTCOME is a concrete, observable state of the system after the accepted
-decisions are implemented.
+An OUTCOME is an observable state of the system after the accepted decisions
+are implemented: what the user sees, what the API returns, how the system
+behaves for its other parts and over time. It can be verified without reading
+the code.
 
 An OUTCOME describes what the system must do, allow, prevent
-or guarantee.
+or guarantee — not how it is built inside.
 
-An OUTCOME may include several related behaviors.
+How to implement it — tables, fields, components, routes, hooks, how the parts
+of the code fit together — is not part of an OUTCOME. It is discussed
+separately, at implementation, after the council. Technical implementation
+enters an OUTCOME only when the human has set it: an accepted ADR itself fixes
+the technical detail — the human wrote it in the brief, in their own variant,
+or chose a variant that contains it.
 
-Split OUTCOMES if they can reasonably be specified,
-implemented or verified independently.
+An OUTCOME is one situation or one rule as an observer sees it: the user on a
+screen, another part of the system through the API, the system's behavior over
+time. It may include several related behaviors. It is what the human accepts
+as a whole. Every observable behavior is described in exactly one OUTCOME.
+
+An OUTCOME IMPLEMENTS a decision (`adr_ids`) when the decision is about its
+situation or rule and becomes observable there; it RELIES ON a decision
+(`relies_on_adr_ids`) when another OUTCOME implements it but this OUTCOME's
+behavior depends on it. Every accepted ADR is implemented by exactly one
+OUTCOME; any number may rely on it. For every implemented ADR, `adr_notes`
+has one line: what exactly follows from that decision in the OUTCOME's
+behavior. Accepted PROJECT DECISIONS the behavior relies on are listed in
+`project_decision_ids`, never in `adr_ids`; only `active` ones bind.
 
 Write it in plain, concrete words: `title` is a short name of the state,
 `behavior` is what the system does in that state.
@@ -41,6 +61,14 @@ For each proposed OUTCOME, check:
 - whether it uses an unaccepted PROPOSAL as a decision;
 - whether it adds new requirements;
 - whether it introduces new architectural decisions;
+- whether it describes implementation — tables, fields, components, routes, hooks — that the
+  human has not set;
+- for every ADR in `adr_ids`: compare the decision with its line in `adr_notes` and with the
+  behavior. The line must follow from the decision itself. If the line describes something the
+  decision does not say — the decision was attached to the wrong OUTCOME — move the decision to
+  the OUTCOME whose situation it is about; this one at most relies on it;
+- whether the decisions of other OUTCOMES its behavior depends on are in `relies_on_adr_ids`;
+- whether the project decisions it relies on are in `project_decision_ids`;
 - whether it takes CONSTRAINTS into account correctly;
 - whether it invents handling of RISKS;
 - whether it contains ungrounded acceptance criteria;
@@ -54,12 +82,14 @@ Independent agents may group the same behavior differently.
 
 Compare the OUTCOME boundaries.
 
-Merge OUTCOMES if they describe parts of one coherent
-change that have no independent meaning for implementation
-or verification.
+Merge OUTCOMES if they describe the same situation or rule — the same screen
+state, the same message, the same response — or parts the human cannot accept
+separately.
 
-Split OUTCOMES if their behavior can be independently
-specified, implemented or verified.
+Split an OUTCOME if its parts can be accepted separately and each part makes
+sense on its own to the observer.
+
+Do not split or merge OUTCOMES by how the work will be implemented.
 
 Do not prefer a larger or smaller number of OUTCOMES for its own sake.
 
@@ -119,8 +149,10 @@ wording, do not drop a gap because of it:
 - a long gap — keep one sentence and at most one short condition with the ID of the decision it
   rests on; move the rest into `reason`.
 
-Drop a gap whose answer already follows unambiguously from the accepted ADRs, and a gap that can
-be decided locally during implementation without changing the behavior of the OUTCOME.
+Drop a gap whose answer already follows unambiguously from the accepted ADRs, and a gap about how
+to implement the OUTCOME rather than how the system behaves: storage structures, APIs and their
+routes, components, how the parts of the code fit together and similar details are decided
+separately, after the council.
 
 ## 5. Acceptance criteria
 
@@ -131,6 +163,8 @@ Check that every criterion:
 - follows from the IDEA or the accepted ADRs;
 - does not introduce a new requirement;
 - does not prescribe unapproved architecture;
+- can be checked from outside the code and names no tables, fields, hooks, functions or files,
+  unless the human has set that technical detail;
 - contains no invented thresholds or deadlines.
 
 If a criterion is ungrounded, remove it.
@@ -143,7 +177,7 @@ record a gap.
 After checking the individual OUTCOMES, assess the coverage of the whole IDEA.
 
 Check:
-- whether all accepted ADRs are taken into account;
+- whether every accepted ADR is implemented by exactly one OUTCOME — or is in `touches`;
 - whether all necessary behavior changes are represented;
 - whether there are duplicate OUTCOMES;
 - whether significant constraints have been lost;
@@ -151,8 +185,12 @@ Check:
 
 Do not create new behavior for the sake of formal coverage.
 
-If an accepted ADR does not require a separate OUTCOME, it may be
-taken into account as part of another OUTCOME or as its constraint.
+If an accepted ADR does not require a separate OUTCOME, it is implemented by
+the OUTCOME whose situation it is about; other OUTCOMES that depend on it rely
+on it. It is never implemented by two OUTCOMES.
+
+An answer in which an accepted ADR is implemented by no OUTCOME or by two, or
+an implemented ADR has no line in `adr_notes`, is rejected.
 
 ## Language
 
@@ -169,13 +207,17 @@ developed already. They are fixed:
 - do not return them, do not change them and do not repeat their behavior in a new OUTCOME;
 - assemble OUTCOMES only for what they do not cover: the accepted ADRs no FIXED OUTCOME lists,
   and the OPEN QUESTIONS;
-- a new OUTCOME may rely on an ADR a FIXED OUTCOME lists, if it needs that decision too.
+- an ADR a FIXED OUTCOME implements belongs to it: a new OUTCOME does not implement it, but may
+  rely on it.
 
 If a new ADR — one that no FIXED OUTCOME lists — changes the behavior, the boundaries or the
 acceptance criteria of a FIXED OUTCOME, do not rewrite that OUTCOME: report it in `touches`, with
 the OUTCOME id, the ADRs that touch it and why. The human decides whether to keep the OUTCOME as
-it is or to assemble it again. Do not report a touch when a new ADR only adds something next to a
-FIXED OUTCOME without changing it.
+it is or to assemble it again. A new ADR about the same situation or rule as a FIXED OUTCOME
+changes it: report the touch, do not create a new OUTCOME next to it. An ADR reported in
+`touches` is covered by that report and is not put into a new OUTCOME. Until the human decides,
+nobody implements it: no OUTCOME relies on it either. Do not report a touch when
+a new ADR adds a different behavior: that is a new OUTCOME.
 
 ## Response format
 
@@ -188,6 +230,12 @@ Return only JSON:
       "title": "Knowledge base search",
       "behavior": "The user can find knowledge base articles through the chosen search mechanism.",
       "adr_ids": ["ADR-2", "ADR-3"],
+      "adr_notes": {
+        "ADR-2": "What follows from ADR-2 in this behavior.",
+        "ADR-3": "What follows from ADR-3 in this behavior."
+      },
+      "relies_on_adr_ids": ["ADR-1"],
+      "project_decision_ids": ["ADR-0007"],
       "constraint_ids": ["F4"],
       "risk_ids": [],
       "acceptance_criteria": [
@@ -219,15 +267,20 @@ in the result for the user.
 
 Before answering, check that:
 
-- every OUTCOME describes concrete system behavior;
-- the decomposition is grounded in the independence of the changes;
+- every OUTCOME describes observable system behavior, not its implementation;
+- every OUTCOME is something the human can accept as a whole, and no behavior is described in
+  two OUTCOMES;
 - all decisions are traceable to accepted ADRs;
 - unaccepted PROPOSALS are not used as decisions;
 - no new decisions or requirements have appeared;
 - acceptance criteria are grounded;
 - the blocks match real dependencies;
 - every gap is one neutral question without answer options;
-- all accepted ADRs are taken into account;
+- every accepted ADR is implemented by exactly one OUTCOME — or is in `touches` — and has a line
+  in its `adr_notes` that follows from the decision itself;
+- every OUTCOME lists in `relies_on_adr_ids` the decisions of other OUTCOMES its behavior
+  depends on;
+- project decisions are listed in `project_decision_ids`, not in `adr_ids`;
 - the result is not based on agent voting.
 
 ## IDEA
@@ -241,6 +294,15 @@ Before answering, check that:
 ## ACCEPTED ADRS
 
 {{accepted_adrs}}
+
+## ACCEPTED PROJECT DECISIONS
+
+Decisions of earlier councils of the project that the human marked for this IDEA: ID, the idea
+and the question they belong to, what was decided, `status` (`active`, `under_review` — a
+question grew from it and is not decided yet, `superseded` — replaced by `superseded_by`),
+`relevance` and `reason`. An empty list means there are no such decisions.
+
+{{accepted_decisions}}
 
 ## FIXED OUTCOMES
 

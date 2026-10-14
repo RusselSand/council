@@ -10,6 +10,16 @@
 Закреплённые итоги (готовые, с теми же решениями) модели не возвращают: если новое решение их
 задевает, они говорят об этом в touches — какой итог, какие решения и почему. Пометка — только про
 закреплённый итог и только с решениями, которых в нём нет: остальное отбрасывается.
+
+Итог реализует решения (adr_ids) и опирается на решения (relies_on_adr_ids). Реализуемые
+раскладываются по итогам: каждое принятое решение реализует ровно один итог (новый или
+закреплённый) или его называет пометка о закреплённом. Решение, которое не реализует ни один итог
+или реализуют два, — негодный ответ. Опираться на решение может сколько угодно итогов: так итог,
+который зависит от решения другого итога, его не теряет. На каждое реализуемое решение у итога
+есть строка — что именно из него следует в его поведении (adr_notes); без неё итог негодный: по
+этим строкам видно, если решение приписали не тому итогу. Итог ссылается и на прошлые решения
+проекта, на которые опирается его поведение (project_decision_ids): номер — из отобранных для
+потока, чужой отбрасывается.
 """
 
 import json
@@ -25,7 +35,10 @@ from .slicing import BadAnswer
 TITLE_MAX = 200
 BEHAVIOR_MAX = 2000
 CRITERION_MAX = 600
+NOTE_MAX = 600
 ADR_ID = re.compile(r"ADR[-\s]?(\d+)", re.IGNORECASE)
+# Номер решения проекта из каталога заметок: «ADR-0007»; без нулей — то же решение.
+PROJECT_ID = re.compile(r"\s*([A-Za-z]+)-0*(\d+)\s*")
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,12 @@ class Context:
     questions: Mapping[str, str] = field(default_factory=dict)
     # Закреплённые итоги: номер — решения, на которых он стоит.
     kept: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    # Прошлые решения проекта, отобранные для потока: их номера из каталога.
+    project_decisions: frozenset[str] = frozenset()
+
+    def adrs_of_kept(self) -> frozenset[str]:
+        """Решения, которые реализуют закреплённые итоги."""
+        return frozenset(adr for adrs in self.kept.values() for adr in adrs)
 
 
 @dataclass(frozen=True)
@@ -76,6 +95,12 @@ class Candidate:
     criteria: tuple[str, ...]
     blocked_by: tuple[str, ...]
     gaps: tuple[Gap, ...]
+    # Прошлые решения проекта, на которые опирается его поведение.
+    project_decision_ids: tuple[str, ...] = ()
+    # Решения потока, которые реализуют другие итоги, а этот на них опирается.
+    relies_on: tuple[str, ...] = ()
+    # На каждое реализуемое решение — что из него следует в поведении итога: (ADR, строка).
+    notes: tuple[tuple[str, str], ...] = ()
 
 
 def text_of(value: object, limit: int, what: str) -> str:
@@ -93,6 +118,35 @@ def adrs_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
     names = [f"ADR-{int(match.group(1))}" for match in found if match]
     return tuple(sorted({name for name in names if name in allowed},
                         key=lambda name: int(name.split("-")[1])))
+
+
+def project_decisions_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
+    """Номера решений проекта из ответа — как в каталоге; «ADR-7» — то же, что «ADR-0007».
+    Чужой номер отбрасывается."""
+    def key(text: str) -> tuple[str, int] | None:
+        found = PROJECT_ID.fullmatch(text)
+        return (found.group(1).upper(), int(found.group(2))) if found else None
+    known = {key(name): name for name in allowed if key(name) is not None}
+    items = value if isinstance(value, list) else []
+    found = (known.get(key(item)) for item in items if isinstance(item, str))
+    return tuple(sorted({name for name in found if name is not None}))
+
+
+def notes_of(value: object, adrs: tuple[str, ...], what: str) -> tuple[tuple[str, str], ...]:
+    """Строки «что следует из решения» — по одной на каждое реализуемое решение; строки к чужим
+    решениям отбрасываются. Нет строки к реализуемому решению — итог негодный: номер без
+    объяснения не показывает, то ли решение приписали этому итогу."""
+    given = value if isinstance(value, dict) else {}
+    found: dict[str, str] = {}
+    for key, text in given.items():
+        match = ADR_ID.fullmatch(key.strip()) if isinstance(key, str) else None
+        line = reason_of(text)
+        if match and line and len(line) <= NOTE_MAX:
+            found.setdefault(f"ADR-{int(match.group(1))}", line)
+    missing = [adr for adr in adrs if adr not in found]
+    if missing:
+        raise BadAnswer(f"{what}: не сказано, что следует из {', '.join(missing)}")
+    return tuple((adr, found[adr]) for adr in adrs)
 
 
 def criteria_of(value: object) -> tuple[str, ...]:
@@ -122,14 +176,19 @@ def candidate_of(item: object, context: Context, what: str) -> Candidate:
             gaps.append(gap)
         elif known in context.open_questions:
             blocked.add(known)   # «пробел» — открытый вопрос отбора: он итог и держит
+    adrs = adrs_in(item.get("adr_ids"), context.adrs)
     return Candidate(
         text_of(item.get("title"), TITLE_MAX, f"{what}, title"),
         text_of(item.get("behavior"), BEHAVIOR_MAX, f"{what}, behavior"),
-        adrs_in(item.get("adr_ids"), context.adrs),
+        adrs,
         fragments_in(item.get("constraint_ids"), context.constraints),
         fragments_in(item.get("risk_ids"), context.risks),
         criteria_of(item.get("acceptance_criteria")),
-        tuple(sorted(blocked)), tuple(gaps))
+        tuple(sorted(blocked)), tuple(gaps),
+        project_decisions_in(item.get("project_decision_ids"), context.project_decisions),
+        tuple(adr for adr in adrs_in(item.get("relies_on_adr_ids"), context.adrs)
+              if adr not in adrs),
+        notes_of(item.get("adr_notes"), adrs, what))
 
 
 def outcome_list(data: dict, context: Context) -> list[Candidate]:
@@ -151,7 +210,43 @@ def assembly_of(data: dict, context: Context) -> Assembly:
             problems.append(str(exc))
     if problems and not valid:
         raise BadAnswer(problems[0])
-    return Assembly(tuple(valid), touches_of(data.get("touches"), context))
+    assembly = Assembly(tuple(valid), touches_of(data.get("touches"), context))
+    spread(assembly, context)
+    return assembly
+
+
+def spread(assembly: Assembly, context: Context) -> None:
+    """Каждое принятое решение реализует ровно один итог — новый или закреплённый, — или его
+    называет ровно одна пометка о закреплённом итоге, который оно задевает: пометка — тоже место
+    решения, иначе, оставь человек закреплённый итог, решение оказалось бы в двух. Решение,
+    которое реализуют два итога (или итог и пометка, или две пометки) или ни один, — негодный
+    ответ; опираться на него (relies_on) могут сколько угодно. Закреплённые итоги между собой не
+    сверяются: их уже утверждали."""
+    owner: dict[str, str] = {adr: name for name, adrs in context.kept.items() for adr in adrs}
+    twice: set[str] = set()
+    claims = [*(adr for outcome in assembly.outcomes for adr in outcome.adr_ids),
+              *(adr for touch in assembly.touches for adr in touch.adr_ids)]
+    for adr in claims:
+        if adr in owner:
+            twice.add(adr)
+        owner[adr] = "ответ"
+    if twice:
+        raise BadAnswer(f"решения реализуют два итога: {', '.join(by_number(twice))}")
+    # Решение, которое называет только пометка, пока никто не реализует: человек может оставить
+    # закреплённый итог как есть — и решения не будет нигде. Опираться на него нельзя.
+    implemented = {*context.adrs_of_kept(), *(adr for o in assembly.outcomes for adr in o.adr_ids)}
+    pending = {adr for touch in assembly.touches for adr in touch.adr_ids} - implemented
+    leaning = {adr for o in assembly.outcomes for adr in o.relies_on} & pending
+    if leaning:
+        raise BadAnswer("итог опирается на решения, которые называет только пометка: "
+                        f"{', '.join(by_number(leaning))}")
+    missing = context.adrs - set(owner)
+    if missing:
+        raise BadAnswer(f"решения не реализует ни один итог: {', '.join(by_number(missing))}")
+
+
+def by_number(adrs: set[str] | frozenset[str]) -> list[str]:
+    return sorted(adrs, key=lambda name: int(name.split("-")[1]))
 
 
 def touches_of(value: object, context: Context) -> tuple[Touch, ...]:
@@ -181,6 +276,9 @@ def as_prompt(candidate: Candidate) -> dict:
     """Итог для судьи — в той же форме, в какой его просили у участников."""
     return {"title": candidate.title, "behavior": candidate.behavior,
             "adr_ids": list(candidate.adr_ids),
+            "adr_notes": dict(candidate.notes),
+            "relies_on_adr_ids": list(candidate.relies_on),
+            "project_decision_ids": list(candidate.project_decision_ids),
             "constraint_ids": [f"F{i}" for i in candidate.constraint_ids],
             "risk_ids": [f"F{i}" for i in candidate.risk_ids],
             "acceptance_criteria": list(candidate.criteria),

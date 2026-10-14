@@ -43,8 +43,9 @@ class StepName(StrEnum):
     decision_judge = "decision_judge"        # судья сводит их анализы в один итог по вопросу
     outcome_discovery = "outcome_discovery"  # участники собирают решения в изменения системы
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
-    issue_discovery = "issue_discovery"  # участники нарезают утверждённые итоги на задачи
-    issue_judge = "issue_judge"          # судья сводит их нарезки в итоговый набор задач
+    issue_discovery = "issue_discovery"  # участники нарезают утверждённый итог на задачи
+    issue_judge = "issue_judge"          # судья сводит их нарезки итога в одну
+    issue_dependencies = "issue_dependencies"  # судья ставит зависимости между задачами итогов
     notes_translation = "notes_translation"  # судья переводит заметки на язык документации
 
 
@@ -735,14 +736,21 @@ class Outcome(BaseModel):
     id: str
     title: str
     behavior: str
-    # Принятые решения (ADR-n — n-й вопрос отбора), из которых он следует.
+    # Принятые решения (ADR-n — n-й вопрос отбора), которые он реализует: каждое реализует ровно
+    # один итог.
     adr_ids: list[str] = []
+    # На каждое реализуемое решение — что из него следует в поведении итога.
+    adr_notes: dict[str, str] = {}
+    # Решения, которые реализуют другие итоги, а поведение этого на них опирается.
+    relies_on_adr_ids: list[str] = []
     constraint_ids: list[int] = []
     risk_ids: list[int] = []
     acceptance_criteria: list[str] = []
     # Открытые вопросы потока, без решения которых его поведение не определить.
     blocked_by: list[str] = []
     gaps: list[OutcomeGap] = []
+    # Прошлые решения проекта (номера из каталога заметок), на которые опирается его поведение.
+    project_decision_ids: list[str] = []
 
 
 class OutcomeTouch(BaseModel):
@@ -771,6 +779,9 @@ class OutcomeDiscovery(BaseModel):
     touched: list[OutcomeTouch] = []
     # Принятые решения, не вошедшие ни в один итог.
     uncovered_adr_ids: list[str] = []
+    # Прошлые решения проекта, к которым собирали: номер — отпечаток того, что видели модели
+    # (project.fingerprint). Решение с тех пор поправили — итог на нём не закрепляется.
+    projects: dict[str, str] = {}
     error: str | None = None
 
 
@@ -786,8 +797,8 @@ class IssueGap(BaseModel):
 
 
 class Issue(BaseModel):
-    """Задача для coding agent — законченная часть одного или нескольких утверждённых итогов:
-    кому и зачем (user story), где менять (точки входа и что там сейчас) и что именно сделать
+    """Задача для coding agent — часть одного утверждённого итога: кому и зачем (user story),
+    где менять (точки входа), что меняем (current_state) и что именно сделать, с границами
     (scope). Задача, которой не хватает решения, заблокирована: недостающее не додумывается."""
 
     # I1, I2… по порядку.
@@ -805,7 +816,8 @@ class Issue(BaseModel):
     depends_on: list[str] = []
     # Пробелы нарезки (G-n) и открытые вопросы потока, без решения которых её не сделать.
     blocked_by: list[str] = []
-    # Когда готовы её итоги: их критерии — из итогов, а не от модели, — доходят до агента.
+    # Критерии итогов, которые раньше переносились в задачу; теперь не переносятся — итог готов,
+    # когда готовы все его задачи. Поле — для сохранённых прежде нарезок.
     acceptance_criteria: list[str] = []
 
 

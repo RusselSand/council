@@ -1271,6 +1271,29 @@ describe('Поток: решения и итоги', () => {
     ],
   }
 
+  it('итог показывает прошлые решения проекта, на которые опирается', async () => {
+    const earlier = { adr_id: 'ADR-0001', idea: 'Воркер переживает сбой.', question: 'Где хранить состояние?',
+                      decision: 'Состояние лежит в файлах, потому что так проще.', status: 'active' as const,
+                      superseded_by: null, found_in_code: [], relevance: 'applicable' as const, reason: 'та же память' }
+    const outcomes = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], project_decision_ids: ['ADR-0001'] },
+                                                ASSEMBLED.outcomes[1]] }
+    openStream(() => deciding({ decisions: FIXED, outcomes, project_decisions: [earlier] }))
+    const files = await card('Состояние в файлах')
+    expect(within(files).getByText('решение проекта — Состояние лежит в файлах, потому что так проще.',
+                                   { exact: false })).toBeTruthy()
+  })
+
+  it('итог показывает, что следует из его решений и на какие решения он опирается', async () => {
+    const outcomes = { ...ASSEMBLED, outcomes: [
+      { ...ASSEMBLED.outcomes[0], adr_notes: { 'ADR-1': 'Файлы переживают перезапуск.' } },
+      { ...ASSEMBLED.outcomes[1], relies_on_adr_ids: ['ADR-1'] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes }))
+    expect(within(await card('Состояние в файлах')).getByText('→ Файлы переживают перезапуск.', { exact: false }))
+      .toBeTruthy()
+    expect(within(await card('Замер потерь')).getByText('опирается — Состояние держать в файлах, без базы.',
+                                                        { exact: false })).toBeTruthy()
+  })
+
   it('итог на решении своим вариантом — с его текстом', async () => {
     openStream(() => deciding({ choices: OWN_CHOICE, outcomes: ASSEMBLED, decisions: [
       { question_id: 'Q1', proposal: 'P3', rationale: 'Redis уже есть.', rationale_by: 'human' }, FIXED[1]] }))

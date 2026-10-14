@@ -661,6 +661,8 @@ export const en: Dict = {
   'outcomes.touchedHint': 'New decisions touch kept outcomes — decide for each whether to keep or assemble it again: then the outcomes can be approved.',
   'outcomes.changes': 'changes',
   'outcomes.decisions': 'decisions',
+  'outcomes.project': 'project decision',
+  'outcomes.relies': 'relies on',
   'outcomes.keep': 'keep',
   'outcomes.risks': 'risks',
   'outcomes.doneWhen': 'done when',
@@ -823,6 +825,7 @@ export const en: Dict = {
   'step.outcome_judge': 'Outcome judge',
   'step.issue_discovery': 'Issue cutting',
   'step.issue_judge': 'Issue judge',
+  'step.issue_dependencies': 'Issue dependencies',
 
   'label.idea': 'idea',
   'label.question': 'question',

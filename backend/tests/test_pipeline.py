@@ -10,11 +10,13 @@ from spec_council.figma import FigmaError, link_of
 from spec_council.models import (
     Choice,
     Decision,
+    Issue,
     LabeledFragment,
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
     OutcomeGap,
+    ProjectDecision,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
@@ -785,6 +787,7 @@ DECIDED = [Decision(question_id="Q1", proposal="F2", rationale="Уже есть 
 
 def result_of(title, adrs=(), blocked=(), criteria=("Видно сразу.",)):
     return {"title": title, "behavior": f"{title}: так работает.", "adr_ids": list(adrs),
+            "adr_notes": {adr: f"{title} по {adr}." for adr in adrs},
             "constraint_ids": ["F5"], "risk_ids": [], "acceptance_criteria": list(criteria),
             "blocked_by": list(blocked), "gaps": []}
 
@@ -821,26 +824,56 @@ def test_outcomes_stand_on_the_decisions_and_an_open_question_blocks():
     assert '"sol"' not in judge_prompt and '"fable"' not in judge_prompt
 
 
-def test_the_same_sets_need_no_judge_and_an_uncovered_decision_is_named():
-    same = {"outcomes": [result_of("Поиск", blocked=["Q2"])]}
+def test_the_same_sets_need_no_judge():
+    same = {"outcomes": [result_of("Поиск", adrs=["ADR-1"], blocked=["Q2"])]}
     result, runner = assemble({("outcome_discovery", "sol"): same,
                                ("outcome_discovery", "fable"): same})
     assert {s.name.value: s.state for s in result.steps}["outcome_judge"] == "skipped"
     assert [o.blocked_by for o in result.outcomes] == [["Q2"]]
-    assert result.uncovered_adr_ids == ["ADR-1"]
+    assert result.uncovered_adr_ids == []
     assert sorted(runner.forgotten) == sorted(runner.keys)
 
 
+def test_a_decision_left_out_of_every_outcome_makes_the_answer_unfit():
+    """Каждое решение — ровно в одном итоге: ответ, где решения нет ни в одном, негодный."""
+    same = {"outcomes": [result_of("Поиск", blocked=["Q2"])]}
+    result, _ = assemble({("outcome_discovery", "sol"): same,
+                          ("outcome_discovery", "fable"): same})
+    assert result.state == "failed"
+    assert "решения не реализует ни один итог: ADR-1" in result.error
+
+
+def test_the_judge_and_the_participants_see_the_project_decisions_of_the_stream():
+    decision = ProjectDecision(adr_id="ADR-0007", idea="Прошлая идея", question="Где искать?",
+                               decision="Искать полнотекстом.")
+    # На пересмотре: его видно, но итог на нём не стоит.
+    reviewed = ProjectDecision(adr_id="ADR-0008", decision="Хранить в Notion.",
+                               status="under_review")
+    found = {"outcomes": [result_of("Поиск", adrs=["ADR-1"]) | {
+        "project_decision_ids": ["ADR-7", "ADR-0099", "ADR-0008"]}]}
+    runner, reports = FakeRunner({("outcome_discovery", "sol"): found,
+                                  ("outcome_discovery", "fable"): found}), []
+    result = OutcomeRun("c1", FIND, [SEARCH, WHERE], DECIDED, FOUND, GROUP_FRAGMENTS,
+                        ["sol", "fable"], "fable", runner, reports.append,
+                        accepted=[decision, reviewed]).run()
+    assert [o.project_decision_ids for o in result.outcomes] == [["ADR-0007"]]
+    decisions = section(runner.asked["outcome_discovery", "sol"], "ACCEPTED PROJECT DECISIONS")
+    assert "Искать полнотекстом." in decisions
+
+
 def test_a_judge_answer_without_a_list_fails_the_assembly():
-    result, _ = assemble({("outcome_discovery", "sol"): {"outcomes": [result_of("Поиск")]},
-                          ("outcome_discovery", "fable"): {"outcomes": []},
+    result, _ = assemble({("outcome_discovery", "sol"): {"outcomes": [
+                              result_of("Поиск", adrs=["ADR-1"])]},
+                          ("outcome_discovery", "fable"): {"outcomes": [
+                              result_of("Хранение", adrs=["ADR-1"])]},
                           ("outcome_judge", "fable"): {"coverage": {}}})
     assert result.state == "failed"
     assert "outcomes" in result.error
 
 
 def test_the_same_outcomes_in_another_order_need_no_judge():
-    search, store = result_of("Поиск", blocked=["Q2"]), result_of("Хранение", criteria=("Б.", "А."))
+    search = result_of("Поиск", adrs=["ADR-1"], blocked=["Q2"])
+    store = result_of("Хранение", criteria=("Б.", "А."))
     result, _ = assemble({
         ("outcome_discovery", "sol"): {"outcomes": [search, store]},
         ("outcome_discovery", "fable"): {"outcomes": [result_of("Хранение", criteria=("А.", "Б.")),
@@ -851,7 +884,8 @@ def test_the_same_outcomes_in_another_order_need_no_judge():
 
 
 def test_a_gap_that_repeats_an_open_question_of_the_scope_blocks_by_it():
-    gap = result_of("Хранение базы") | {"gaps": [{"question": "где живёт база", "reason": "нет"}]}
+    gap = result_of("Хранение базы", adrs=["ADR-1"]) | {
+        "gaps": [{"question": "где живёт база", "reason": "нет"}]}
     result, _ = assemble({("outcome_discovery", "sol"): {"outcomes": [gap]},
                           ("outcome_discovery", "fable"): {"outcomes": [gap]}})
     [found] = result.outcomes
@@ -1089,7 +1123,8 @@ def task(id_, title, outcomes=("O1",), **extra):
 
 
 def cut(replies, sources=PROJECT, copy=None, outcomes=APPROVED):
-    runner, reports = FakeRunner(replies), []
+    runner, reports = FakeRunner({("issue_dependencies", "fable"): {"dependencies": []},
+                                  **replies}), []
     stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
                     decisions=DECIDED, proposals=FOUND, outcomes=outcomes)
     result = IssueRun("c1", stream, GROUP_FRAGMENTS,
@@ -1098,41 +1133,83 @@ def cut(replies, sources=PROJECT, copy=None, outcomes=APPROVED):
     return result, runner
 
 
+def by_outcome(on_o1, on_o2):
+    """Ответ модели — по тому, какой итог ей дали резать: итоги режут по одному."""
+    return lambda prompt: on_o1 if json.loads(section(prompt, "OUTCOME"))["id"] == "O1" else on_o2
+
+
+# Итог O2 держит открытый вопрос: его задача заблокирована им.
+STORE = {"issues": [task("I1", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[])]}
+
+
 def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
     judge = {"issues": [task("I7", "Индекс базы"),
                         task("I3", "Выдача ответа", depends_on=["I7"], blocked_by=["G1"])],
-             "gaps": [{"question": "Сколько хранить историю?", "reason": "не решено",
-                       "outcome_ids": ["O1"]}]}
-    result, runner = cut({("issue_discovery", "sol"): {"issues": [task("I1", "Поиск")]},
-                          ("issue_discovery", "fable"): {"issues": [task("I1", "Индекс")]},
-                          ("issue_judge", "fable"): judge})
+             "gaps": [{"question": "Сколько хранить историю?", "reason": "не решено"}]}
+    result, runner = cut({
+        ("issue_discovery", "sol"): by_outcome({"issues": [task("I1", "Поиск")]}, STORE),
+        ("issue_discovery", "fable"): by_outcome({"issues": [task("I1", "Индекс")]}, STORE),
+        ("issue_judge", "fable"): judge})
     assert result.state == "done"
-    assert [(i.id, i.title, i.depends_on, i.blocked_by) for i in result.issues] == [
-        ("I1", "Индекс базы", [], ["G1"]),            # пробел назван для O1 — держит и её
-        ("I2", "Выдача ответа", ["I1"], ["G1"])]
-    assert [(g.id, g.question) for g in result.gaps] == [("G1", "Сколько хранить историю?")]
-    assert result.uncovered_outcome_ids == ["O2"]                  # считает код, не модель
+    assert [(i.id, i.title, i.outcome_ids, i.depends_on, i.blocked_by)
+            for i in result.issues] == [
+        ("I1", "Индекс базы", ["O1"], [], ["G1"]),     # пробел итога O1 — держит и её
+        ("I2", "Выдача ответа", ["O1"], ["I1"], ["G1"]),
+        ("I3", "Хранение", ["O2"], [], ["Q2"])]
+    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
+        ("G1", "Сколько хранить историю?", ["O1"])]
+    assert result.uncovered_outcome_ids == []                       # считает код, не модель
     assert (result.outcomes, result.code) == ("o1", True)
     assert [(s.name, s.commit_sha) for s in result.sources] == [("", "abc123")]
-    prompt = runner.asked["issue_discovery", "sol"]
-    assert '"id": "O2"' in section(prompt, "OUTCOMES")
-    # Открытый вопрос, держащий итог, виден текстом и с вариантами, а не одним номером.
-    outcomes = section(prompt, "OUTCOMES")
-    assert WHERE.text in outcomes and "Notion" in outcomes
-    assert '"id": "ADR-1"' in section(prompt, "ACCEPTED ADRS")
-    assert "Бюджет — до $200." in section(prompt, "CONSTRAINTS AND RISKS")
+    # Последним резали O2: модели видят только его — открытый вопрос, держащий итог, текстом
+    # и с вариантами, а не одним номером.
+    outcome = json.loads(section(runner.asked["issue_discovery", "sol"], "OUTCOME"))
+    assert outcome["id"] == "O2"
+    assert WHERE.text in json.dumps(outcome, ensure_ascii=False) and "Notion" in json.dumps(
+        outcome, ensure_ascii=False)
+    # Судья сводил O1: его решения, ограничения и нарезки участников.
+    prompt = runner.asked["issue_judge", "fable"]
+    assert json.loads(section(prompt, "OUTCOME"))["id"] == "O1"
+    assert '"id": "ADR-1"' in section(prompt, "ACCEPTED ADRS OF THE OUTCOME")
+    assert "Бюджет — до $200." in section(prompt, "CONSTRAINTS AND RISKS OF THE OUTCOME")
     context = section(prompt, "REPOSITORY CONTEXT")
     assert "abc123" in context and context.endswith("КАРТА РЕПОЗИТОРИЯ")
-    assert "Индекс" in section(runner.asked["issue_judge", "fable"],
-                               "INDEPENDENT ISSUE CANDIDATES")
-    # Модели — и участники, и судья — читают один свежий снимок рабочей копии.
+    assert "Индекс" in section(prompt, "INDEPENDENT ISSUE CANDIDATES")
+    # Задачи двух итогов — зависимости между ними ставит судья, видя все задачи.
+    issues = json.loads(section(runner.asked["issue_dependencies", "fable"], "ISSUES"))
+    assert [(i["id"], i["outcome_ids"]) for i in issues] == [
+        ("I1", ["O1"]), ("I2", ["O1"]), ("I3", ["O2"])]
+    # Модели — и участники, и судьи — читают один свежий снимок рабочей копии.
     [place] = set(runner.workspaces.values())
     assert place.name.startswith("council-scan-")
     assert not place.exists()
 
 
-def test_without_a_scan_the_issues_are_cut_without_code_and_the_same_sets_need_no_judge():
+def test_the_dependency_judge_puts_issues_of_one_outcome_after_another():
+    result, _ = cut({("issue_discovery", "sol"): by_outcome({"issues": [task("I1", "Индекс")]},
+                                                            STORE),
+                     ("issue_discovery", "fable"): by_outcome({"issues": [task("I1", "Индекс")]},
+                                                              STORE),
+                     ("issue_dependencies", "fable"): {"dependencies": [
+                         {"issue_id": "I2", "depends_on": ["I1"], "reason": "нужен индекс"}]}},
+                    sources=[])
+    assert [(i.id, i.depends_on) for i in result.issues] == [("I1", []), ("I2", ["I1"])]
+    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
+
+
+def test_issues_of_one_outcome_need_no_dependency_judge():
+    one = APPROVED.model_copy(update={"outcomes": APPROVED.outcomes[:1]})
     same = {"issues": [task("I1", "Поиск")]}
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         sources=[], outcomes=one)
+    assert result.state == "done"
+    steps = {s.name.value: s.state for s in result.steps}
+    assert (steps["issue_judge"], steps["issue_dependencies"]) == ("skipped", "skipped")
+    assert ("issue_dependencies", "fable") not in runner.asked
+
+
+def test_without_a_scan_the_issues_are_cut_without_code_and_the_same_sets_need_no_judge():
+    same = by_outcome({"issues": [task("I1", "Поиск")]}, STORE)
     result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                          sources=[])
     assert result.state == "done"
@@ -1153,7 +1230,7 @@ def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
 
 
 def test_issues_read_every_scanned_repository():
-    same = {"issues": [task("I1", "Поиск")]}
+    same = by_outcome({"issues": [task("I1", "Поиск")]}, STORE)
     result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                          sources=TWO_REPOS)
     assert [(s.name, s.commit_sha, s.dirty) for s in result.sources] == [
@@ -1162,14 +1239,25 @@ def test_issues_read_every_scanned_repository():
     assert "back: abc123" in context and "front: def456" in context
 
 
+def test_an_issue_of_another_outcome_is_not_an_issue_of_this_one():
+    """Итог режут за раз: задача, которая называет чужой итог, отбрасывается, а нарезка,
+    где таких все, — негодный ответ."""
+    wrong = {"issues": [task("I1", "Поиск", outcomes=("O2",))]}
+    result, _ = cut({("issue_discovery", "sol"): by_outcome(wrong, STORE),
+                     ("issue_discovery", "fable"): by_outcome(wrong, STORE)}, sources=[])
+    assert result.state == "failed"
+    assert "ровно одного утверждённого итога" in result.error
+
+
 def test_an_issue_inherits_what_blocks_its_outcomes():
     """Модель забыла, что итог держит открытый вопрос или пробел: задача по нему не «можно
     брать» — блокировки итога переходят к ней, пробел итога становится пробелом нарезки."""
     gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
     outcomes = APPROVED.model_copy(update={"outcomes": [
         APPROVED.outcomes[0].model_copy(update={"gaps": [gap]}), APPROVED.outcomes[1]]})
-    same = {"issues": [task("I1", "Индекс"), task("I2", "Хранение", outcomes=("O2",))],
-            "gaps": [{"question": "Сколько хранить историю?", "reason": "свой"}]}
+    same = by_outcome({"issues": [task("I1", "Индекс")],
+                       "gaps": [{"question": "Сколько хранить историю?", "reason": "свой"}]},
+                      STORE)
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                     sources=[], outcomes=outcomes)
     assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
@@ -1178,24 +1266,21 @@ def test_an_issue_inherits_what_blocks_its_outcomes():
 
 
 def test_a_gap_found_for_an_outcome_holds_every_issue_of_it():
-    """Пробел назван для O1, а задачу по O1 модель им не пометила: он держит и её."""
-    same = {"issues": [task("I1", "Индекс")],
-            "gaps": [{"question": "Сколько хранить историю?", "reason": "",
-                      "outcome_ids": ["O1"]}]}
+    """Пробел найден, пока резали O1, а задачу по O1 модель им не пометила: он держит и её."""
+    same = by_outcome({"issues": [task("I1", "Индекс")],
+                       "gaps": [{"question": "Сколько хранить историю?", "reason": ""}]}, STORE)
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                     sources=[])
-    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"])]
+    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
 
 
 def test_an_issue_inherits_the_decisions_and_limits_of_its_outcomes():
     """Модель не повторила решение и ограничение итога — задача стоит на них всё равно: иначе
     агент сделал бы ей наперекор."""
-    bare = task("I1", "Индекс", adr_ids=[], constraint_ids=[])
-    same = {"issues": [bare]}
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+    bare = by_outcome({"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}, STORE)
+    result, _ = cut({("issue_discovery", "sol"): bare, ("issue_discovery", "fable"): bare},
                     sources=[])
-    [issue] = result.issues
-    assert (issue.adr_ids, issue.constraint_ids) == (["ADR-1"], [5])
+    assert (result.issues[0].adr_ids, result.issues[0].constraint_ids) == (["ADR-1"], [5])
 
 
 def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
@@ -1204,7 +1289,7 @@ def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
     gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
     outcomes = APPROVED.model_copy(update={"outcomes": [
         APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={"gaps": [gap]})]})
-    same = {"issues": [task("I1", "Индекс")]}
+    same = by_outcome({"issues": [task("I1", "Индекс")]}, {"issues": []})
     result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                     sources=[], outcomes=outcomes)
     assert result.uncovered_outcome_ids == ["O2"]
@@ -1216,16 +1301,52 @@ def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
 def test_answers_that_differ_only_in_what_the_outcomes_give_need_no_judge():
     """Один участник повторил решение и ограничение итога, другой — нет: после наследования это
     одна и та же нарезка, судья не нужен."""
-    full = {"issues": [task("I1", "Индекс")]}
-    bare = {"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}
+    full = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
+    bare = by_outcome({"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}, STORE)
     result, _ = cut({("issue_discovery", "sol"): full, ("issue_discovery", "fable"): bare},
                     sources=[])
     assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
 
 
-def test_an_issue_carries_the_acceptance_criteria_of_its_outcomes():
-    """Критерии готовности итога доходят до агента вместе с задачей, а не на усмотрение модели."""
-    same = {"issues": [task("I1", "Индекс")]}
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    sources=[])
-    assert result.issues[0].acceptance_criteria == ["Находит по слову."]
+def test_an_issue_does_not_carry_the_acceptance_criteria_of_its_outcome():
+    """Итог готов, когда готовы все его задачи: его критерии в задачу не переходят."""
+    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         sources=[])
+    assert [issue.acceptance_criteria for issue in result.issues] == [[], []]
+
+
+def test_an_outcome_cut_sees_the_decisions_it_relies_on_and_its_issues_stand_on_them():
+    """Итог опирается на решение другого итога: его задачи видят это решение — с пометкой, что
+    реализует его другой итог, — и стоят на нём."""
+    relying = APPROVED.model_copy(update={"outcomes": [
+        APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={
+            "relies_on_adr_ids": ["ADR-1"]})]})
+    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         sources=[], outcomes=relying)
+    given = section(runner.asked["issue_discovery", "sol"], "ACCEPTED ADRS OF THE OUTCOME")
+    adrs = json.loads(given.split("\n\n", 1)[1])                  # после пояснения о role
+    assert [(adr["id"], adr["role"]) for adr in adrs] == [("ADR-1", "relies_on")]
+    assert [issue.adr_ids for issue in result.issues] == [["ADR-1"], ["ADR-1"]]
+
+
+
+def test_an_issue_may_wait_only_for_carried_issues_of_its_own_outcome():
+    """Режут O2, а перенесённая задача — итога O1: модель её не видит, и ссылка на неё — мимо;
+    порядок между итогами ставит судья зависимостей."""
+    carried = Issue(id="I1", title="Индекс", user_story="As a member, I want an index.",
+                    outcome_ids=["O1"], adr_ids=["ADR-1"])
+    store = {"issues": [task("I2", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[],
+                             depends_on=["I1"])]}
+    runner, reports = FakeRunner({("issue_discovery", "sol"): store,
+                                  ("issue_discovery", "fable"): store,
+                                  ("issue_dependencies", "fable"): {"dependencies": []}}), []
+    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
+                    decisions=DECIDED, proposals=FOUND, outcomes=APPROVED)
+    result = IssueRun("c1", stream, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
+                      reports.append, carried=[carried], cut=["O2"],
+                      copy=copy_as("снимок-1")).run()
+    assert result.state == "done", result.error
+    assert [(i.id, i.outcome_ids, i.depends_on) for i in result.issues] == [
+        ("I1", ["O1"], []), ("I2", ["O2"], [])]

@@ -1,12 +1,14 @@
 """Задачи потока: разбор ответов участников и судьи, проверка ссылок. Без ввода-вывода.
 
-Задача (issue) реализует часть утверждённых итогов: стоит на них и на принятых решениях,
-соблюдает ограничения группы. Ссылки вторичны: чужой номер просто отбрасывается, а задача
-остаётся. Но задача без единого утверждённого итога ничего утверждённого не реализует — она
-отбрасывается. Зависимости — только на задачи того же ответа, без самой себя и без кругов:
-круг — негодный ответ. Номер, который ответ дал двум задачам, — ссылка на неизвестно какую из
-них: такие ссылки не берём. Задачу блокирует пробел того же ответа (G-n) или открытый вопрос
-потока. Пробел, совпавший с открытым вопросом отбора, — блокировка им, с решённым — уже ответ.
+Задача (issue) реализует часть ровно одного утверждённого итога: итоги режут по одному, и
+задачи их не пересобирают. Она стоит на решениях своего итога и соблюдает его ограничения.
+Ссылки вторичны: чужой номер просто отбрасывается, а задача остаётся. Но задача, которая
+называет не свой итог или два итога, отбрасывается. Зависимости в ответе — только на задачи
+того же ответа, без самой себя и без кругов: круг — негодный ответ. Зависимости между задачами
+разных итогов ставит потом судья, видя все задачи разом (dependencies_of). Номер, который ответ
+дал двум задачам, — ссылка на неизвестно какую из них: такие ссылки не берём. Задачу блокирует
+пробел того же ответа (G-n) или открытый вопрос потока. Пробел, совпавший с открытым вопросом
+отбора, — блокировка им, с решённым — уже ответ.
 Список задач может быть и пустым: всё уже реализовано или заблокировано.
 """
 
@@ -60,8 +62,6 @@ class Parent:
     risk_ids: tuple[int, ...] = ()
     blocked_by: tuple[str, ...] = ()
     gaps: tuple[tuple[str, str], ...] = ()
-    # Когда итог готов: его критерии доходят до агента вместе с задачей.
-    criteria: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,8 +88,6 @@ class Candidate:
     depends_on: tuple[str, ...]
     # Открытые вопросы потока и пробелы этого ответа: «G<n>» — n-й из gaps.
     blocked_by: tuple[str, ...]
-    # Критерии готовности её итогов — из итогов, а не от модели.
-    criteria: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,6 +118,17 @@ def outcomes_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
     return tuple(sorted(names & allowed, key=lambda name: int(name[1:])))
 
 
+def about(value: object, context: Context) -> tuple[str, ...]:
+    """Про какие итоги пробел или задача: названные моделью, а если не назвала ни одного и итог
+    в ходе один — про него. Назвала, но только чужие, — ни про какой: чужая ссылка не
+    становится ссылкой на этот итог."""
+    named = [name for name in as_list(value) if isinstance(name, str) and name.strip()]
+    found = outcomes_in(value, context.outcomes)
+    if not found and not named and len(context.outcomes) == 1:
+        return tuple(context.outcomes)
+    return found
+
+
 def name_of(value: object) -> str:
     found = ISSUE_ID.fullmatch(value.strip()) if isinstance(value, str) else None
     return f"I{int(found.group(1))}" if found else ""
@@ -146,11 +155,10 @@ def gaps_of(value: object, context: Context
         if known is not None:
             if known in context.open_questions:
                 refs[n] = known
-                asked.setdefault(known, set()).update(
-                    outcomes_in(item.get("outcome_ids"), context.outcomes))
+                asked.setdefault(known, set()).update(about(item.get("outcome_ids"), context))
             continue
         refs[n] = joined(kept, question, reason_of(item.get("reason")),
-                         outcomes_in(item.get("outcome_ids"), context.outcomes))
+                         about(item.get("outcome_ids"), context))
     return kept, refs, asked
 
 
@@ -198,9 +206,12 @@ def candidate_of(item: object, context: Context, gaps: list[Gap], refs: dict[int
                  what: str) -> Candidate:
     if not isinstance(item, dict):
         raise BadAnswer(f"{what} — не объект")
-    outcome_ids = outcomes_in(item.get("outcome_ids"), context.outcomes)
-    if not outcome_ids:
-        raise BadAnswer(f"{what}: ни одного утверждённого итога")
+    # Итог режут по одному: задача — его, даже если модель его не назвала. Назвала чужой или
+    # два — задача не того итога.
+    named = [name for name in as_list(item.get("outcome_ids")) if isinstance(name, str)]
+    outcome_ids = about(item.get("outcome_ids"), context)
+    if len(outcome_ids) != 1 or len(named) > 1:
+        raise BadAnswer(f"{what}: задача — ровно одного утверждённого итога")
     current = reason_of(item.get("current_state"))
     scope = texts_of(item.get("scope"))
     if not scope:
@@ -272,12 +283,13 @@ def after_blocked(issues: list[Candidate]) -> list[Candidate]:
 
 def inherited(issue: Candidate, gaps: list[Gap], context: Context,
               asked: Mapping[str, set[str]]) -> Candidate:
-    """Задача стоит на том же, на чём её итоги, и её держит то же — модель может забыть это
+    """Задача стоит на том же, на чём её итог, и её держит то же — модель может забыть это
     повторить, а задача без решения не «можно брать», и без решения и ограничений итога агент
-    сделал бы ей наперекор. Решения, ограничения, риски и критерии готовности итога — и у
-    задачи; открытый вопрос итога — в её blocked_by, как и каждый пробел, названный для её
-    итогов, и открытый вопрос, названный пробелом для её итогов. Здесь, при разборе, —
-    чтобы ответы, разные лишь тем, повторили ли они это, сравнивались одинаковыми."""
+    сделал бы ей наперекор. Решения, ограничения и риски итога — и у задачи; открытый вопрос
+    итога — в её blocked_by, как и каждый пробел, названный для её итога, и открытый вопрос,
+    названный пробелом для её итога. Критерии готовности итога в задачу не переходят: итог
+    готов, когда готовы все его задачи. Здесь, при разборе, — чтобы ответы, разные лишь тем,
+    повторили ли они это, сравнивались одинаковыми."""
     parents = [context.parents[name] for name in issue.outcome_ids if name in context.parents]
     adrs = {*issue.adr_ids, *(name for parent in parents for name in parent.adr_ids)}
     blocked = {*issue.blocked_by,
@@ -287,9 +299,8 @@ def inherited(issue: Candidate, gaps: list[Gap], context: Context,
                  if set(gap.outcome_ids) & set(issue.outcome_ids)),
                *(name for name, outcome_ids in asked.items()
                  if outcome_ids & set(issue.outcome_ids))}
-    criteria = dict.fromkeys(text for parent in parents for text in parent.criteria)
     return replace(
-        issue, criteria=tuple(criteria),
+        issue,
         adr_ids=tuple(sorted(adrs, key=lambda name: int(name.split("-")[1]))),
         constraint_ids=tuple(sorted({*issue.constraint_ids,
                                      *(n for parent in parents for n in parent.constraint_ids)})),
@@ -370,7 +381,6 @@ def as_prompt(answer: Answer, fixed: Iterable[str] = ()) -> dict:
             "constraint_ids": [f"F{i}" for i in issue.constraint_ids],
             "risk_ids": [f"F{i}" for i in issue.risk_ids],
             "depends_on": list(issue.depends_on), "blocked_by": list(issue.blocked_by),
-            "outcome_acceptance_criteria": list(issue.criteria),
         } for issue in answer.issues],
         "gaps": [{"id": f"G{n}", "question": gap.question, "reason": gap.reason,
                   "outcome_ids": list(gap.outcome_ids)} for n, gap in enumerate(answer.gaps, 1)],
@@ -406,3 +416,65 @@ def same_issues(answer: Answer) -> str:
                                ensure_ascii=False, sort_keys=True) for issue in data["issues"])
     return json.dumps({"issues": issues, "gaps": sorted(gaps.values())}, ensure_ascii=False,
                       sort_keys=True)
+
+
+def combined(parts: Iterable[Answer], fixed: Iterable[str] = ()) -> Answer:
+    """Нарезки итогов, каждого своим ходом, — в одну. Номера в ответах свои у каждого итога:
+    задачи получают сквозные (их ссылки внутри итога — по ним же), перенесённые задачи (fixed)
+    свои номера сохраняют. Тот же пробел у разных итогов — один пробел про итоги обоих."""
+    taken = set(fixed)
+    fresh = (f"I{n}" for n in itertools.count(1) if f"I{n}" not in taken)
+    issues: list[Candidate] = []
+    gaps: list[Gap] = []
+    for part in parts:
+        names = {issue.name: next(fresh) for issue in part.issues if issue.name}
+        places = {f"G{n}": joined(gaps, gap.question, gap.reason, gap.outcome_ids)
+                  for n, gap in enumerate(part.gaps, 1)}
+        for issue in part.issues:
+            issues.append(replace(
+                issue, name=names.get(issue.name) or next(fresh),
+                depends_on=tuple(names.get(name, name) for name in issue.depends_on),
+                blocked_by=tuple(sorted(places.get(name, name) for name in issue.blocked_by))))
+    return Answer(tuple(issues), tuple(gaps))
+
+
+def dependencies_prompt(answer: Answer, carried: Iterable[Mapping]) -> list[dict]:
+    """Все задачи для судьи зависимостей: перенесённые и новые, с их итогом и зависимостями."""
+    return [*({"id": issue["id"], "outcome_ids": list(issue["outcome_ids"]),
+               "title": issue["title"], "user_story": issue["user_story"],
+               "scope": list(issue["scope"]), "depends_on": list(issue["depends_on"]),
+               "fixed": True} for issue in carried),
+            *({"id": issue.name, "outcome_ids": list(issue.outcome_ids), "title": issue.title,
+               "user_story": issue.user_story, "main_entry_points": list(issue.entry_points),
+               "current_state": issue.current_state, "scope": list(issue.scope),
+               "depends_on": list(issue.depends_on), "fixed": False}
+              for issue in answer.issues)]
+
+
+def dependencies_of(data: dict, answer: Answer,
+                    fixed: Mapping[str, Iterable[str]]) -> Answer:
+    """Зависимости между задачами разных итогов от судьи: какая новая задача после каких. Задачи
+    он не меняет. Ссылка — только с новой задачи на задачу другого итога, новую или перенесённую
+    (fixed — номер перенесённой и её итоги); остальное отбрасывается: зависимости внутри итога
+    уже поставила его нарезка, а перенесённые задачи уже в разработке. Круг — негодный ответ.
+    Что держит задачу, держит и задачи после неё."""
+    items = data.get("dependencies")
+    if not isinstance(items, list):
+        raise BadAnswer("нет списка dependencies")
+    outcomes = {issue.name: set(issue.outcome_ids) for issue in answer.issues}
+    outcomes |= {name: set(ids) for name, ids in fixed.items()}
+    added: dict[str, list[str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = name_of(item.get("issue_id"))
+        if name not in outcomes or name in fixed:
+            continue
+        for after in map(name_of, as_list(item.get("depends_on"))):
+            if after in outcomes and after != name and not outcomes[after] & outcomes[name]:
+                added.setdefault(name, []).append(after)
+    issues = [replace(issue, depends_on=tuple(dict.fromkeys(
+        [*issue.depends_on, *added.get(issue.name, [])]))) for issue in answer.issues]
+    if cycle := cycle_of(issues):
+        raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
+    return Answer(tuple(after_blocked(issues)), answer.gaps)
