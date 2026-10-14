@@ -82,7 +82,8 @@ class Agents:
         self.online = {"sol", "fable"}
         # Сборка итогов говорит, что новые решения задевают закреплённые итоги.
         self.touching = False
-        # Сборка итогов при закреплённых нового не собирает; новые задачи зависят от перенесённых.
+        # Сборка итогов при закреплённых нового не собирает: новые решения задевают закреплённые;
+        # новые задачи зависят от перенесённых.
         self.nothing_new = False
         self.depending = False
         self.asked = []
@@ -121,22 +122,26 @@ class Agents:
         if "-outcome_" in key:
             found = self.outcomes(prompt)
             fixed = json.loads(section(prompt, "FIXED OUTCOMES"))
+            # Решение закреплённого итога — его: новый итог его не называет.
+            taken = {adr for outcome in fixed for adr in outcome["adr_ids"]}
+            new = [adr for adr in found["outcomes"][0]["adr_ids"] if adr not in taken]
+            found["outcomes"][0]["adr_ids"] = new
             if self.nothing_new and fixed:
                 found["outcomes"] = []
-            if self.touching and fixed:
-                adrs = [adr["id"] for adr in json.loads(section(prompt, "ACCEPTED ADRS"))]
-                found["touches"] = [{"outcome_id": outcome["id"],
-                                     "adr_ids": [a for a in adrs if a not in outcome["adr_ids"]],
+            if (self.touching or self.nothing_new) and fixed:
+                found["touches"] = [{"outcome_id": outcome["id"], "adr_ids": new,
                                      "reason": "новое решение меняет поведение"}
                                     for outcome in fixed]
             return json.dumps(found)
+        if "-issue_dependencies-" in key:
+            # Новые задачи — после перенесённых, если так велено.
+            issues = json.loads(section(prompt, "ISSUES"))
+            before = [issue["id"] for issue in issues if issue["fixed"]]
+            return json.dumps({"dependencies": [
+                {"issue_id": issue["id"], "depends_on": before} for issue in issues
+                if self.depending and not issue["fixed"]]})
         if "-issue_" in key:
-            found = self.issues(prompt)
-            fixed = json.loads(section(prompt, "FIXED ISSUES"))
-            if self.depending and fixed:
-                for n, issue in enumerate(found["issues"], len(fixed) + 1):
-                    issue["id"], issue["depends_on"] = f"I{n}", [one["id"] for one in fixed]
-            return json.dumps(found)
+            return json.dumps(self.issues(prompt))
         if "-decision_" in key:
             return json.dumps(self.analysis(prompt, judge="-decision_judge-" in key))
         if "-proposal_discovery-" in key:
@@ -183,15 +188,14 @@ class Agents:
 
     @staticmethod
     def issues(prompt):
-        """По задаче на каждый утверждённый итог."""
-        outcomes = json.loads(section(prompt, "OUTCOMES"))
+        """Итог — одна задача."""
+        outcome = json.loads(section(prompt, "OUTCOME"))
         return {"issues": [{
-            "id": f"I{n}", "title": f"{TASK} {outcome['id']}",
+            "id": "I1", "title": f"{TASK} {outcome['id']}",
             "user_story": "As a team, I want answers measured, so that the idea is checked.",
             "main_entry_points": ["app.py"], "current_state": "Меры нет.",
-            "scope": ["Считать долю отвеченных вопросов."], "outcome_ids": [outcome["id"]],
-            "adr_ids": outcome["adr_ids"], "depends_on": [], "blocked_by": []}
-            for n, outcome in enumerate(outcomes, 1)], "gaps": []}
+            "scope": ["Считать долю отвеченных вопросов."],
+            "adr_ids": outcome["adr_ids"], "depends_on": [], "blocked_by": []}], "gaps": []}
 
     def forget(self, keys):
         pass
@@ -840,7 +844,7 @@ def test_an_own_option_is_checked_decided_and_built_on_like_the_councils(agents)
     assert [(adr["id"], adr["proposal_id"], adr["decision"]) for adr in adrs] == [
         ("ADR-1", "P1", OPTION), ("ADR-2", "P3", OWN)]
     assert approves(council_id, "C").status_code == 200
-    assert OWN in section(agents.prompts["issue_discovery"], "ACCEPTED ADRS")
+    assert OWN in section(agents.prompts["issue_discovery"], "ACCEPTED ADRS OF THE OUTCOME")
 
 
 def test_another_own_option_checks_again_and_the_same_one_does_not(agents):
@@ -1183,9 +1187,10 @@ def test_a_ready_outcome_with_the_same_decisions_is_kept_and_only_the_rest_is_as
     issues = streams_of(council_id)["C"].issues
     assert (issues.kept, [i.id for i in issues.issues]) == (["I1"], ["I1", "I2"])
     assert issues.issues[0] == before.issues.issues[0]
-    cut = json.loads(section(agents.prompts["issue_discovery"], "OUTCOMES"))
-    assert [o["id"] for o in cut] == ["O2"]
-    assert '"id": "I1"' in section(agents.prompts["issue_discovery"], "FIXED ISSUES")
+    # Режут итог за раз: прежняя задача — чужого итога, её видит только судья зависимостей.
+    assert json.loads(section(agents.prompts["issue_discovery"], "OUTCOME"))["id"] == "O2"
+    assert json.loads(section(agents.prompts["issue_discovery"], "FIXED ISSUES")) == []
+    assert '"id": "I1"' in section(agents.prompts["issue_dependencies"], "ISSUES")
 
 
 def test_an_outcome_whose_decision_changed_is_not_kept(agents):
@@ -1257,7 +1262,10 @@ def test_outcomes_all_covered_by_carried_issues_are_cut_without_models_at_once(a
     ready_c(council_id)
     agents.nothing_new = True
     added_c(council_id)
-    assert [o.id for o in streams_of(council_id)["C"].outcomes.outcomes] == ["O1"]
+    outcomes = streams_of(council_id)["C"].outcomes
+    assert [o.id for o in outcomes.outcomes] == ["O1"]
+    # Новое решение задевает закреплённый итог; человек оставляет его как есть.
+    assert settles(council_id, outcomes.run, "O1").status_code == 200
     calls = len(agents.asked)
     done = []
     worker = threading.Thread(target=lambda: done.append(approves(council_id, "C")), daemon=True)
@@ -1761,7 +1769,7 @@ def test_approved_outcomes_are_cut_into_issues_without_code_when_there_was_no_sc
     assert issues.code is False
     assert issues.uncovered_outcome_ids == []
     assert agents.workspaces["issue_discovery"] is None
-    assert RESULT in section(agents.prompts["issue_discovery"], "OUTCOMES")
+    assert RESULT in section(agents.prompts["issue_discovery"], "OUTCOME")
     # Те же итоги ещё раз — ничего не меняется; нарезанное повтор не затирает.
     assert approves(council_id, "C").status_code == 200
     assert streams_of(council_id)["C"].issues.run == issues.run

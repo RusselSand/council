@@ -2171,6 +2171,8 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
     return proposal ? [[`ADR-${n + 1}`, { question: question.id, text: textOf(proposal) }] as const] : []
   }))
   const questions = new Map(scope.map(q => [q.id, q.text]))
+  // Прошлые решения проекта, отобранные для потока: итог ссылается на те, на которые опирается.
+  const projects = new Map((stream.project_decisions ?? []).map(d => [d.adr_id, d.decision]))
   const assemble = () => void retry.go(() => startOrFollow(
     () => api.seekOutcomes(council.id, group.id), council, c => streamOf(c, group.id)?.outcomes))
   // Утверждены — по ним уже нарезают задачи: утвердить те же ещё раз — ничего не поменять.
@@ -2213,7 +2215,7 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
       <Slider slides={savedSlides} label={t('outcomes.slides')}>
         {n => (
           <OutcomeCard key={saved[n].id} outcome={saved[n]} n={n + 1} adrs={adrs} questions={questions}
-                       fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept />
+                       projects={projects} fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept />
         )}
       </Slider>
     </>
@@ -2268,7 +2270,8 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
             const outcome = run.outcomes[n]
             return (
               <OutcomeCard key={outcome.id} outcome={outcome} n={n + 1} adrs={adrs} questions={questions}
-                           fragments={fragments} onQuestion={onQuestion} gaps={gaps} kept={run.kept.includes(outcome.id)}
+                           projects={projects} fragments={fragments} onQuestion={onQuestion} gaps={gaps}
+                           kept={run.kept.includes(outcome.id)}
                            touch={touched.find(touch => touch.outcome_id === outcome.id)} busy={settling.busy}
                            onSettle={rebuild => settle(outcome.id, rebuild)} />
             )
@@ -2528,10 +2531,13 @@ function IssueCard({ issue, n, adrs, questions, outcomes, gaps, fragments, onQue
 }
 
 /** Итог: что меняется, на каких решениях стоит, что соблюдать, когда готово — и чего не хватает. */
-function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps, kept = false, touch, busy = false,
-  onSettle }: Readonly<{
+function OutcomeCard({ outcome, n, adrs, questions, projects = new Map(), fragments, onQuestion, gaps, kept = false,
+  touch, busy = false, onSettle }: Readonly<{
   outcome: Outcome; n: number; adrs: Map<string, { question: string; text: string }>
-  questions: Map<string, string>; fragments: Map<number, LabeledFragment>
+  questions: Map<string, string>
+  /** Прошлые решения проекта, отобранные для потока: номер — что решено. */
+  projects?: Map<string, string>
+  fragments: Map<number, LabeledFragment>
   onQuestion: (question: string) => void; gaps: Gaps
   /** Закреплён: был готов, его решения те же — его не пересобирали. touch — его задевают новые решения. */
   kept?: boolean; touch?: OutcomeTouch; busy?: boolean; onSettle?: (rebuild: boolean) => void
@@ -2539,6 +2545,7 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps,
   const { t } = useTranslation()
   const name = `outcome-${outcome.id}`
   const blocked = outcome.blocked_by
+  const earlier = outcome.project_decision_ids ?? []
   let pill = <span className="pill ready">{t('outcomes.ready')}</span>
   if (blocked.length > 0) pill = <span className="pill blocked">{t('outcomes.blocked', { ids: blocked.join(', ') })}</span>
   else if (outcome.gaps.length > 0) pill = <span className="pill open">{t('outcomes.withGaps')}</span>
@@ -2572,7 +2579,7 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps,
       <dl className="outcome-rows">
         <dt>{t('outcomes.changes')}</dt>
         <dd>{outcome.behavior}</dd>
-        {outcome.adr_ids.length + blocked.length > 0 && (
+        {outcome.adr_ids.length + blocked.length + earlier.length > 0 && (
           <>
             <dt>{t('outcomes.decisions')}</dt>
             <dd>
@@ -2581,6 +2588,11 @@ function OutcomeCard({ outcome, n, adrs, questions, fragments, onQuestion, gaps,
                   const adr = adrs.get(id)
                   return <li key={id}><span className="fragment-id">{adr?.question ?? id}</span> {adr?.text ?? id}</li>
                 })}
+                {earlier.map(id => (
+                  <li key={id} className="outcome-project">
+                    <span className="fragment-id">{id}</span> {t('outcomes.project')} — {projects.get(id) ?? id}
+                  </li>
+                ))}
                 {blocked.map(id => (
                   <li key={id} className="outcome-open">
                     <span className="fragment-id">{id}</span> {t('outcomes.open')} — {questions.get(id) ?? id}

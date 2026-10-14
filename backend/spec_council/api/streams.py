@@ -1330,7 +1330,7 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
                           stream.proposals, fragments_of(council, group_of(council, group)),
                           council.participants, council.judge, agents, report,
                           choices=stream.choices or (), repository=repository_map(stream),
-                          design=design_map(stream),
+                          design=design_map(stream), accepted=stream.project_decisions or (),
                           kept=kept_outcomes(stream, stream.scope, stream.decisions))
 
     expired_before(store, council_id, group, assembling(group),
@@ -1785,7 +1785,8 @@ def outcome_run(council: Council, group: str, stream: Stream, runner: Runner,
                       council.participants, council.judge, runner,
                       reporter(store, council.id, assembling(group)),
                       choices=stream.choices or (), repository=repository_map(stream),
-                      design=design_map(stream), kept=kept)
+                      design=design_map(stream), accepted=stream.project_decisions or (),
+                      kept=kept)
 
 
 def find_stream(council: Council, group: str) -> Stream | None:

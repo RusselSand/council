@@ -10,6 +10,11 @@
 Закреплённые итоги (готовые, с теми же решениями) модели не возвращают: если новое решение их
 задевает, они говорят об этом в touches — какой итог, какие решения и почему. Пометка — только про
 закреплённый итог и только с решениями, которых в нём нет: остальное отбрасывается.
+
+Решения раскладываются по итогам: каждое принятое решение — ровно в одном итоге (новом или
+закреплённом) или в пометке о закреплённом. Решение без итога или в двух итогах — негодный ответ.
+Итог ссылается и на прошлые решения проекта, на которые опирается его поведение
+(project_decision_ids): номер — из отобранных для потока, чужой отбрасывается.
 """
 
 import json
@@ -26,6 +31,8 @@ TITLE_MAX = 200
 BEHAVIOR_MAX = 2000
 CRITERION_MAX = 600
 ADR_ID = re.compile(r"ADR[-\s]?(\d+)", re.IGNORECASE)
+# Номер решения проекта из каталога заметок: «ADR-0007»; без нулей — то же решение.
+PROJECT_ID = re.compile(r"\s*([A-Za-z]+)-0*(\d+)\s*")
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,8 @@ class Context:
     questions: Mapping[str, str] = field(default_factory=dict)
     # Закреплённые итоги: номер — решения, на которых он стоит.
     kept: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    # Прошлые решения проекта, отобранные для потока: их номера из каталога.
+    project_decisions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,8 @@ class Candidate:
     criteria: tuple[str, ...]
     blocked_by: tuple[str, ...]
     gaps: tuple[Gap, ...]
+    # Прошлые решения проекта, на которые опирается его поведение.
+    project_decision_ids: tuple[str, ...] = ()
 
 
 def text_of(value: object, limit: int, what: str) -> str:
@@ -93,6 +104,18 @@ def adrs_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
     names = [f"ADR-{int(match.group(1))}" for match in found if match]
     return tuple(sorted({name for name in names if name in allowed},
                         key=lambda name: int(name.split("-")[1])))
+
+
+def project_decisions_in(value: object, allowed: frozenset[str]) -> tuple[str, ...]:
+    """Номера решений проекта из ответа — как в каталоге; «ADR-7» — то же, что «ADR-0007».
+    Чужой номер отбрасывается."""
+    def key(text: str) -> tuple[str, int] | None:
+        found = PROJECT_ID.fullmatch(text)
+        return (found.group(1).upper(), int(found.group(2))) if found else None
+    known = {key(name): name for name in allowed if key(name) is not None}
+    items = value if isinstance(value, list) else []
+    found = (known.get(key(item)) for item in items if isinstance(item, str))
+    return tuple(sorted({name for name in found if name is not None}))
 
 
 def criteria_of(value: object) -> tuple[str, ...]:
@@ -129,7 +152,8 @@ def candidate_of(item: object, context: Context, what: str) -> Candidate:
         fragments_in(item.get("constraint_ids"), context.constraints),
         fragments_in(item.get("risk_ids"), context.risks),
         criteria_of(item.get("acceptance_criteria")),
-        tuple(sorted(blocked)), tuple(gaps))
+        tuple(sorted(blocked)), tuple(gaps),
+        project_decisions_in(item.get("project_decision_ids"), context.project_decisions))
 
 
 def outcome_list(data: dict, context: Context) -> list[Candidate]:
@@ -151,7 +175,32 @@ def assembly_of(data: dict, context: Context) -> Assembly:
             problems.append(str(exc))
     if problems and not valid:
         raise BadAnswer(problems[0])
-    return Assembly(tuple(valid), touches_of(data.get("touches"), context))
+    assembly = Assembly(tuple(valid), touches_of(data.get("touches"), context))
+    spread(assembly, context)
+    return assembly
+
+
+def spread(assembly: Assembly, context: Context) -> None:
+    """Каждое принятое решение — ровно в одном итоге: новом или закреплённом, — или в пометке о
+    закреплённом итоге, который оно задевает. Решение в двух итогах или ни в одном — негодный
+    ответ. Закреплённые итоги между собой не сверяются: их уже утверждали."""
+    owner: dict[str, str] = {adr: name for name, adrs in context.kept.items() for adr in adrs}
+    twice: set[str] = set()
+    for n, outcome in enumerate(assembly.outcomes, 1):
+        for adr in outcome.adr_ids:
+            if adr in owner:
+                twice.add(adr)
+            owner[adr] = f"итог {n}"
+    if twice:
+        raise BadAnswer(f"решения в двух итогах: {', '.join(by_number(twice))}")
+    touched = {adr for touch in assembly.touches for adr in touch.adr_ids}
+    missing = context.adrs - set(owner) - touched
+    if missing:
+        raise BadAnswer(f"решения без итога: {', '.join(by_number(missing))}")
+
+
+def by_number(adrs: set[str] | frozenset[str]) -> list[str]:
+    return sorted(adrs, key=lambda name: int(name.split("-")[1]))
 
 
 def touches_of(value: object, context: Context) -> tuple[Touch, ...]:
@@ -181,6 +230,7 @@ def as_prompt(candidate: Candidate) -> dict:
     """Итог для судьи — в той же форме, в какой его просили у участников."""
     return {"title": candidate.title, "behavior": candidate.behavior,
             "adr_ids": list(candidate.adr_ids),
+            "project_decision_ids": list(candidate.project_decision_ids),
             "constraint_ids": [f"F{i}" for i in candidate.constraint_ids],
             "risk_ids": [f"F{i}" for i in candidate.risk_ids],
             "acceptance_criteria": list(candidate.criteria),
