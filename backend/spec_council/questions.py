@@ -167,18 +167,42 @@ def same_lists(lists: list[list[Candidate]]) -> bool:
     return len({view(candidates) for candidates in lists}) == 1
 
 
+def _asked(fragments: Mapping[int, LabeledFragment]) -> list[LabeledFragment]:
+    return [f for f in fragments.values() if f.label == "question"]
+
+
+def _user_question(candidate: Candidate, fragments: Mapping[int, LabeledFragment],
+                   by_text: Mapping[str, LabeledFragment]) -> LabeledFragment | None:
+    """Вопрос из текста, которым кандидат и является: сам он или сгенерированный вопрос с тем
+    же текстом."""
+    if candidate.source == "user":
+        return fragments.get(candidate.source_question_id)
+    return by_text.get(same_question(candidate.text))
+
+
+def misses_user_questions(candidates: list[Candidate],
+                          fragments: Mapping[int, LabeledFragment]) -> bool:
+    """В списке нет какого-то вопроса из текста. Его вернёт with_user_questions, но
+    классифицировать его там некому — пометку ему ставит судья."""
+    asked = _asked(fragments)
+    by_text = {same_question(f.text): f for f in asked}
+    present = {found.id for c in candidates
+               if (found := _user_question(c, fragments, by_text)) is not None}
+    return any(f.id not in present for f in asked)
+
+
 def with_user_questions(candidates: list[Candidate],
                         fragments: Mapping[int, LabeledFragment]) -> list[Candidate]:
     """Каждый вопрос из текста — в списке, и один раз. Сгенерированный вопрос с тем же текстом
     и есть он: на его месте — вопрос из текста, со связями обоих. Пропущенные возвращаются в
-    конец, по порядку."""
-    asked = [f for f in fragments.values() if f.label == "question"]
+    конец, по порядку — с пометкой «не технический»: судья их тоже пропустил, другой
+    классификации у них нет."""
+    asked = _asked(fragments)
     by_text = {same_question(f.text): f for f in asked}
     result: list[Candidate] = []
     placed: dict[int, int] = {}  # вопрос из текста → его место в result
     for candidate in candidates:
-        fragment = (fragments.get(candidate.source_question_id) if candidate.source == "user"
-                    else by_text.get(same_question(candidate.text)))
+        fragment = _user_question(candidate, fragments, by_text)
         if fragment is None:
             result.append(candidate)
         elif fragment.id in placed:
