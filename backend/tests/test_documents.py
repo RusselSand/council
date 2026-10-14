@@ -446,15 +446,28 @@ def test_a_draft_that_cannot_be_built_says_why(agents, notes_dir):
 
 
 class Translating(Agents):
-    """Судья переводит заметки: каждый текст — с пометкой EN."""
+    """Судья переводит заметки: каждый текст — с пометкой EN. broken — файл задачи он
+    возвращает без перевода. turns — ходы перевода: ключ хода и что в нём переводили."""
+
+    def __init__(self):
+        super().__init__()
+        self.broken = False
+        self.turns = []
+        self.forgotten = []
 
     def ask(self, model, prompt, key, workspace=None):
         if "-notes_translation-" in key:
             self.prompts["notes_translation"] = prompt
             notes = json.loads(prompt.split("## NOTES\n")[1])
+            self.turns.append((key, [n["key"] for n in notes]))
+            if self.broken and any(n["key"].startswith("i:") for n in notes):
+                return json.dumps({"notes": []})
             return json.dumps({"notes": [{"key": n["key"], "text": f"EN {n['text']}"}
                                          for n in notes]})
         return super().ask(model, prompt, key, workspace)
+
+    def forget(self, keys):
+        self.forgotten += [key for key in keys if "-notes_translation-" in key]
 
 
 @pytest.fixture
@@ -481,6 +494,31 @@ def test_notes_in_another_language_are_translated_by_the_judge(notes_dir, transl
     again = streams_of(council_id)["C"].notes_draft
     assert {n.action for n in again.notes} == {"same"}
     assert again.steps == []                                       # судью не звали
+
+
+def test_each_issue_file_is_translated_in_its_own_turn(notes_dir, issues_dir, translating):
+    council_id = free_c()
+    drafts(council_id)
+    draft = streams_of(council_id)["C"].notes_draft
+    assert draft.state == "done" and all(n.text.startswith("EN ") for n in draft.notes)
+    filed = [n.key for n in draft.notes if n.type == "issue"]
+    assert filed
+    assert [keys for _, keys in translating.turns] == [
+        [n.key for n in draft.notes if n.type != "issue"], *([key] for key in filed)]
+
+
+def test_a_failed_issue_turn_keeps_the_notes_turn_paid(notes_dir, issues_dir, translating):
+    council_id = free_c()
+    translating.broken = True
+    drafts(council_id)
+    draft = streams_of(council_id)["C"].notes_draft
+    assert draft.state == "failed" and "нет перевода заметок: i:" in draft.error
+    (notes_turn, _), (issue_turn, _) = translating.turns
+    assert translating.forgotten == [issue_turn]                   # заметки — всё ещё в лотке
+    translating.broken = False
+    drafts(council_id)
+    assert streams_of(council_id)["C"].notes_draft.state == "done"
+    assert translating.turns[2][0] == notes_turn                   # тот же ход — даром из лотка
 
 
 def test_a_language_the_council_has_no_wording_for_is_finished_by_the_judge(
