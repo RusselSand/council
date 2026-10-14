@@ -41,11 +41,14 @@ screen, another part of the system through the API, the system's behavior over
 time. It may include several related behaviors. It is what the human accepts
 as a whole. Every observable behavior is described in exactly one OUTCOME.
 
-Accepted ADRs are distributed among the OUTCOMES: every accepted ADR is listed
-in the `adr_ids` of exactly one OUTCOME, and that OUTCOME describes the
-decision in its `behavior`. Accepted PROJECT DECISIONS the behavior relies on
-are listed in `project_decision_ids`, never in `adr_ids`; only `active` ones
-bind.
+An OUTCOME IMPLEMENTS a decision (`adr_ids`) when the decision is about its
+situation or rule and becomes observable there; it RELIES ON a decision
+(`relies_on_adr_ids`) when another OUTCOME implements it but this OUTCOME's
+behavior depends on it. Every accepted ADR is implemented by exactly one
+OUTCOME; any number may rely on it. For every implemented ADR, `adr_notes`
+has one line: what exactly follows from that decision in the OUTCOME's
+behavior. Accepted PROJECT DECISIONS the behavior relies on are listed in
+`project_decision_ids`, never in `adr_ids`; only `active` ones bind.
 
 Write it in plain, concrete words: `title` is a short name of the state,
 `behavior` is what the system does in that state.
@@ -60,7 +63,11 @@ For each proposed OUTCOME, check:
 - whether it introduces new architectural decisions;
 - whether it describes implementation — tables, fields, components, routes, hooks — that the
   human has not set;
-- whether every ADR it lists is described in its behavior;
+- for every ADR in `adr_ids`: compare the decision with its line in `adr_notes` and with the
+  behavior. The line must follow from the decision itself. If the line describes something the
+  decision does not say — the decision was attached to the wrong OUTCOME — move the decision to
+  the OUTCOME whose situation it is about; this one at most relies on it;
+- whether the decisions of other OUTCOMES its behavior depends on are in `relies_on_adr_ids`;
 - whether the project decisions it relies on are in `project_decision_ids`;
 - whether it takes CONSTRAINTS into account correctly;
 - whether it invents handling of RISKS;
@@ -170,7 +177,7 @@ record a gap.
 After checking the individual OUTCOMES, assess the coverage of the whole IDEA.
 
 Check:
-- whether every accepted ADR is listed in exactly one OUTCOME — or in `touches`;
+- whether every accepted ADR is implemented by exactly one OUTCOME — or is in `touches`;
 - whether all necessary behavior changes are represented;
 - whether there are duplicate OUTCOMES;
 - whether significant constraints have been lost;
@@ -178,11 +185,12 @@ Check:
 
 Do not create new behavior for the sake of formal coverage.
 
-If an accepted ADR does not require a separate OUTCOME, it belongs to the
-OUTCOME whose situation it is about; it is never listed in two OUTCOMES. If
-two OUTCOMES cannot do without the same decision, they are probably one.
+If an accepted ADR does not require a separate OUTCOME, it is implemented by
+the OUTCOME whose situation it is about; other OUTCOMES that depend on it rely
+on it. It is never implemented by two OUTCOMES.
 
-An answer in which an accepted ADR is in no OUTCOME, or in two, is rejected.
+An answer in which an accepted ADR is implemented by no OUTCOME or by two, or
+an implemented ADR has no line in `adr_notes`, is rejected.
 
 ## Language
 
@@ -199,7 +207,8 @@ developed already. They are fixed:
 - do not return them, do not change them and do not repeat their behavior in a new OUTCOME;
 - assemble OUTCOMES only for what they do not cover: the accepted ADRs no FIXED OUTCOME lists,
   and the OPEN QUESTIONS;
-- an ADR a FIXED OUTCOME lists belongs to it: a new OUTCOME does not list it.
+- an ADR a FIXED OUTCOME implements belongs to it: a new OUTCOME does not implement it, but may
+  rely on it.
 
 If a new ADR — one that no FIXED OUTCOME lists — changes the behavior, the boundaries or the
 acceptance criteria of a FIXED OUTCOME, do not rewrite that OUTCOME: report it in `touches`, with
@@ -220,6 +229,11 @@ Return only JSON:
       "title": "Knowledge base search",
       "behavior": "The user can find knowledge base articles through the chosen search mechanism.",
       "adr_ids": ["ADR-2", "ADR-3"],
+      "adr_notes": {
+        "ADR-2": "What follows from ADR-2 in this behavior.",
+        "ADR-3": "What follows from ADR-3 in this behavior."
+      },
+      "relies_on_adr_ids": ["ADR-1"],
       "project_decision_ids": ["ADR-0007"],
       "constraint_ids": ["F4"],
       "risk_ids": [],
@@ -261,8 +275,10 @@ Before answering, check that:
 - acceptance criteria are grounded;
 - the blocks match real dependencies;
 - every gap is one neutral question without answer options;
-- every accepted ADR is in exactly one OUTCOME — or in `touches` — and is described in the
-  behavior of the OUTCOME that lists it;
+- every accepted ADR is implemented by exactly one OUTCOME — or is in `touches` — and has a line
+  in its `adr_notes` that follows from the decision itself;
+- every OUTCOME lists in `relies_on_adr_ids` the decisions of other OUTCOMES its behavior
+  depends on;
 - project decisions are listed in `project_decision_ids`, not in `adr_ids`;
 - the result is not based on agent voting.
 

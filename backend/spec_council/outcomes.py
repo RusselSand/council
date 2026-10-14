@@ -11,10 +11,15 @@
 задевает, они говорят об этом в touches — какой итог, какие решения и почему. Пометка — только про
 закреплённый итог и только с решениями, которых в нём нет: остальное отбрасывается.
 
-Решения раскладываются по итогам: каждое принятое решение — ровно в одном итоге (новом или
-закреплённом) или в пометке о закреплённом. Решение без итога или в двух итогах — негодный ответ.
-Итог ссылается и на прошлые решения проекта, на которые опирается его поведение
-(project_decision_ids): номер — из отобранных для потока, чужой отбрасывается.
+Итог реализует решения (adr_ids) и опирается на решения (relies_on_adr_ids). Реализуемые
+раскладываются по итогам: каждое принятое решение реализует ровно один итог (новый или
+закреплённый) или его называет пометка о закреплённом. Решение, которое не реализует ни один итог
+или реализуют два, — негодный ответ. Опираться на решение может сколько угодно итогов: так итог,
+который зависит от решения другого итога, его не теряет. На каждое реализуемое решение у итога
+есть строка — что именно из него следует в его поведении (adr_notes); без неё итог негодный: по
+этим строкам видно, если решение приписали не тому итогу. Итог ссылается и на прошлые решения
+проекта, на которые опирается его поведение (project_decision_ids): номер — из отобранных для
+потока, чужой отбрасывается.
 """
 
 import json
@@ -30,6 +35,7 @@ from .slicing import BadAnswer
 TITLE_MAX = 200
 BEHAVIOR_MAX = 2000
 CRITERION_MAX = 600
+NOTE_MAX = 600
 ADR_ID = re.compile(r"ADR[-\s]?(\d+)", re.IGNORECASE)
 # Номер решения проекта из каталога заметок: «ADR-0007»; без нулей — то же решение.
 PROJECT_ID = re.compile(r"\s*([A-Za-z]+)-0*(\d+)\s*")
@@ -87,6 +93,10 @@ class Candidate:
     gaps: tuple[Gap, ...]
     # Прошлые решения проекта, на которые опирается его поведение.
     project_decision_ids: tuple[str, ...] = ()
+    # Решения потока, которые реализуют другие итоги, а этот на них опирается.
+    relies_on: tuple[str, ...] = ()
+    # На каждое реализуемое решение — что из него следует в поведении итога: (ADR, строка).
+    notes: tuple[tuple[str, str], ...] = ()
 
 
 def text_of(value: object, limit: int, what: str) -> str:
@@ -118,6 +128,23 @@ def project_decisions_in(value: object, allowed: frozenset[str]) -> tuple[str, .
     return tuple(sorted({name for name in found if name is not None}))
 
 
+def notes_of(value: object, adrs: tuple[str, ...], what: str) -> tuple[tuple[str, str], ...]:
+    """Строки «что следует из решения» — по одной на каждое реализуемое решение; строки к чужим
+    решениям отбрасываются. Нет строки к реализуемому решению — итог негодный: номер без
+    объяснения не показывает, то ли решение приписали этому итогу."""
+    given = value if isinstance(value, dict) else {}
+    found: dict[str, str] = {}
+    for key, text in given.items():
+        match = ADR_ID.fullmatch(key.strip()) if isinstance(key, str) else None
+        line = reason_of(text)
+        if match and line and len(line) <= NOTE_MAX:
+            found.setdefault(f"ADR-{int(match.group(1))}", line)
+    missing = [adr for adr in adrs if adr not in found]
+    if missing:
+        raise BadAnswer(f"{what}: не сказано, что следует из {', '.join(missing)}")
+    return tuple((adr, found[adr]) for adr in adrs)
+
+
 def criteria_of(value: object) -> tuple[str, ...]:
     """Критерии готовности: пустые и слишком длинные отбрасываются, повторы — тоже."""
     texts = (reason_of(item) for item in value) if isinstance(value, list) else ()
@@ -145,15 +172,19 @@ def candidate_of(item: object, context: Context, what: str) -> Candidate:
             gaps.append(gap)
         elif known in context.open_questions:
             blocked.add(known)   # «пробел» — открытый вопрос отбора: он итог и держит
+    adrs = adrs_in(item.get("adr_ids"), context.adrs)
     return Candidate(
         text_of(item.get("title"), TITLE_MAX, f"{what}, title"),
         text_of(item.get("behavior"), BEHAVIOR_MAX, f"{what}, behavior"),
-        adrs_in(item.get("adr_ids"), context.adrs),
+        adrs,
         fragments_in(item.get("constraint_ids"), context.constraints),
         fragments_in(item.get("risk_ids"), context.risks),
         criteria_of(item.get("acceptance_criteria")),
         tuple(sorted(blocked)), tuple(gaps),
-        project_decisions_in(item.get("project_decision_ids"), context.project_decisions))
+        project_decisions_in(item.get("project_decision_ids"), context.project_decisions),
+        tuple(adr for adr in adrs_in(item.get("relies_on_adr_ids"), context.adrs)
+              if adr not in adrs),
+        notes_of(item.get("adr_notes"), adrs, what))
 
 
 def outcome_list(data: dict, context: Context) -> list[Candidate]:
@@ -181,9 +212,10 @@ def assembly_of(data: dict, context: Context) -> Assembly:
 
 
 def spread(assembly: Assembly, context: Context) -> None:
-    """Каждое принятое решение — ровно в одном итоге: новом или закреплённом, — или в пометке о
-    закреплённом итоге, который оно задевает. Решение в двух итогах или ни в одном — негодный
-    ответ. Закреплённые итоги между собой не сверяются: их уже утверждали."""
+    """Каждое принятое решение реализует ровно один итог — новый или закреплённый, — или его
+    называет пометка о закреплённом итоге, который оно задевает. Решение, которое реализуют два
+    итога или ни один, — негодный ответ; опираться на него (relies_on) могут сколько угодно.
+    Закреплённые итоги между собой не сверяются: их уже утверждали."""
     owner: dict[str, str] = {adr: name for name, adrs in context.kept.items() for adr in adrs}
     twice: set[str] = set()
     for n, outcome in enumerate(assembly.outcomes, 1):
@@ -192,11 +224,11 @@ def spread(assembly: Assembly, context: Context) -> None:
                 twice.add(adr)
             owner[adr] = f"итог {n}"
     if twice:
-        raise BadAnswer(f"решения в двух итогах: {', '.join(by_number(twice))}")
+        raise BadAnswer(f"решения реализуют два итога: {', '.join(by_number(twice))}")
     touched = {adr for touch in assembly.touches for adr in touch.adr_ids}
     missing = context.adrs - set(owner) - touched
     if missing:
-        raise BadAnswer(f"решения без итога: {', '.join(by_number(missing))}")
+        raise BadAnswer(f"решения не реализует ни один итог: {', '.join(by_number(missing))}")
 
 
 def by_number(adrs: set[str] | frozenset[str]) -> list[str]:
@@ -230,6 +262,8 @@ def as_prompt(candidate: Candidate) -> dict:
     """Итог для судьи — в той же форме, в какой его просили у участников."""
     return {"title": candidate.title, "behavior": candidate.behavior,
             "adr_ids": list(candidate.adr_ids),
+            "adr_notes": dict(candidate.notes),
+            "relies_on_adr_ids": list(candidate.relies_on),
             "project_decision_ids": list(candidate.project_decision_ids),
             "constraint_ids": [f"F{i}" for i in candidate.constraint_ids],
             "risk_ids": [f"F{i}" for i in candidate.risk_ids],

@@ -358,10 +358,15 @@ def start_outcomes(participants: list[str], judge: str, decisions: list[Decision
 def outcome_print(outcome: Outcome) -> str:
     """Итог, каким его нарезали на задачи: тот же — его задачи переносятся. Номера решений —
     не в счёт: они сдвигаются вместе с отбором, а итог тот же."""
-    # Решения проекта — только когда они есть: отпечаток итога без них тот же, что и раньше.
-    projects = [sorted(outcome.project_decision_ids)] if outcome.project_decision_ids else []
+    # Новые части — только когда они есть: отпечаток итога без них тот же, что и раньше. Строки
+    # о решениях — без номеров ADR: номера сдвигаются вместе с отбором, а итог тот же.
+    extra = {key: value for key, value in (
+        ("projects", sorted(outcome.project_decision_ids)),
+        ("notes", sorted(outcome.adr_notes.values())),
+        ("relies", len(outcome.relies_on_adr_ids))) if value}
     return json.dumps([outcome.title, outcome.behavior, sorted(outcome.acceptance_criteria),
-                       outcome.constraint_ids, outcome.risk_ids, *projects], ensure_ascii=False)
+                       outcome.constraint_ids, outcome.risk_ids, *([extra] if extra else [])],
+                      ensure_ascii=False)
 
 
 def start_issues(participants: list[str], judge: str, outcomes_run: str,
@@ -1207,7 +1212,8 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
             "accepted_decisions": accepted_prompt(self.accepted),
             "fixed_outcomes": as_json([{
                 "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
-                "adr_ids": outcome.adr_ids,
+                "adr_ids": outcome.adr_ids, "adr_notes": outcome.adr_notes,
+                "relies_on_adr_ids": outcome.relies_on_adr_ids,
                 "project_decision_ids": outcome.project_decision_ids,
                 "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
                 "risk_ids": [f"F{i}" for i in outcome.risk_ids],
@@ -1240,7 +1246,8 @@ class OutcomeRun(CouncilRun[OutcomeDiscovery]):
                     risk_ids=list(c.risk_ids), acceptance_criteria=list(c.criteria),
                     blocked_by=list(c.blocked_by),
                     gaps=[OutcomeGap(question=g.question, reason=g.reason) for g in c.gaps],
-                    project_decision_ids=list(c.project_decision_ids))
+                    project_decision_ids=list(c.project_decision_ids),
+                    adr_notes=dict(c.notes), relies_on_adr_ids=list(c.relies_on))
             for n, c in enumerate(chosen.outcomes, first))]
         covered = {name for outcome in outcomes for name in outcome.adr_ids}
         return {"outcomes": outcomes,
@@ -1422,14 +1429,16 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             if outcome.id not in self.cut:
                 continue
             own = [f for f in limits if f.id in {*outcome.constraint_ids, *outcome.risk_ids}]
+            # Решения итога — и те, что он реализует, и те, на которые опирается.
+            rests = (*outcome.adr_ids, *outcome.relies_on_adr_ids)
             context = IssueContext(
                 frozenset({outcome.id}),
-                frozenset(outcome.adr_ids),
+                frozenset(rests),
                 frozenset(f.id for f in own if f.label == "constraint"),
                 frozenset(f.id for f in own if f.label == "risk"),
                 frozenset(q["id"] for q in questions if q["status"] == "open"),
                 {same_question(q.text): q.id for q in self.scope},
-                {outcome.id: Parent(tuple(outcome.adr_ids), tuple(outcome.constraint_ids),
+                {outcome.id: Parent(rests, tuple(outcome.constraint_ids),
                                     tuple(outcome.risk_ids), tuple(outcome.blocked_by),
                                     tuple((g.question, g.reason) for g in outcome.gaps))},
                 fixed)
@@ -1437,7 +1446,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 "idea": self.idea,
                 "outcome": as_json({
                     "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
-                    "adr_ids": outcome.adr_ids,
+                    "adr_ids": outcome.adr_ids, "adr_notes": outcome.adr_notes,
+                    "relies_on_adr_ids": outcome.relies_on_adr_ids,
                     "project_decision_ids": outcome.project_decision_ids,
                     "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
                     "risk_ids": [f"F{i}" for i in outcome.risk_ids],
@@ -1446,7 +1456,9 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                     # номеру модели не поймут, чего не хватает и что от него зависит.
                     "blocked_by": [opened.get(name, name) for name in outcome.blocked_by],
                     "gaps": [gap.model_dump() for gap in outcome.gaps]}),
-                "accepted_adrs": as_json([adr for adr in adrs if adr["id"] in outcome.adr_ids]),
+                "accepted_adrs": as_json([
+                    {**adr, "role": "implements" if adr["id"] in outcome.adr_ids else "relies_on"}
+                    for adr in adrs if adr["id"] in rests]),
                 "accepted_decisions": accepted_prompt(
                     [d for d in self.accepted if d.adr_id in outcome.project_decision_ids]),
                 "fixed_issues": as_json([{

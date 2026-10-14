@@ -786,6 +786,7 @@ DECIDED = [Decision(question_id="Q1", proposal="F2", rationale="Уже есть 
 
 def result_of(title, adrs=(), blocked=(), criteria=("Видно сразу.",)):
     return {"title": title, "behavior": f"{title}: так работает.", "adr_ids": list(adrs),
+            "adr_notes": {adr: f"{title} по {adr}." for adr in adrs},
             "constraint_ids": ["F5"], "risk_ids": [], "acceptance_criteria": list(criteria),
             "blocked_by": list(blocked), "gaps": []}
 
@@ -838,7 +839,7 @@ def test_a_decision_left_out_of_every_outcome_makes_the_answer_unfit():
     result, _ = assemble({("outcome_discovery", "sol"): same,
                           ("outcome_discovery", "fable"): same})
     assert result.state == "failed"
-    assert "решения без итога: ADR-1" in result.error
+    assert "решения не реализует ни один итог: ADR-1" in result.error
 
 
 def test_the_judge_and_the_participants_see_the_project_decisions_of_the_stream():
@@ -1309,3 +1310,18 @@ def test_an_issue_does_not_carry_the_acceptance_criteria_of_its_outcome():
     result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
                          sources=[])
     assert [issue.acceptance_criteria for issue in result.issues] == [[], []]
+
+
+def test_an_outcome_cut_sees_the_decisions_it_relies_on_and_its_issues_stand_on_them():
+    """Итог опирается на решение другого итога: его задачи видят это решение — с пометкой, что
+    реализует его другой итог, — и стоят на нём."""
+    relying = APPROVED.model_copy(update={"outcomes": [
+        APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={
+            "relies_on_adr_ids": ["ADR-1"]})]})
+    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
+    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
+                         sources=[], outcomes=relying)
+    given = section(runner.asked["issue_discovery", "sol"], "ACCEPTED ADRS OF THE OUTCOME")
+    adrs = json.loads(given.split("\n\n", 1)[1])                  # после пояснения о role
+    assert [(adr["id"], adr["role"]) for adr in adrs] == [("ADR-1", "relies_on")]
+    assert [issue.adr_ids for issue in result.issues] == [["ADR-1"], ["ADR-1"]]

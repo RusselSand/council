@@ -277,16 +277,18 @@ export interface DecisionDraft { question_id: string; proposal: string | null; r
 /** Неопределённость, которой нет среди вопросов потока: материал для нового поиска вопросов. */
 export interface OutcomeGap { question: string; reason: string }
 /**
- * Итог — наблюдаемое состояние системы после принятых решений (O1, O2…). adr_ids — на каких
- * решениях стоит (ADR-n — решение по n-му вопросу отбора; каждое — ровно в одном итоге);
- * project_decision_ids — на какие прошлые решения проекта опирается; blocked_by — открытые
- * вопросы, без решения которых его поведение не определить: недостающее не додумывается.
+ * Итог — наблюдаемое состояние системы после принятых решений (O1, O2…). adr_ids — какие
+ * решения он реализует (ADR-n — решение по n-му вопросу отбора; каждое реализует ровно один
+ * итог), adr_notes — что из каждого следует в его поведении; relies_on_adr_ids — решения других
+ * итогов, на которые он опирается; project_decision_ids — на какие прошлые решения проекта
+ * опирается; blocked_by — открытые вопросы, без решения которых его поведение не определить:
+ * недостающее не додумывается.
  */
 export interface Outcome {
   id: string; title: string; behavior: string; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
   acceptance_criteria: string[]; blocked_by: string[]; gaps: OutcomeGap[]
   /** Нет у итогов, собранных раньше. */
-  project_decision_ids?: string[]
+  project_decision_ids?: string[]; adr_notes?: Record<string, string>; relies_on_adr_ids?: string[]
 }
 /** Сборка итогов из решений (decisions — к каким); uncovered_adr_ids — решения, не вошедшие ни в один итог. */
 /** Новое решение задевает закреплённый итог: оставить его как есть или пересобрать — решает человек. */

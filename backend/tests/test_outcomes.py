@@ -21,10 +21,13 @@ CONTEXT = Context(adrs=frozenset({"ADR-1"}), constraints=frozenset({4}),
 
 def outcome(title="Поиск по базе знаний", behavior="Человек находит статью через поиск.",
             **extra):
-    return {"title": title, "behavior": behavior, "adr_ids": ["ADR-1"],
+    """Итог из ответа; строка «что следует» — на каждое реализуемое решение, если не задано."""
+    data = {"title": title, "behavior": behavior, "adr_ids": ["ADR-1"],
             "constraint_ids": ["F4"], "risk_ids": [],
             "acceptance_criteria": ["Запрос возвращает подходящие статьи."],
             "blocked_by": [], "gaps": [], **extra}
+    data.setdefault("adr_notes", {adr: f"Из {adr} следует поиск." for adr in data["adr_ids"]})
+    return data
 
 
 def test_an_outcome_is_read_with_its_links():
@@ -36,7 +39,8 @@ def test_an_outcome_is_read_with_its_links():
     assert found == Candidate(
         "Поиск по базе знаний", "Человек находит статью через поиск.", ("ADR-1", "ADR-3"),
         (4,), (5,), ("Запрос возвращает статьи.",), ("Q2",),
-        (Gap("Кто обновляет индекс?", "без этого нет критерия"),))
+        (Gap("Кто обновляет индекс?", "без этого нет критерия"),),
+        notes=(("ADR-1", "Из ADR 1 следует поиск."), ("ADR-3", "Из adr-3 следует поиск.")))
 
 
 def test_only_an_open_question_blocks():
@@ -66,7 +70,8 @@ def test_the_judge_sees_an_outcome_as_the_participants_were_asked_for_it():
     [found] = outcome_list({"outcomes": [outcome(blocked_by=["Q2"])]}, CONTEXT)
     assert as_prompt(found) == {
         "title": "Поиск по базе знаний", "behavior": "Человек находит статью через поиск.",
-        "adr_ids": ["ADR-1"], "project_decision_ids": [], "constraint_ids": ["F4"],
+        "adr_ids": ["ADR-1"], "adr_notes": {"ADR-1": "Из ADR-1 следует поиск."},
+        "relies_on_adr_ids": [], "project_decision_ids": [], "constraint_ids": ["F4"],
         "risk_ids": [], "acceptance_criteria": ["Запрос возвращает подходящие статьи."],
         "blocked_by": ["Q2"], "gaps": []}
 
@@ -106,9 +111,9 @@ def test_a_touch_names_a_kept_outcome_and_only_decisions_new_to_it():
 def test_every_decision_is_in_exactly_one_outcome():
     """Решения раскладываются по итогам: без итога или в двух — негодный ответ."""
     context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}))
-    with pytest.raises(BadAnswer, match="решения без итога: ADR-3"):
+    with pytest.raises(BadAnswer, match="решения не реализует ни один итог: ADR-3"):
         assembly_of({"outcomes": [outcome()]}, context)
-    with pytest.raises(BadAnswer, match="решения в двух итогах: ADR-1"):
+    with pytest.raises(BadAnswer, match="решения реализуют два итога: ADR-1"):
         assembly_of({"outcomes": [outcome(adr_ids=["ADR-1", "ADR-3"]),
                                   outcome("Отчёт", adr_ids=["ADR-1"])]}, context)
     found = assembly_of({"outcomes": [outcome(), outcome("Отчёт", adr_ids=["ADR-3"])]}, context)
@@ -118,7 +123,7 @@ def test_every_decision_is_in_exactly_one_outcome():
 def test_a_decision_of_a_kept_outcome_is_its_own_and_a_touch_covers_a_new_one():
     context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}),
                       kept={"O1": frozenset({"ADR-1"})})
-    with pytest.raises(BadAnswer, match="в двух итогах: ADR-1"):
+    with pytest.raises(BadAnswer, match="реализуют два итога: ADR-1"):
         assembly_of({"outcomes": [outcome(adr_ids=["ADR-1", "ADR-3"])]}, context)
     assert assembly_of({"outcomes": [outcome(adr_ids=["ADR-3"])]}, context).outcomes
     touched = assembly_of({"outcomes": [], "touches": [
@@ -131,3 +136,26 @@ def test_an_outcome_names_only_project_decisions_chosen_for_the_stream():
     [found] = outcome_list({"outcomes": [outcome(
         project_decision_ids=["ADR-7", "adr-0012", "ADR-0099", "ADR-1"])]}, context)
     assert (found.adr_ids, found.project_decision_ids) == (("ADR-1",), ("ADR-0007", "ADR-0012"))
+
+
+def test_an_outcome_relies_on_decisions_another_one_implements():
+    """Решение реализует один итог, опираться на него могут многие: так итог его не теряет."""
+    context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}))
+    found = assembly_of({"outcomes": [
+        outcome(relies_on_adr_ids=["ADR-3", "ADR-1", "ADR-9"]),
+        outcome("Отчёт", adr_ids=["ADR-3"], relies_on_adr_ids=["ADR-1"]),
+        outcome("Плашка", adr_ids=[], relies_on_adr_ids=["ADR-1", "ADR-3"])]}, context)
+    assert [(o.adr_ids, o.relies_on) for o in found.outcomes] == [
+        (("ADR-1",), ("ADR-3",)), (("ADR-3",), ("ADR-1",)), ((), ("ADR-1", "ADR-3"))]
+
+
+def test_an_implemented_decision_needs_a_line_on_what_follows_from_it():
+    """Без строки «что следует из решения» итог негодный; строки к чужим решениям — мимо."""
+    context = replace(CONTEXT, adrs=frozenset({"ADR-1", "ADR-3"}))
+    with pytest.raises(BadAnswer, match="не сказано, что следует из ADR-3"):
+        outcome_list({"outcomes": [outcome(adr_ids=["ADR-1", "ADR-3"],
+                                           adr_notes={"ADR-1": "Поиск по слову.", "ADR-3": " "})]},
+                     context)
+    [found] = outcome_list({"outcomes": [outcome(adr_ids=["ADR-1", "ADR-3"], adr_notes={
+        "adr-1": "Поиск по слову.", "ADR-3": "Индекс ночью.", "ADR-9": "чужое"})]}, context)
+    assert found.notes == (("ADR-1", "Поиск по слову."), ("ADR-3", "Индекс ночью."))

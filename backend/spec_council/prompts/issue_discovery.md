@@ -84,9 +84,11 @@ If the existing code contradicts an accepted ADR, follow the ADR and say what ch
 
 ## Decisions
 
-The accepted ADRs and PROJECT DECISIONS you are given are the decisions of this OUTCOME. An
-`active` project decision binds the ISSUES as it is; a `superseded` or `under_review` one does not.
-List in `adr_ids` the ADRs the ISSUE relies on.
+The accepted ADRs and PROJECT DECISIONS you are given are the decisions of this OUTCOME. An ADR
+with `role` `implements` is implemented by this OUTCOME; one with `role` `relies_on` is
+implemented by another OUTCOME: the ISSUES of this OUTCOME use it as given and do not implement
+it again. An `active` project decision binds the ISSUES as it is; a `superseded` or
+`under_review` one does not. List in `adr_ids` the ADRs the ISSUE relies on.
 
 Every requirement in `scope` must follow from the OUTCOME, its accepted decisions, its
 CONSTRAINTS or a verified need to change the existing code.
@@ -192,6 +194,10 @@ Before answering, check that:
 {{outcome}}
 
 ## ACCEPTED ADRS OF THE OUTCOME
+
+`role`: `implements` — this OUTCOME implements the decision; `relies_on` — another OUTCOME
+implements it and this one depends on it: its ISSUES use the decision but do not implement it
+again.
 
 {{accepted_adrs}}
 

@@ -658,6 +658,7 @@ export const ru = {
   'outcomes.changes': 'меняется',
   'outcomes.decisions': 'решения',
   'outcomes.project': 'решение проекта',
+  'outcomes.relies': 'опирается',
   'outcomes.keep': 'соблюдать',
   'outcomes.risks': 'риски',
   'outcomes.doneWhen': 'готово, когда',

@@ -94,17 +94,31 @@ Do not merge different OUTCOMES only because they:
 The boundary is defined by the independence of system behavior,
 not by the expected structure of the code.
 
-## Every ADR in exactly one OUTCOME
+## Implementing and relying on ADRs
 
-Accepted ADRs are distributed among the OUTCOMES: every accepted ADR is listed in the
-`adr_ids` of exactly one OUTCOME, never in two. The OUTCOME that lists an ADR describes that
-decision in its `behavior`: an ID in `adr_ids` without the decision in the behavior does not
-count. Other OUTCOMES may behave consistently with that decision, but they do not list it.
+An OUTCOME relates to an accepted ADR in one of two ways:
 
-If two OUTCOMES both need the same decision, decide which situation the decision is about and
-put it there; if the decision cannot be separated from either, they are probably one OUTCOME.
+- it IMPLEMENTS the decision (`adr_ids`): the decision is about this OUTCOME's situation or rule,
+  and this OUTCOME is where it becomes observable;
+- it RELIES ON the decision (`relies_on_adr_ids`): the decision is implemented by another
+  OUTCOME, but this OUTCOME's behavior depends on it — for example, a rule that defines the
+  default target is implemented once, and the table, the filters and the badges rely on it.
 
-An answer in which an accepted ADR is in no OUTCOME, or in two, is rejected.
+Every accepted ADR is implemented by exactly one OUTCOME, never by two. Any number of OUTCOMES
+may rely on it. Do not leave out a decision an OUTCOME relies on: the ISSUES of an OUTCOME see
+only the decisions it implements or relies on.
+
+For every ADR in `adr_ids`, write one line in `adr_notes`: what exactly follows from this
+decision in this OUTCOME's behavior. The line must follow from the decision itself, not only
+from the OUTCOME. If you cannot write such a line, the decision is about another situation: it
+belongs to another OUTCOME, and this one at most relies on it.
+
+If two OUTCOMES would both implement the same decision, decide which situation the decision is
+about: that OUTCOME implements it, the other relies on it. If the decision cannot be separated
+from either, they are probably one OUTCOME.
+
+An answer in which an accepted ADR is implemented by no OUTCOME or by two, or an implemented ADR
+has no line in `adr_notes`, is rejected.
 
 ## Unresolved questions
 
@@ -188,7 +202,8 @@ developed already. They are fixed:
 - do not return them, do not change them and do not repeat their behavior in a new OUTCOME;
 - assemble OUTCOMES only for what they do not cover: the accepted ADRs no FIXED OUTCOME lists,
   and the OPEN QUESTIONS;
-- an ADR a FIXED OUTCOME lists belongs to it: a new OUTCOME does not list it.
+- an ADR a FIXED OUTCOME implements belongs to it: a new OUTCOME does not implement it, but may
+  rely on it.
 
 If a new ADR — one that no FIXED OUTCOME lists — changes the behavior, the boundaries or the
 acceptance criteria of a FIXED OUTCOME, do not rewrite that OUTCOME: report it in `touches`, with
@@ -208,6 +223,11 @@ Return only JSON:
       "title": "Knowledge base search",
       "behavior": "The user can find knowledge base articles through the chosen search mechanism.",
       "adr_ids": ["ADR-2", "ADR-3"],
+      "adr_notes": {
+        "ADR-2": "What follows from ADR-2 in this behavior.",
+        "ADR-3": "What follows from ADR-3 in this behavior."
+      },
+      "relies_on_adr_ids": ["ADR-1"],
       "project_decision_ids": ["ADR-0007"],
       "constraint_ids": ["F4"],
       "risk_ids": [],
@@ -272,8 +292,10 @@ Before answering, check that:
 - every OUTCOME describes observable behavior;
 - every OUTCOME is something the human can accept as a whole, and no behavior is described in
   two OUTCOMES;
-- every accepted ADR is in exactly one OUTCOME — or in `touches` — and is described in the
-  behavior of the OUTCOME that lists it;
+- every accepted ADR is implemented by exactly one OUTCOME — or is in `touches` — and has a line
+  in its `adr_notes` that follows from the decision itself;
+- every OUTCOME lists in `relies_on_adr_ids` the decisions of other OUTCOMES its behavior
+  depends on;
 - project decisions are listed in `project_decision_ids`, not in `adr_ids`;
 - every significant element of behavior is grounded in the IDEA or an ADR;
 - unaccepted PROPOSALS are not used as decisions;

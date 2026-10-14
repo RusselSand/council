@@ -183,6 +183,7 @@ class Agents:
         return {"outcomes": [{
             "title": RESULT, "behavior": "Доля отвеченных вопросов видна команде.",
             "adr_ids": [adr["id"] for adr in adrs], "constraint_ids": ["F4"],
+            "adr_notes": {adr["id"]: f"Мерило по {adr['id']}." for adr in adrs},
             "acceptance_criteria": ["Доля считается по #help."],
             "blocked_by": [q["id"] for q in questions if q["status"] == "open"]}]}
 

@@ -1283,6 +1283,17 @@ describe('Поток: решения и итоги', () => {
                                    { exact: false })).toBeTruthy()
   })
 
+  it('итог показывает, что следует из его решений и на какие решения он опирается', async () => {
+    const outcomes = { ...ASSEMBLED, outcomes: [
+      { ...ASSEMBLED.outcomes[0], adr_notes: { 'ADR-1': 'Файлы переживают перезапуск.' } },
+      { ...ASSEMBLED.outcomes[1], relies_on_adr_ids: ['ADR-1'] }] }
+    openStream(() => deciding({ decisions: FIXED, outcomes }))
+    expect(within(await card('Состояние в файлах')).getByText('→ Файлы переживают перезапуск.', { exact: false }))
+      .toBeTruthy()
+    expect(within(await card('Замер потерь')).getByText('опирается — Состояние держать в файлах, без базы.',
+                                                        { exact: false })).toBeTruthy()
+  })
+
   it('итог на решении своим вариантом — с его текстом', async () => {
     openStream(() => deciding({ choices: OWN_CHOICE, outcomes: ASSEMBLED, decisions: [
       { question_id: 'Q1', proposal: 'P3', rationale: 'Redis уже есть.', rationale_by: 'human' }, FIXED[1]] }))

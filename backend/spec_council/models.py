@@ -736,9 +736,13 @@ class Outcome(BaseModel):
     id: str
     title: str
     behavior: str
-    # Принятые решения (ADR-n — n-й вопрос отбора), из которых он следует: каждое — ровно в
-    # одном итоге.
+    # Принятые решения (ADR-n — n-й вопрос отбора), которые он реализует: каждое реализует ровно
+    # один итог.
     adr_ids: list[str] = []
+    # На каждое реализуемое решение — что из него следует в поведении итога.
+    adr_notes: dict[str, str] = {}
+    # Решения, которые реализуют другие итоги, а поведение этого на них опирается.
+    relies_on_adr_ids: list[str] = []
     constraint_ids: list[int] = []
     risk_ids: list[int] = []
     acceptance_criteria: list[str] = []

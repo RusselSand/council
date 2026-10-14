@@ -2546,6 +2546,8 @@ function OutcomeCard({ outcome, n, adrs, questions, projects = new Map(), fragme
   const name = `outcome-${outcome.id}`
   const blocked = outcome.blocked_by
   const earlier = outcome.project_decision_ids ?? []
+  const relies = outcome.relies_on_adr_ids ?? []
+  const notes = outcome.adr_notes ?? {}
   let pill = <span className="pill ready">{t('outcomes.ready')}</span>
   if (blocked.length > 0) pill = <span className="pill blocked">{t('outcomes.blocked', { ids: blocked.join(', ') })}</span>
   else if (outcome.gaps.length > 0) pill = <span className="pill open">{t('outcomes.withGaps')}</span>
@@ -2579,14 +2581,27 @@ function OutcomeCard({ outcome, n, adrs, questions, projects = new Map(), fragme
       <dl className="outcome-rows">
         <dt>{t('outcomes.changes')}</dt>
         <dd>{outcome.behavior}</dd>
-        {outcome.adr_ids.length + blocked.length + earlier.length > 0 && (
+        {outcome.adr_ids.length + blocked.length + earlier.length + relies.length > 0 && (
           <>
             <dt>{t('outcomes.decisions')}</dt>
             <dd>
               <ul>
                 {outcome.adr_ids.map(id => {
                   const adr = adrs.get(id)
-                  return <li key={id}><span className="fragment-id">{adr?.question ?? id}</span> {adr?.text ?? id}</li>
+                  return (
+                    <li key={id}>
+                      <span className="fragment-id">{adr?.question ?? id}</span> {adr?.text ?? id}
+                      {notes[id] && <span className="outcome-note"> → {notes[id]}</span>}
+                    </li>
+                  )
+                })}
+                {relies.map(id => {
+                  const adr = adrs.get(id)
+                  return (
+                    <li key={id} className="outcome-relies">
+                      <span className="fragment-id">{adr?.question ?? id}</span> {t('outcomes.relies')} — {adr?.text ?? id}
+                    </li>
+                  )
                 })}
                 {earlier.map(id => (
                   <li key={id} className="outcome-project">

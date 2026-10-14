@@ -159,6 +159,10 @@ Before answering, check that:
 
 ## ACCEPTED ADRS OF THE OUTCOME
 
+`role`: `implements` — this OUTCOME implements the decision; `relies_on` — another OUTCOME
+implements it and this one depends on it: its ISSUES use the decision but do not implement it
+again.
+
 {{accepted_adrs}}
 
 ## ACCEPTED PROJECT DECISIONS OF THE OUTCOME

@@ -662,6 +662,7 @@ export const en: Dict = {
   'outcomes.changes': 'changes',
   'outcomes.decisions': 'decisions',
   'outcomes.project': 'project decision',
+  'outcomes.relies': 'relies on',
   'outcomes.keep': 'keep',
   'outcomes.risks': 'risks',
   'outcomes.doneWhen': 'done when',

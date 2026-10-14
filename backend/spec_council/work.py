@@ -160,32 +160,42 @@ def remembered(stream: Stream) -> dict[str, OutcomeDiscovery | IssueDiscovery | 
 def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Decision],
                   released: Iterable[str] = ()) -> list[Outcome]:
     """Итоги, которые закрепляются при новой сборке: были готовы, и каждое их решение — то же
-    (тот же вопрос, вариант и обоснование). Номера решений — по новому отбору: ADR-n — n-й
-    вопрос, и вопросы могли добавить или убрать. released — итоги, которые человек велел
-    пересобрать."""
+    (тот же вопрос, вариант и обоснование): и те, что итог реализует, и те, на которые
+    опирается. Номера решений — по новому отбору: ADR-n — n-й вопрос, и вопросы могли добавить
+    или убрать. released — итоги, которые человек велел пересобрать."""
     before = remembered(stream)["earlier_outcomes"]
     if not isinstance(before, OutcomeDiscovery):
         return []
     now = {decision.question_id: decision for decision in decisions}
     position = {question.id: n for n, question in enumerate(scope, 1)}
+
+    def renumbered(name: str) -> str | None:
+        """ADR-n прежней сборки — по новому отбору; решение уже не то — None."""
+        n = int(name.split("-")[1])
+        entry = before.decisions[n - 1] if 0 < n <= len(before.decisions) else ""
+        question = entry.split(": ", 1)[0]
+        decision = now.get(question)
+        if (decision is None or decision.proposal is None
+                or decisions_key([decision])[0] != entry or question not in position):
+            return None
+        return f"ADR-{position[question]}"
+
+    def by_number(names: Iterable[str]) -> list[str]:
+        return sorted(names, key=lambda name: int(name.split("-")[1]))
+
     kept = []
     for outcome in before.outcomes:
         if outcome.id in set(released) or not outcome_ready(outcome):
             continue
-        adrs = []
-        for name in outcome.adr_ids:
-            n = int(name.split("-")[1])
-            entry = before.decisions[n - 1] if 0 < n <= len(before.decisions) else ""
-            question = entry.split(": ", 1)[0]
-            decision = now.get(question)
-            if (decision is None or decision.proposal is None
-                    or decisions_key([decision])[0] != entry or question not in position):
-                break
-            adrs.append(f"ADR-{position[question]}")
-        else:
-            if adrs:
-                kept.append(outcome.model_copy(update={
-                    "adr_ids": sorted(adrs, key=lambda name: int(name.split("-")[1]))}))
+        names = {name: renumbered(name)
+                 for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
+        if not outcome.adr_ids or None in names.values():
+            continue
+        kept.append(outcome.model_copy(update={
+            "adr_ids": by_number(names[name] for name in outcome.adr_ids),
+            "relies_on_adr_ids": by_number(names[name] for name in outcome.relies_on_adr_ids),
+            "adr_notes": {names[name]: text for name, text in outcome.adr_notes.items()
+                          if names.get(name)}}))
     return kept
 
 
