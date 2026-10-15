@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type {
   Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotePlan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
-  Project, ProjectDraft, RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure, WorkingCopies,
+  Project, ProjectDraft, RepositoryScan, Research, Settings, Slicing, Stream, StreamIdea, Structure, WorkingCopies,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -17,7 +17,7 @@ import { ProjectsPage } from './ProjectsPage'
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
   participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', project: '', slicing: null,
-  structure: null, streams: null,
+  structure: null, streams: null, research: null,
 }
 const SETTINGS: Settings = {
   models: [
@@ -131,8 +131,12 @@ const QUESTIONS_FOUND: QuestionDiscovery = {
       proposal_ids: [], reason: 'без меры идею не проверить', note: null, revisits: null },
   ],
 }
-/** Шаги «Репозиторий» и «Дизайн» пропущены: так у потока с утверждённой идеей, если тест не скажет иначе. */
+/** Шаги исследования пропущены: так поток с утверждённой идеей начат, если тест не скажет иначе. */
 const SKIPPED = { by: 'skipped' as const, scan_run: '' }
+/** Исследование совета пройдено пропуском обоих шагов. */
+const RESEARCHED: Research = { scan: null, repository: SKIPPED, design_scan: null, design: SKIPPED }
+/** Своя идея группы B. */
+const OWN_B: StreamIdea = { text: 'Результат переживает сбой', by: 'council', evidence: [2] }
 /**
  * Совет с подтверждёнными группами: у A идея записана в тексте, у B её ищет совет. more —
  * что ещё у потоков: вопросы, отбор.
@@ -205,7 +209,12 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis(?:\/Q\d+)?|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
+    const researchAction = /\/research\/(repository(?:\/scan)?|design(?:\/scan)?|reset)$/.exec(url)
+    if (researchAction) {
+      streamCalls.push({ group: 'research', action: researchAction[1], body: JSON.parse(String(init?.body)) })
+      return stream()
+    }
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|start|choices|analysis(?:\/Q\d+)?|decisions|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -271,10 +280,10 @@ describe('HomePage', () => {
     const cards = within(pending).getAllByRole('link')
     expect(cards.map(card => [card.getAttribute('href'), card.querySelector('.corner')?.textContent])).toEqual([
       ['/councils/c2/slices', '?'],
-      ['/councils/c4/streams/A', '?'], ['/councils/c4/streams/B', '?'],
+      ['/councils/c4/structure', '?'], ['/councils/c4/structure', '?'],
       ['/councils/c5/slices', '!'],
     ])
-    expect(within(cards[2]).getByText('Поток B · идея')).toBeTruthy()
+    expect(within(cards[2]).getByText('Группа B · идея')).toBeTruthy()
     expect(within(cards[3]).getByText(ru['attention.slicingFailed'])).toBeTruthy()
 
     const all = screen.getByRole('region', { name: ru['home.all'] })
@@ -310,7 +319,7 @@ describe('Подтверждение групп и потоки', () => {
     within(await confirmCard()).getByRole('button', { name: ru['confirm.confirm'] }) as HTMLButtonElement
   const streamNav = () => screen.findByRole('navigation', { name: ru['streams.list'] })
 
-  it('«Подтвердить»: группы становятся потоками, экран уходит к первому', async () => {
+  it('«Подтвердить»: группы становятся потоками, а идеи групп утверждают здесь же', async () => {
     let current = grouped()
     fetchMock.mockImplementation(server({
       council: () => current,
@@ -318,24 +327,22 @@ describe('Подтверждение групп и потоки', () => {
     }))
     renderAt('/councils/demo-1/structure')
     fireEvent.click(await confirmButton())
-    const nav = await streamNav()
+    expect(await screen.findByRole('heading', { name: ru['ideas.title'] })).toBeTruthy()
     expect(edits).toEqual([{ action: 'confirm', body: { run: 'g1', revision: 0 } }])
-    expect(within(nav).getByText('Потоки · 2')).toBeTruthy()
-    const links = within(nav).getAllByRole('link')
-    expect(links.map(link => link.textContent)).toEqual([
-      `AВоркер${ru['streams.group.yours']}`, `BХранение${ru['streams.group.seeking']}`])
-    expect(links[0].getAttribute('aria-current')).toBe('page')
-    expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.done'])
+    expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()                  // у A — из текста
+    expect(screen.getByText(ru['idea.seeking'], { exact: false })).toBeTruthy()  // у B — ищет ИИ
+    expect(within(await confirmCard()).getByText(ru['confirm.ideas'])).toBeTruthy()
+    expect(screen.queryByRole('link', { name: ru['confirm.open'] })).toBeNull()
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.yours'])
   })
 
-  it('подтверждённые — ссылка «К потокам», а не кнопка', async () => {
-    fetchMock.mockImplementation(server({ council: () => confirmed() }))
+  it('идеи всех групп утверждены — ссылка «К исследованию», а не кнопка', async () => {
+    fetchMock.mockImplementation(server({ council: () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }) }))
     renderAt('/councils/demo-1/structure')
     const card = await confirmCard()
     expect(within(card).getByText(ru['confirm.done'])).toBeTruthy()
     fireEvent.click(within(card).getByRole('link', { name: ru['confirm.open'] }))
-    expect(await streamNav()).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['research.title'] })).toBeTruthy()
     expect(edits).toEqual([])
   })
 
@@ -392,7 +399,7 @@ describe('Подтверждение групп и потоки', () => {
       },
     }))
     renderAt('/councils/demo-1/structure')
-    expect(within(await confirmCard()).getByRole('link', { name: ru['confirm.open'] })).toBeTruthy()
+    expect(within(await confirmCard()).getByText(ru['confirm.done'])).toBeTruthy()
     fireEvent.click(within(await screen.findByRole('region', { name: 'Воркер' })).getByRole('button', { name: ru['groups.merge'] }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
     expect((await confirmButton()).disabled).toBe(false)
@@ -415,48 +422,37 @@ describe('Подтверждение групп и потоки', () => {
     fetchMock.mockImplementation(server({ council: () => confirmed(FOUND, stale) }))
     renderAt('/councils/demo-1/streams')
     expect(await screen.findByText(ru['streams.stale'], { exact: false })).toBeTruthy()
-    expect((screen.getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: ru['start.start'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
-describe('Поток: группа и идея', () => {
+describe('Группы: идеи', () => {
   const streamNav = () => screen.findByRole('navigation', { name: ru['streams.list'] })
   const ideaField = () => screen.findByRole('textbox', { name: 'Идея потока B' }) as Promise<HTMLTextAreaElement>
-  const approveButton = () => screen.getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement
+  const ideaOf = (group: string) => screen.findByRole('region', { name: new RegExp(`^${group} `) })
+  const approveButton = async (group: string) =>
+    within(await ideaOf(group)).getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement
+  const openGroups = (council: () => Council, stream?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, stream }))
+    renderAt('/councils/demo-1/structure')
+  }
   const openStream = (group: string, council: () => Council, stream?: () => Promise<Response>) => {
     fetchMock.mockImplementation(server({ council, stream }))
     renderAt(`/councils/demo-1/streams/${group}`)
   }
 
-  it('идея из текста: её только утверждают, шаги «Репозиторий» и «Дизайн» пропускают — и вопросы ищет ИИ', async () => {
-    const replies = [confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } }),
-                     confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { design: null } }),
-                     confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } })]
-    openStream('A', () => confirmed(), () => json(replies[streamCalls.length - 1]))
+  it('идея из текста: её только утверждают — здесь же, на этапе «Группы»', async () => {
+    openGroups(() => confirmed(), () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA })))
     expect(await screen.findByText(ru['idea.textNote'])).toBeTruthy()
-    expect(screen.queryByRole('textbox')).toBeNull()
-    fireEvent.click(approveButton())
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.skip'] }))
-    expect(await screen.findByRole('heading', { name: ru['design.title'] })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['design.skip'] }))
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } },
-                                 { group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } },
-                                 { group: 'A', action: 'design', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } }])
-    expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
-    expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
-    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText(ru['step.question_discovery'])).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
+    expect(within(await ideaOf('A')).queryByRole('textbox')).toBeNull()
+    fireEvent.click(await approveButton('A'))
+    await waitFor(async () => expect((await ideaOf('A')).textContent).toContain(ru['chain.ideaApproved']))
+    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } }])
   })
 
   it('идеи нет: в поле — выбор судьи, другой вариант можно взять и поправить', async () => {
     const mine = 'Результат переживает падение воркера'
-    openStream('B', () => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } },
-                                                            { B: { repository: null } })))
+    openGroups(() => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } })))
     const field = await ideaField()
     expect(field.value).toBe('Результат переживает сбой')
     expect(screen.getByText('почему: F2 — шире')).toBeTruthy()
@@ -473,49 +469,47 @@ describe('Поток: группа и идея', () => {
     fireEvent.change(field, { target: { value: mine } })
     expect(screen.queryByText(/почему:/)).toBeNull()
     expect(screen.getByText(ru['idea.byYou'], { selector: '.source-tag' })).toBeTruthy()
-    fireEvent.click(approveButton())
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'B', action: 'idea', body: { run: 'g1', revision: 0, text: mine } }])
+    fireEvent.click(await approveButton('B'))
+    await waitFor(() => expect(streamCalls).toEqual([
+      { group: 'B', action: 'idea', body: { run: 'g1', revision: 0, text: mine } }]))
   })
 
   it('ИИ не предложил идею — поле пустое, утвердить можно, только написав свою', async () => {
     const none: IdeaDiscovery = { ...FOUND, options: [],
                                   proposal: { idea: null, evidence: [], reason: 'цели нет', decided_by: 'agreed', option: null } }
-    openStream('B', () => confirmed(none))
+    openGroups(() => confirmed(none))
     const field = await ideaField()
     expect(field.value).toBe('')
     expect(screen.getByText(ru['idea.noneNote'].replace('{{reason}}', 'цели нет'))).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect((await approveButton('B')).disabled).toBe(true)
     fireEvent.change(field, { target: { value: '   ' } })
-    expect(approveButton().disabled).toBe(true)
+    expect((await approveButton('B')).disabled).toBe(true)
     fireEvent.change(field, { target: { value: 'Своя идея' } })
-    expect(approveButton().disabled).toBe(false)
+    expect((await approveButton('B')).disabled).toBe(false)
   })
 
-  it('«Сейчас»: где поток и чей ход, цепочка сегментами', async () => {
+  it('«Сейчас»: поток без идеи ждёт её, цепочка сегментами', async () => {
     openStream('B', () => confirmed(SEEKING))
     const now = await screen.findByRole('region', { name: 'Хранение' })
-    expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
+    expect(within(now).getByText(`Сейчас · поток B · ${ru['now.idle']}`)).toBeTruthy()
     const segments = within(now).getAllByRole('listitem')
-    expect(segments.map(segment => segment.className)).toEqual([
-      'segment running', ...Array(8).fill('segment idle')])
-    expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
-    expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
-      ` (${ru['light.running']})`, ...Array(8).fill(` (${ru['light.idle']})`)])
+    expect(segments.map(segment => segment.className)).toEqual(Array(7).fill('segment idle'))
+    expect(segments[0].textContent).toContain(ru['chain.startNoIdea'])
+    expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual(
+      Array(7).fill(` (${ru['light.idle']})`))
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
-    openStream('B', () => confirmed(SEEKING))
+    openGroups(() => confirmed(SEEKING))
     expect(await screen.findByText(ru['idea.seeking'], { exact: false })).toBeTruthy()
-    expect(screen.queryByRole('textbox')).toBeNull()
-    expect(approveButton().disabled).toBe(true)
-    expect(screen.getByText(ru['step.idea_discovery'])).toBeTruthy()
+    expect(within(await ideaOf('B')).queryByRole('textbox')).toBeNull()
+    expect((await approveButton('B')).disabled).toBe(true)
     expect(screen.getByText(ru['idea.capsAi'])).toBeTruthy()
   })
 
   it('поиск упал — причина и повтор; написать идею самому тоже можно', async () => {
     const failed: IdeaDiscovery = { ...SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
-    openStream('B', () => confirmed(failed), () => json(confirmed(SEEKING), 202))
+    openGroups(() => confirmed(failed), () => json(confirmed(SEEKING), 202))
     expect((await screen.findByRole('alert')).textContent).toBe('Нет подключения к моделям: GPT-5.6 Sol')
     expect(await ideaField()).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
@@ -523,15 +517,15 @@ describe('Поток: группа и идея', () => {
     expect(streamCalls).toEqual([{ group: 'B', action: 'discovery', body: undefined }])
   })
 
-  it('своя идея после упавшего поиска: поток прошёл шаг, повтора поиска больше нет', async () => {
+  it('своя идея после упавшего поиска: поток начат, повтора поиска больше нет', async () => {
     const failed: IdeaDiscovery = { ...SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     const own: StreamIdea = { text: 'Своя идея', by: 'human', evidence: [] }
-    openStream('B', () => confirmed(failed, GROUPED, { B: own }))
+    openStream('B', () => ({ ...confirmed(failed, GROUPED, { B: own }), research: RESEARCHED }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText(`Сейчас · поток B · ${ru['now.yours']}`)).toBeTruthy()
     expect(screen.getByText(ru['questions.notSought'], { exact: false })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByRole('button', { name: ru['run.retry'] })).toBeNull()
   })
@@ -546,30 +540,71 @@ describe('Поток: группа и идея', () => {
           if (first) { first = false; return json(confirmed(SEEKING)) }
           return new Promise<Response>(r => pending.push(c => r(new Response(JSON.stringify(c)))))
         }
-        // Утвердили идею A — и совет сразу ищет к ней вопросы.
-        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA },
-                                                      { A: { questions: QUESTIONS_SEEKING } })) })(url, init)
+        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA })) })(url, init)
       })
-      renderAt('/councils/demo-1/streams/A')
-      const nav = await streamNav()
-      const link = (name: RegExp) => within(nav).getByRole('link', { name })
+      renderAt('/councils/demo-1/structure')
+      const status = (group: string) => screen.getByRole('region', { name: new RegExp(`^${group} `) }).textContent
+      await screen.findByRole('heading', { name: ru['ideas.title'] })
       vi.advanceTimersByTime(POLL_MS)               // опрос ушёл до утверждения, ответа пока нет
       expect(pending).toHaveLength(1)
-      fireEvent.click(approveButton())
-      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
+      fireEvent.click(await approveButton('A'))
+      await waitFor(() => expect(status('A')).toContain(ru['chain.ideaApproved']))
 
-      pending[0](confirmed(FOUND))                  // в нём A ещё без идеи и без поиска вопросов
-      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
-      expect(link(/Хранение/).textContent).toContain(ru['streams.group.seeking'])   // и B — как было
+      pending[0](confirmed(FOUND))                  // в нём A ещё без идеи
+      await waitFor(() => expect(status('A')).toContain(ru['chain.ideaApproved']))
+      expect(status('B')).toContain(ru['chain.ideaSeeking'])   // и B — как было
 
       vi.advanceTimersByTime(POLL_MS)               // следующий опрос — уже после утверждения
       await waitFor(() => expect(pending).toHaveLength(2))
-      pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }))
-      await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.group.yours']))
-      expect(link(/Воркер/).textContent).toContain(ru['streams.questions.yours'])
+      pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }))
+      await waitFor(() => expect(status('B')).toContain(ru['chain.ideaFound']))
+      expect(status('A')).toContain(ru['chain.ideaApproved'])
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('Поток: начало и вопросы', () => {
+  const openStream = (group: string, council: () => Council, stream?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, stream }))
+    renderAt(`/councils/demo-1/streams/${group}`)
+  }
+  const startAgain = () => screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement
+
+  it('поток начинают, когда исследование пройдено: он берёт его себе — и вопросы ищет ИИ', async () => {
+    const notStarted = { ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } }),
+                         research: RESEARCHED }
+    openStream('A', () => notStarted,
+               () => json({ ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }),
+                            research: RESEARCHED }))
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(screen.getByText(TEXT_IDEA.text)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['start.start'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'start', body: { run: 'g1', revision: 0, idea: TEXT_IDEA.text } }])
+    expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
+    expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(ru['step.question_discovery'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(screen.getByText(ru['start.current'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('исследование не пройдено — начать нельзя; прошли заново — поток можно начать заново', async () => {
+    const waiting = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } })
+    openStream('A', () => waiting)
+    expect(await screen.findByText(ru['start.noResearch'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.start'] }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    const again = { ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }),
+                    research: { ...RESEARCHED, repository: { by: 'scan' as const, scan_run: 'sc2' } } }
+    openStream('A', () => again)
+    fireEvent.click(await screen.findByRole('button', { name: /Начало/ }))
+    expect(await screen.findByText(ru['start.another'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('вопрос об устройстве системы помечен «технические детали» — и в отборе он оставлен, как все', async () => {
@@ -582,11 +617,11 @@ describe('Поток: группа и идея', () => {
     expect(screen.getByText('Решать 2 из 2')).toBeTruthy()
   })
 
-  it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
+  it('пока ИИ ищет вопросы, поток не начать заново', async () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(startAgain().disabled).toBe(true)
   })
 
   it('вопросы: происхождение, причина, предложения; убрать, вернуть, свой — и отбор уходит на сервер', async () => {
@@ -773,7 +808,7 @@ describe('Поток: группа и идея', () => {
     const chain = await screen.findByRole('region', { name: /Цепочка/ })
     expect(within(chain).getAllByText(ru['chain.you'])).toHaveLength(1)
     expect(within(chain).getByText(ru['chain.options.you'])).toBeTruthy()
-    expect(within(chain).queryByText(ru['chain.group.you'])).toBeNull()
+    expect(within(chain).queryByText(ru['chain.start.you'])).toBeNull()
   })
 
   it('свой вариант пишут прямо у вопроса — он уходит на сервер текстом, а номер даёт сервер', async () => {
@@ -864,8 +899,8 @@ describe('Поток: группа и идея', () => {
     expect(await screen.findByText(ru['questions.belowRunning'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(startAgain().disabled).toBe(true)
   })
 
   it('ограничения, которые вариант учитывает, и связанные риски — раздельно', async () => {
@@ -889,25 +924,26 @@ describe('Поток: группа и идея', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Сервер останавливается, ход не запущен')
   })
 
-  it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
+  it('утвердить идею к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
     let current = confirmed()
-    openStream('B', () => current, () => {
+    fetchMock.mockImplementation(server({ council: () => current, stream: () => {
       current = confirmed(FOUND, { ...GROUPED, revision: 1,
                                    groups: [GROUPED.groups[0], { ...GROUPED.groups[1], title: 'Хранилище' }] })
       return json({ detail: 'Группы уже поменяли — правка была к прежним' }, 409)
-    })
-    await ideaField()
-    fireEvent.click(approveButton())
+    } }))
+    renderAt('/councils/demo-1/structure')
+    const idea = await screen.findByRole('region', { name: /^B / })
+    fireEvent.click(within(idea).getByRole('button', { name: ru['idea.approve'] }))
     expect((await screen.findByRole('alert')).textContent).toBe('Группы уже поменяли — правка была к прежним')
-    expect(await within(await streamNav()).findByRole('link', { name: /Хранилище/ })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: /^B Хранилище/ })).toBeTruthy()
   })
 })
 
 
-describe('Поток: репозиторий', () => {
+describe('Исследование: репозиторий', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>) => {
     fetchMock.mockImplementation(server({ council, stream }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
   }
   const SCANNED: RepositoryScan = {
     state: 'done', run: 'sc1', idea: TEXT_IDEA.text, rounds: 3, complete: false, error: null,
@@ -930,24 +966,25 @@ describe('Поток: репозиторий', () => {
     },
     follow_up: [{ objective: 'Проверить очередь', reason: '', targets: ['infra/queue.yml'], related_finding_ids: [] }],
   }
-  /** Поток A: идея из текста утверждена, шаг «Репозиторий» ещё не пройден. */
-  const atStep = (more: Partial<Stream> = {}) =>
-    confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null, ...more } })
+  /** Идеи обеих групп утверждены, шаг «Репозиторий» исследования ещё не пройден. */
+  const atStep = (more: Partial<Research> = {}): Council => ({
+    ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }),
+    research: { scan: null, repository: null, design_scan: null, design: null, ...more } })
   const path = () => screen.getByRole('textbox', { name: ru['repository.path'] }) as HTMLInputElement
 
-  it('идею поменяли в другой вкладке (409) — ошибка у скана, и новый скан — уже к нынешней идее', async () => {
-    let current = atStep()
-    openStream(() => current, () => {
-      current = confirmed(FOUND, GROUPED, { A: { ...TEXT_IDEA, text: 'Другая идея.' } }, { A: { repository: null } })
-      return json({ detail: 'Идею потока поменяли — посмотрите на новую и повторите' }, 409)
-    })
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    fireEvent.change(path(), { target: { value: 'project' } })
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
-    expect((await screen.findByRole('alert')).textContent).toBe('Идею потока поменяли — посмотрите на новую и повторите')
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
-    await waitFor(() => expect(streamCalls).toHaveLength(2))
-    expect(streamCalls[1].body).toMatchObject({ idea: 'Другая идея.' })
+  it('идеи поменяли после скана — видно, что исследование было к прежним, и его можно сбросить', async () => {
+    const before: RepositoryScan = { ...SCANNED, idea: 'A. Воркер: Прежняя идея.' }
+    openStream(() => atStep({ scan: before }), () => json(atStep()))
+    expect(await screen.findByText(ru['research.outdated'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['research.reset'] }))
+    await waitFor(() => expect(streamCalls).toEqual([
+      { group: 'research', action: 'reset', body: { run: 'g1', revision: 0 } }]))
+  })
+
+  it('пока идеи не утверждены, исследования нет — дорога к группам', async () => {
+    openStream(() => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }))
+    expect(await screen.findByText(ru['research.waits'], { exact: false })).toBeTruthy()
+    expect(screen.getByRole('link', { name: ru['streams.toGroups'] }).getAttribute('href')).toBe('/councils/demo-1/structure')
   })
 
   it('скан запускают по пути к рабочей копии; пока он идёт, шаг не пройти', async () => {
@@ -958,8 +995,8 @@ describe('Поток: репозиторий', () => {
     fireEvent.change(path(), { target: { value: 'D:\\PROJECTS\\worker' } })
     fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
     expect(await screen.findByText('ИИ исследует репозиторий, проход 1 из 3.', { exact: false })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'repository/scan',
-                                   body: { run: 'g1', revision: 0, paths: ['D:\\PROJECTS\\worker'], idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'repository/scan',
+                                   body: { run: 'g1', revision: 0, paths: ['D:\\PROJECTS\\worker'] } }])
     expect(screen.getByText(ru['repository.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
@@ -988,7 +1025,7 @@ describe('Поток: репозиторий', () => {
   it('у совета с проектом его репозитории уже отмечены: лишний снимают, свой добавляют — сканируют вместе', async () => {
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }), stream: () => json(atStep()),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     const known = await screen.findByRole('group', { name: ru['repository.known'] })
     const boxes = within(known).getAllByRole('checkbox') as HTMLInputElement[]
     expect(boxes.map(box => [box.parentElement?.textContent, box.checked])).toEqual([['kromka-api', true], ['kromka-front', true]])
@@ -1006,7 +1043,7 @@ describe('Поток: репозиторий', () => {
     let project = PROJECT
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }),
                                           settings: () => ({ ...SETTINGS, projects: [project] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     await screen.findByRole('group', { name: ru['repository.known'] })
     project = { ...PROJECT, repositories: [...PROJECT.repositories, 'kromka-worker'], revision: 1 }
     fireEvent.focus(window)
@@ -1019,7 +1056,7 @@ describe('Поток: репозиторий', () => {
     let project = PROJECT.id
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project }),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     await screen.findByRole('checkbox', { name: 'kromka-api' })
     project = other.id
     fireEvent.focus(window)
@@ -1032,7 +1069,7 @@ describe('Поток: репозиторий', () => {
                                                                    { ...SCANNED.repositories[0], path: 'other' }] }
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep({ scan: scanned }), project: PROJECT.id }),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     const known = await screen.findByRole('group', { name: ru['repository.known'] })
     expect((within(known).getAllByRole('checkbox') as HTMLInputElement[]).map(box => box.checked)).toEqual([false, true])
     expect((screen.getByRole('textbox', { name: 'Рабочая копия 1' }) as HTMLInputElement).value).toBe('other')
@@ -1071,7 +1108,7 @@ describe('Поток: репозиторий', () => {
 
     fireEvent.click(screen.getByRole('button', { name: ru['repository.approve'] }))
     expect(await screen.findByRole('heading', { name: ru['design.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1', idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1' } }])
   })
 
   it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {
@@ -2730,10 +2767,10 @@ describe('Переключатель языка', () => {
   })
 })
 
-describe('Поток: дизайн', () => {
+describe('Исследование: дизайн', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>, settings?: () => Settings) => {
     fetchMock.mockImplementation(server({ council, stream, settings }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
   }
   const LINK = 'https://www.figma.com/design/AbC123/Billing?node-id=2-1'
   const node = (node_id: string, name: string) => ({ page_id: '1:0', node_id, name })
@@ -2756,9 +2793,10 @@ describe('Поток: дизайн', () => {
     },
     follow_up: [{ objective: 'Проверить пустой результат', reason: '', targets: [node('2:3', 'Search')], related_finding_ids: [] }],
   }
-  /** Поток A: идея из текста утверждена, шаг «Репозиторий» пропущен, «Дизайн» — ещё нет. */
-  const atDesign = (more: Partial<Stream> = {}) =>
-    confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { design: null, ...more } })
+  /** Идеи утверждены, шаг «Репозиторий» исследования пропущен, «Дизайн» — ещё нет. */
+  const atDesign = (more: Partial<Research> = {}): Council => ({
+    ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }),
+    research: { scan: null, repository: SKIPPED, design_scan: null, design: null, ...more } })
   const link = () => screen.getByRole('textbox', { name: ru['design.link'] }) as HTMLInputElement
 
   it('ссылки на фреймы добавляют и убирают; скан идёт по ним', async () => {
@@ -2771,8 +2809,8 @@ describe('Поток: дизайн', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Ссылка 2' }), { target: { value: `${LINK.split('?')[0]}?node-id=1-0` } })
     fireEvent.click(screen.getByRole('button', { name: ru['design.scan'] }))
     expect(await screen.findByText(ru['design.fetching'], { exact: false })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'design/scan', body: {
-      run: 'g1', revision: 0, links: [LINK, `${LINK.split('?')[0]}?node-id=1-0`], idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'design/scan', body: {
+      run: 'g1', revision: 0, links: [LINK, `${LINK.split('?')[0]}?node-id=1-0`] } }])
     expect(screen.getByText(ru['design.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['design.skip'] }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -2785,10 +2823,9 @@ describe('Поток: дизайн', () => {
     expect((screen.getByRole('button', { name: ru['design.skip'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('описание макета видно по разделам; утверждённое — к вопросам', async () => {
+  it('описание макета видно по разделам; утверждённое — исследование пройдено', async () => {
     openStream(() => atDesign({ design_scan: DESIGNED }),
-               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
-                                    { A: { design_scan: DESIGNED, design: { by: 'scan', scan_run: 'ds1' }, questions: QUESTIONS_SEEKING } })))
+               () => json(atDesign({ design_scan: DESIGNED, design: { by: 'scan', scan_run: 'ds1' } })))
     expect(await screen.findByText('Экран тредов с поиском')).toBeTruthy()
     expect(link().value).toBe(LINK)
     expect(screen.getByText('«Billing» · версия 42 · страниц: 1 · картинок: 2')).toBeTruthy()
@@ -2803,8 +2840,8 @@ describe('Поток: дизайн', () => {
     expect(screen.getByText(ru['step.design_discovery'])).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: ru['design.approve'] }))
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'design', body: { run: 'g1', revision: 0, scan_run: 'ds1', idea: TEXT_IDEA.text } }])
+    expect(await screen.findByText(ru['research.done'], { exact: false })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'research', action: 'design', body: { run: 'g1', revision: 0, scan_run: 'ds1' } }])
   })
 
   it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {

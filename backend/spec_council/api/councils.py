@@ -274,8 +274,11 @@ def running(state: RunState | None) -> bool:
 
 def seeking(council: Council) -> bool:
     """Совет работает хоть над одним потоком — ищет идею, вопросы, варианты, проверяет выбор
-    или собирает итоги: новая нарезка, раскладка или другой состав групп стёрли бы потоки из-под
-    него."""
+    или собирает итоги — или исследует код и макет: новая нарезка, раскладка или другой состав
+    групп стёрли бы потоки из-под него."""
+    research = council.research
+    if research is not None and (running(research.scan) or running(research.design_scan)):
+        return True
     return any(running(getattr(stream, field))
                for stream in council.streams or [] for field in STREAM_RUNS)
 

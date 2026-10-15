@@ -3,8 +3,8 @@
 You investigate an existing design in Figma to establish which interface and which behavior are intended for the approved IDEA.
 
 You are given:
-- the approved IDEA;
-- the fragments of the corresponding group;
+- the approved IDEA: the ideas of all groups of the council, one per line (`A. title: idea`) — the investigation serves every one of them;
+- the fragments of all groups;
 - a link to the Figma file or to the selected pages;
 - a snapshot of the Figma file in the current directory, read-only: what it contains is in FIGMA SOURCE.
 
@@ -273,7 +273,7 @@ Before answering, check:
 
 {{idea}}
 
-## GROUP FRAGMENTS
+## FRAGMENTS OF ALL GROUPS
 
 {{fragments}}
 

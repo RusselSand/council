@@ -44,6 +44,18 @@ export interface Council {
   structure: Structure | null
   /** Потоки подтверждённых групп; null — группы ещё не подтверждены. */
   streams: Stream[] | null
+  /** Исследование репозитория и макета на весь совет; null — к нему ещё не приступали. */
+  research: Research | null
+}
+
+/**
+ * Этап «Исследование» — на весь совет: необязательный скан репозитория и шаг «Репозиторий», потом так же шаг
+ * «Дизайн». Одна карта кода и одно описание макета под идеи всех групп; поток берёт их себе копией, когда его
+ * начинают.
+ */
+export interface Research {
+  scan: RepositoryScan | null; repository: RepositoryStep | null
+  design_scan: DesignScan | null; design: DesignStep | null
 }
 
 /** Фрагменты вокруг одной задумки. Общий фрагмент стоит в нескольких группах тем же номером. */
@@ -508,29 +520,41 @@ export const api = {
   /** Искать идею потока заново: после сбоя или без подключения к моделям. */
   seekIdea: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
-  /** Сканировать репозитории под идею потока: пути — от каталога репозиториев или абсолютные. */
-  scanRepository: (id: string, at: GroupsVersion, group: string, paths: string[], idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository/scan`, {
+  /** Сканировать репозитории под идеи всех групп: пути — от каталога репозиториев или абсолютные. */
+  scanRepository: (id: string, at: GroupsVersion, paths: string[]) =>
+    request<Council>(`${councilUrl(id)}/research/repository/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, paths, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, paths }),
     }),
-  /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Дальше — шаг «Дизайн». */
-  approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository`, {
+  /** Пройти шаг «Репозиторий» исследования: scanRun — утвердить карту этого скана, null — пропустить. */
+  approveRepository: (id: string, at: GroupsVersion, scanRun: string | null) =>
+    request<Council>(`${councilUrl(id)}/research/repository`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun }),
     }),
-  /** Сканировать макет Figma под идею потока: ссылки на страницы или фреймы одного файла. */
-  scanDesign: (id: string, at: GroupsVersion, group: string, links: string[], idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design/scan`, {
+  /** Сканировать макет Figma под идеи всех групп: ссылки на страницы или фреймы одного файла. */
+  scanDesign: (id: string, at: GroupsVersion, links: string[]) =>
+    request<Council>(`${councilUrl(id)}/research/design/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, links, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, links }),
     }),
-  /** Пройти шаг «Дизайн»: scanRun — утвердить описание этого скана, null — пропустить. Совет сразу ищет вопросы. */
-  approveDesign: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design`, {
+  /** Пройти шаг «Дизайн» исследования: scanRun — утвердить описание этого скана, null — пропустить. */
+  approveDesign: (id: string, at: GroupsVersion, scanRun: string | null) =>
+    request<Council>(`${councilUrl(id)}/research/design`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun }),
+    }),
+  /** Сбросить исследование: сканы и пройденные шаги снимаются, начатые потоки работают со своей копией. */
+  resetResearch: (id: string, at: GroupsVersion) =>
+    request<Council>(`${councilUrl(id)}/research/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision }),
+    }),
+  /** Начать поток: он берёт себе исследование совета, и совет сразу отбирает решения проекта или ищет вопросы. */
+  startStream: (id: string, at: GroupsVersion, group: string, idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, idea }),
     }),
   /** Отметить прошлые решения проекта, которые учитывать в потоке (пусто — ни одного). Совет сразу ищет вопросы. */
   selectDecisions: (id: string, at: GroupsVersion, group: string, searchRun: string, keep: string[], idea: string) =>
@@ -689,9 +713,32 @@ export const searchesOf = (stream: Stream) => STREAM_RUNS.map(field => stream[fi
 export const runningFrom = (stream: Stream, from: (typeof STREAM_RUNS)[number]): boolean =>
   STREAM_RUNS.slice(STREAM_RUNS.indexOf(from)).some(field => stream[field]?.state === 'running')
 
-/** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
-export const seeking = (council: Council): boolean =>
-  council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
+/** Совет исследует код или макет: страница опрашивает сервер. */
+export const researching = (council: Council): boolean =>
+  council.research?.scan?.state === 'running' || council.research?.design_scan?.state === 'running'
+
+/** Совет работает хоть над одним потоком — ищет, проверяет или собирает — или исследует код и макет. */
+export const seeking = (council: Council): boolean => researching(council)
+  || (council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false)
+
+/** Идеи всех групп одним текстом — как их помнит скан исследования: поменяли — исследование было к прежним. */
+export const ideasOf = (council: Council): string | null => {
+  const streams = council.streams
+  if (!streams || streams.some(stream => !stream.idea)) return null
+  const titles = new Map((council.structure?.groups ?? []).map(g => [g.id, g.title]))
+  return streams.map(stream => `${stream.group}. ${titles.get(stream.group) ?? ''}: ${stream.idea?.text}`).join('\n')
+}
+
+/** Исследование пройдено: оба шага — сканом или пропуском. Потоки можно начинать. */
+export const researched = (council: Council): boolean => !!council.research?.repository && !!council.research.design
+
+/** Поток начат с тем исследованием, что в совете сейчас: иначе его можно начать заново. */
+export const startedWithResearch = (council: Council, stream: Stream): boolean => {
+  const research = council.research
+  return !!stream.repository && !!stream.design && !!research?.repository && !!research.design
+    && stream.repository.by === research.repository.by && stream.repository.scan_run === research.repository.scan_run
+    && stream.design.by === research.design.by && stream.design.scan_run === research.design.scan_run
+}
 
 /** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел, и есть чем проверить, что он готов. */
 export const outcomeReady = (outcome: Outcome): boolean =>

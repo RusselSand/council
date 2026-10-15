@@ -1,5 +1,5 @@
 import {
-  councilPath, issueReady, seeking, structureIsStale,
+  councilPath, issueReady, researched, seeking, structureIsStale,
   type Council, type DecisionAnalysis, type Folders, type DecisionsSearch, type DesignScan, type IdeaDiscovery, type IssueDiscovery,
   type NotesDraft, type OutcomeDiscovery,
   type ProposalDiscovery, type QuestionDiscovery, type RepositoryScan, type Slicing, type Stream, type Structure,
@@ -13,8 +13,11 @@ import type { Stage } from './pages/CouncilPage'
  */
 export type Light = 'running' | 'done' | 'yours' | 'failed' | 'idle'
 
-/** Шаги цепочки потока. Работает пока первый — группа и её идея. */
-export const CHAIN = ['group', 'repository', 'design', 'questions', 'options', 'decisions', 'outcomes', 'issues', 'notes'] as const
+/**
+ * Шаги цепочки потока. Первый — начало: идею утверждают ещё на этапе «Группы», исследование — на своём этапе, а
+ * поток берёт его себе копией, когда его начинают.
+ */
+export const CHAIN = ['start', 'questions', 'options', 'decisions', 'outcomes', 'issues', 'notes'] as const
 export type ChainStep = (typeof CHAIN)[number]
 
 /** Что важнее показать, если состояний несколько: сначала то, что требует человека. */
@@ -32,16 +35,13 @@ const ofRun = (run: Run | null): Light | null => {
 }
 
 /**
- * Где поток: пока нет идеи — на группе, пока не пройден (сканом или пропуском) шаг «Репозиторий» —
- * на нём, потом так же шаг «Дизайн», пока не отобраны вопросы — на вопросах, пока не выбраны
+ * Где поток: пока его не начали — в начале (идея и исследование), пока не отобраны вопросы — на вопросах, пока не выбраны
  * варианты — на вариантах, пока не зафиксированы решения — на решениях, пока итоги не утверждены —
  * на итогах, пока задачи не нарезаны и не готовы — на задачах, дальше — документация. Выгрузить
  * можно сразу после утверждения итогов: черновик документации уже переводится или упал — поток на ней.
  */
 export const currentStep = (stream: Stream): ChainStep => {
-  if (!stream.idea) return 'group'
-  if (!stream.repository) return 'repository'
-  if (!stream.design) return 'design'
+  if (!stream.idea || !stream.design) return 'start'
   if (!stream.scope) return 'questions'
   if (!stream.choices) return 'options'
   if (!stream.decisions) return 'decisions'
@@ -87,10 +87,9 @@ export const exportedCount = (stream: Stream): number =>
  * нарезалось ни одной. Документация — выгружена к утверждённым итогам в каталог folders (путь из настроек):
  * выгрузка в другой каталог не в счёт.
  */
-export const chainLight = (stream: Stream, step: ChainStep, folders: Folders): Light => {
-  if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
-  if (step === 'repository' && stream.idea) return stream.repository ? 'done' : ofRun(stream.scan) ?? 'yours'
-  if (step === 'design' && stream.repository) return stream.design ? 'done' : ofRun(stream.design_scan) ?? 'yours'
+export const chainLight = (stream: Stream, step: ChainStep, folders: Folders, ready = false): Light => {
+  // Начать можно, когда идея утверждена и исследование совета пройдено (ready): до того ждём их — на их этапах.
+  if (step === 'start') return stream.design ? 'done' : stream.idea && ready ? 'yours' : 'idle'
   // До вопросов — отбор решений проекта, если в каталоге заметок они есть.
   if (step === 'questions' && stream.design) {
     return stream.scope ? 'done' : ofRun(stream.questions ?? stream.decisions_search) ?? 'yours'
@@ -119,13 +118,30 @@ const issuesLight = (issues: IssueDiscovery, stream: Stream): Light => {
   return ofRun(issues) ?? (ready ? 'done' : 'yours')
 }
 
-/** Поток — цвет его текущего шага. folders — пути каталога заметок и папки задач из настроек. */
-export const streamLight = (stream: Stream, folders: Folders): Light =>
-  chainLight(stream, currentStep(stream), folders)
+/**
+ * Поток — цвет его текущего шага. folders — пути каталога заметок и папки задач из настроек; ready — исследование
+ * совета пройдено: поток можно начинать.
+ */
+export const streamLight = (stream: Stream, folders: Folders, ready = false): Light =>
+  chainLight(stream, currentStep(stream), folders, ready)
+
+/** Идеи групп — на этапе «Группы» после подтверждения: ищутся, упали, ждут вас или утверждены. */
+const ideasLight = (streams: Stream[]): Light => strongest(streams.map(stream =>
+  stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'))
+
+/** Исследование: сканы идут или упали, шаги ждут вас или пройдены. Пока идеи не утверждены — ждёт их. */
+const researchLight = (council: Council): Light => {
+  const { streams, research } = council
+  if (!streams || streams.some(stream => !stream.idea)) return 'idle'
+  if (researched(council)) return 'done'
+  const scan = research?.repository ? research.design_scan : research?.scan
+  return ofRun(scan ?? null) ?? 'yours'
+}
 
 /**
- * Этап совета. Ввод готов, когда текст нарезали; нарезка — когда разложили по группам;
- * группы — когда подтвердили и они не устарели. Готовый ход без следующего — ваш ход.
+ * Этап совета. Ввод готов, когда текст нарезали; нарезка — когда разложили по группам; группы — когда
+ * подтвердили, они не устарели и идеи всех утверждены; исследование — когда оба шага пройдены. Готовый ход без
+ * следующего — ваш ход.
  */
 export function stageLight(council: Council, stage: Stage, folders: Folders): Light {
   const { slicing, structure, streams } = council
@@ -141,13 +157,17 @@ export function stageLight(council: Council, stage: Stage, folders: Folders): Li
       if (run) return run
       if (!streams) return 'yours'
       // Устарели — разложить заново. Пока ИИ ищет идеи, нельзя (сервер ответит 423): ход не ваш.
-      return structureIsStale(council) && !seeking(council) ? 'yours' : 'done'
+      if (structureIsStale(council)) return seeking(council) ? 'running' : 'yours'
+      return ideasLight(streams)
     }
+    case 'research':
+      if (structureIsStale(council)) return 'idle'
+      return researchLight(council)
     case 'streams':
       if (!streams) return 'idle'
       // По устаревшим группам идеи не утверждают и не ищут заново: сначала разложить заново.
       if (structureIsStale(council)) return seeking(council) ? 'running' : 'idle'
-      return strongest(streams.map(stream => streamLight(stream, folders)))
+      return strongest(streams.map(stream => streamLight(stream, folders, researched(council))))
     case 'history':
       return 'idle'
   }
@@ -155,14 +175,14 @@ export function stageLight(council: Council, stage: Stage, folders: Folders): Li
 
 /** Совет целиком: самое важное из состояний его этапов. Нетронутый — белый, черновик. */
 export const councilLight = (council: Council, folders: Folders): Light =>
-  strongest((['brief', 'slices', 'structure', 'streams'] as const).map(stage => stageLight(council, stage, folders)))
+  strongest((['brief', 'slices', 'structure', 'research', 'streams'] as const).map(stage => stageLight(council, stage, folders)))
 
 /** Что в совете требует человека: его ход или упавший ход модели — и куда за этим идти. */
 export interface Attention {
   light: 'yours' | 'failed'
   what: 'slicingFailed' | 'slicesDone' | 'groupingFailed' | 'groupsStale' | 'groupsReady'
     | 'ideaFailed' | 'ideaWaits' | 'repositoryFailed' | 'repositoryWait' | 'designFailed' | 'designWait'
-    | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
+    | 'startWait' | 'questionsFailed' | 'questionsWait' | 'optionsFailed' | 'optionsWait'
     | 'decisionsFailed' | 'decisionsWait' | 'outcomesFailed' | 'outcomesWait' | 'issuesFailed' | 'issuesWait'
     | 'notesFailed' | 'notesWait'
   /** Буква потока — у того, что про поток. */
@@ -171,7 +191,7 @@ export interface Attention {
 }
 
 export function attention(council: Council, folders: Folders): Attention[] {
-  const { id, slicing, structure, streams } = council
+  const { id, slicing, structure, streams, research } = council
   const items: Attention[] = []
   const add = (light: Attention['light'], what: Attention['what'], to: string, group?: string) =>
     items.push({ light, what, to, ...(group ? { group } : {}) })
@@ -186,13 +206,26 @@ export function attention(council: Council, folders: Folders): Attention[] {
     if (!seeking(council)) add('yours', 'groupsStale', councilPath(id, 'structure'))
   } else if (structure?.state === 'done' && !streams) add('yours', 'groupsReady', councilPath(id, 'structure'))
   else if (structure?.state === 'done') {
+    // Идеи — на этапе «Группы».
     for (const stream of streams ?? []) {
+      if (stream.idea) continue
+      const light = ofRun(stream.discovery)
+      if (light === 'failed') add('failed', 'ideaFailed', councilPath(id, 'structure'), stream.group)
+      else if (light === null) add('yours', 'ideaWaits', councilPath(id, 'structure'), stream.group)
+    }
+    // Исследование — когда идеи всех утверждены.
+    const step = research?.repository ? 'design' : 'repository'
+    const light = researchLight(council)
+    if (light === 'failed') add('failed', `${step}Failed`, councilPath(id, 'research'))
+    else if (light === 'yours') add('yours', `${step}Wait`, councilPath(id, 'research'))
+    const ready = researched(council)
+    for (const stream of streams ?? []) {
+      if (!stream.idea) continue
       const to = councilPath(id, `streams/${stream.group}`)
-      const light = streamLight(stream, folders)
-      const step = currentStep(stream)
-      const where = step === 'group' ? 'idea' : step
-      if (light === 'failed') add('failed', `${where}Failed`, to, stream.group)
-      else if (light === 'yours') add('yours', where === 'idea' ? 'ideaWaits' : `${where}Wait`, to, stream.group)
+      const lit = streamLight(stream, folders, ready)
+      const where = currentStep(stream)
+      if (lit === 'failed') add('failed', `${where === 'start' ? 'questions' : where}Failed`, to, stream.group)
+      else if (lit === 'yours') add('yours', `${where}Wait`, to, stream.group)
     }
   }
   return items
