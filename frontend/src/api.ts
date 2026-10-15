@@ -802,7 +802,9 @@ export const tasksWaitFor = (council: Council, notes: string | null): TasksWait[
   (council.streams ?? []).flatMap((stream): TasksWait[] => {
     const outcomes = stream.outcomes
     if (!outcomes?.approved) return [{ group: stream.group, why: 'outcomes' }]
-    if (!stream.notes || notes === null || stream.notes.root !== notes || stream.notes.outcomes !== outcomes.run) {
+    // Выгружен, когда совет ещё не помнил номера заметок (refs), — выгрузить заново.
+    if (!stream.notes || notes === null || stream.notes.root !== notes || stream.notes.outcomes !== outcomes.run
+        || Object.keys(stream.notes.refs ?? {}).length === 0) {
       return [{ group: stream.group, why: 'notes' }]
     }
     return []

@@ -9,11 +9,13 @@ import pytest
 
 from spec_council.app import app
 from spec_council.deps import get_agents, get_issues_of, get_launcher, get_notes_of
+from spec_council.export import words_for
 from spec_council.groups import arranged
-from spec_council.models import CouncilStatus, Slicing, Structure, StructureProposal
+from spec_council.models import CouncilStatus, Issue, Slicing, Structure, StructureProposal
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog
 from spec_council.pipeline import start_tasks
+from spec_council.tasks_export import issue_text
 from tests.test_streams import (
     ALL_DECIDED,
     LABELS,
@@ -179,6 +181,17 @@ def test_the_plan_waits_for_every_stream_to_be_approved_and_exported(agents, fol
     assert council(council_id).tasks is None
 
 
+def test_a_stream_exported_before_note_numbers_were_kept_is_exported_again_first(agents,
+                                                                                 folders):
+    council_id = ready()
+    store = get_store()
+    store.update_council(council_id, {"streams": [
+        s.model_copy(update={"notes": s.notes.model_copy(update={"refs": {}})})
+        for s in council(council_id).streams]})
+    res = plans(council_id)
+    assert res.status_code == 409 and "выгрузите его заново" in res.json()["detail"]
+
+
 def test_approved_outcomes_not_yet_exported_are_not_planned(agents, folders):
     council_id = single()
     free_c(council_id)
@@ -288,3 +301,14 @@ def test_a_working_copy_gone_since_the_scan_refuses_the_plan(agents, folders, re
     res = plans(council_id)
     assert res.status_code == 422 and "не прочитать" in res.json()["detail"]
     assert council(council_id).tasks is None
+
+
+def test_an_issue_file_names_other_issues_by_their_project_numbers():
+    issue = Issue(id="I2", title="Выдача после I1", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Ждать I1, не трогая I10."],
+                  open_questions=["Готова ли I1?"])
+    text = issue_text(issue, "ISS-0008", ("OUT-0001", "Итог"), [], [("ISS-0007", "Индекс")], [],
+                      [], words_for("Russian"), {"I1": "ISS-0007", "I2": "ISS-0008"})
+    assert text.startswith("# Выдача после ISS-0007")
+    assert "- Ждать ISS-0007, не трогая I10." in text
+    assert "- Готова ли ISS-0007?" in text

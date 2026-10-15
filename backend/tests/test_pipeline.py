@@ -1117,7 +1117,8 @@ def test_a_figma_refusal_fails_the_scan_before_any_model_is_asked():
 # --- план задач совета
 
 PLAN_CONTEXT = Context(outcomes=frozenset({"OUT-0001", "OUT-0002"}),
-                       adrs=frozenset({"ADR-0003"}), limits=frozenset({5}))
+                       adrs=frozenset({"ADR-0003"}), constraints=frozenset({5}),
+                       risks=frozenset({7}))
 PLAN_INPUTS = Inputs(values={"ideas": "A. Поиск: " + FIND, "outcomes": "[ИТОГИ]",
                              "decisions": "[РЕШЕНИЯ]", "constraints_and_risks": "[]"},
                      context=PLAN_CONTEXT, outcomes=["OUT-0001", "OUT-0002"],
@@ -1205,11 +1206,18 @@ def test_a_plan_keeps_only_what_the_data_has():
     номера — заново по порядку."""
     found = plan_of({"issues": [
         task("X", "Чужая", outcome="OUT-0099"),
-        task("A1", "Индекс", adr_ids=["ADR-0003", "ADR-0404"], constraint_ids=[5, 6],
-             depends_on=["A1", "Z"]),
-        task("A2", "Выдача", depends_on=["A1", "A1"])]}, PLAN_CONTEXT)
-    assert [(i.id, i.title, i.adr_ids, i.constraint_ids, i.depends_on) for i in found] == [
-        ("I1", "Индекс", ["ADR-0003"], [5], []), ("I2", "Выдача", ["ADR-0003"], [5], ["I1"])]
+        task("A1", "Индекс", adr_ids=["ADR-0003", "ADR-0404"], constraint_ids=[5, 6, 7],
+             risk_ids=[5, 7], depends_on=["A1", "Z"]),
+        task("A2", "Выдача", depends_on=["A1", "A1"],
+             scope=["После A1: отдать ответ, не трогая A10."], open_questions=["Ждать ли A1?"])]},
+        PLAN_CONTEXT)
+    assert [(i.id, i.title, i.adr_ids, i.constraint_ids, i.risk_ids, i.depends_on)
+            for i in found] == [
+        ("I1", "Индекс", ["ADR-0003"], [5], [7], []),
+        ("I2", "Выдача", ["ADR-0003"], [5], [], ["I1"])]
+    # Номера задач в тексте — новые: агент и человек видят те же, что в плане.
+    assert found[1].scope == ["После I1: отдать ответ, не трогая A10."]
+    assert found[1].open_questions == ["Ждать ли I1?"]
 
 
 def test_a_plan_with_a_cycle_or_without_a_title_is_a_bad_answer():

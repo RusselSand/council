@@ -26,6 +26,7 @@ from .models import (
 )
 from .notes import Catalog, issues_in
 from .questions import same_question
+from .tasks import relabeled
 
 
 def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | None,
@@ -67,24 +68,32 @@ def line(text: str) -> str:
 
 def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
                adrs: Sequence[tuple[str, str]], after: Sequence[tuple[str, str]],
-               keep: Sequence[str], risks: Sequence[str], words: Mapping[str, str]) -> str:
+               keep: Sequence[str], risks: Sequence[str], words: Mapping[str, str],
+               names: Mapping[str, str] | None = None) -> str:
     """Задача для coding agent: кому и зачем, где менять и что там сейчас, что сделать, на чём
-    стоит, что соблюдать, что неясно и после каких задач, — и номер для финального коммита."""
-    lines = [f"# {line(issue.title)}", "", issue.user_story.strip()]
+    стоит, что соблюдать, что неясно и после каких задач, — и номер для финального коммита.
+    Задачи плана текст называет I-n, а агент найдёт их по номерам на весь проект: names."""
+    names = names or {}
+
+    def named(value: str) -> str:
+        return relabeled(value, names)
+
+    lines = [f"# {line(named(issue.title))}", "", named(issue.user_story.strip())]
 
     def section(title: str, items: Iterable[str]) -> None:
         items = list(items)
         if items:
             lines.extend(["", f"## {title}", *items])
 
+    now = issue.current_state.strip()
     section(words["entry"], (f"- {line(item)}" for item in issue.main_entry_points))
-    section(words["now"], [issue.current_state.strip()] if issue.current_state.strip() else [])
-    section(words["scope"], (f"- {line(item)}" for item in issue.scope))
+    section(words["now"], [named(now)] if now else [])
+    section(words["scope"], (f"- {line(named(item))}" for item in issue.scope))
     section(words["outcomes"], [f"- {outcome[0]}: {line(outcome[1])}"])
     section(words["decisions"], (f"- {name}: {line(text)}" for name, text in adrs))
     section(words["keep"], (f"- {line(text)}" for text in keep))
     section(words["risks"], (f"- {line(text)}" for text in risks))
-    section(words["open"], (f"- {line(text)}" for text in issue.open_questions))
+    section(words["open"], (f"- {line(named(item))}" for item in issue.open_questions))
     section(words["after"], (f"- {name}: {line(text)}" for name, text in after))
     lines += ["", words["commit"].format(id=number)]
     return "\n".join(lines)
@@ -120,7 +129,8 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                  if name in by_issue]
         text = issue_text(issue, number.id, outcome, adrs, after,
                           [fragments[i].text for i in issue.constraint_ids if i in fragments],
-                          [fragments[i].text for i in issue.risk_ids if i in fragments], words)
+                          [fragments[i].text for i in issue.risk_ids if i in fragments], words,
+                          {name: number.id for name, number in by_issue.items()})
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},

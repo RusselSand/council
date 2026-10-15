@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -23,11 +24,12 @@ ITEMS_MAX = 20
 
 @dataclass(frozen=True)
 class Context:
-    """На что задача может сослаться: итоги плана, решения и фрагменты-ограничения и риски."""
+    """На что задача может сослаться: итоги плана, решения, ограничения и риски итогов."""
 
     outcomes: frozenset[str]
     adrs: frozenset[str]
-    limits: frozenset[int]
+    constraints: frozenset[int]
+    risks: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -55,7 +57,8 @@ def basis_of(council: Council) -> dict[str, str]:
 
 def not_ready(council: Council, notes: str | None) -> list[str]:
     """Почему план строить рано: какой поток не утвердил итоги или не выгружен к ним в нынешний
-    каталог заметок. Пусто — можно."""
+    каталог заметок — или выгружен, когда совет ещё не помнил номера заметок (`refs`): тогда
+    модели не узнали бы, как зовут его итоги. Пусто — можно."""
     if not council.streams:
         return ["Группы ещё не подтверждены"]
     problems = []
@@ -66,6 +69,9 @@ def not_ready(council: Council, notes: str | None) -> list[str]:
         elif (stream.notes is None or notes is None or stream.notes.root != notes
               or stream.notes.outcomes != outcomes.run):
             problems.append(f"Поток {stream.group}: не выгружен в заметки к утверждённым итогам")
+        elif not stream.notes.refs:
+            problems.append(f"Поток {stream.group}: выгружен до того, как совет стал помнить "
+                            "номера заметок, — выгрузите его заново")
     return problems
 
 
@@ -81,7 +87,8 @@ def inputs_of(council: Council) -> Inputs:
     fragments = {f.id: f for f in council.slicing.fragments} if council.slicing else {}
     outcomes: list[dict] = []
     decisions: dict[str, dict] = {}
-    limits: set[int] = set()
+    constraints: set[int] = set()
+    risks: set[int] = set()
     skipped: list[str] = []
     for stream in council.streams or []:
         refs = stream.notes.refs if stream.notes else {}
@@ -93,7 +100,8 @@ def inputs_of(council: Council) -> Inputs:
                                "заметки — в план не входит")
                 continue
             outcomes.append(outcome_entry(outcome, note, stream.group, refs))
-            limits |= {*outcome.constraint_ids, *outcome.risk_ids}
+            constraints |= set(outcome.constraint_ids)
+            risks |= set(outcome.risk_ids)
             for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids):
                 if name in refs:
                     decisions[refs[name]] = adr_entry(stream, name, refs[name], written)
@@ -107,9 +115,9 @@ def inputs_of(council: Council) -> Inputs:
                                          "superseded_by": found.superseded_by}
     values = {"ideas": ideas_text(council), "outcomes": as_json(outcomes),
               "decisions": as_json(list(decisions.values())),
-              "constraints_and_risks": as_json(limits_prompt(fragments, limits))}
+              "constraints_and_risks": as_json(limits_prompt(fragments, constraints | risks))}
     context = Context(frozenset(o["id"] for o in outcomes), frozenset(decisions),
-                      frozenset(limits))
+                      frozenset(constraints), frozenset(risks))
     return Inputs(values, context, [o["id"] for o in outcomes], skipped, basis_of(council))
 
 
@@ -156,9 +164,19 @@ def texts_of(value: object) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()][:ITEMS_MAX]
 
 
+def relabeled(text: str, names: Mapping[str, str]) -> str:
+    """Номера задач в тексте — новыми (names: прежний → новый), за один проход: I1 ↔ I2 не
+    путаются."""
+    if not names:
+        return text
+    pattern = re.compile(r"(?<![\w-])(" + "|".join(
+        re.escape(name) for name in sorted(names, key=len, reverse=True)) + r")(?![\w-])")
+    return pattern.sub(lambda found: names[found.group(1)], text)
+
+
 def plan_of(data: dict, context: Context) -> list[Issue]:
-    """План из ответа модели: задачи по порядку, с номерами I1, I2… Задача, чей итог не из
-    плана, отбрасывается — как и ссылки, которых нет в данных."""
+    """План из ответа модели: задачи по порядку, с номерами I1, I2… — и в тексте задач тоже.
+    Задача, чей итог не из плана, отбрасывается — как и ссылки, которых нет в данных."""
     items = data.get("issues")
     if not isinstance(items, list):
         raise BadAnswer("нет списка issues")
@@ -178,17 +196,21 @@ def plan_of(data: dict, context: Context) -> list[Issue]:
         issue_id = f"I{n}"
         after = [renamed[d] for d in texts_of(item.get("depends_on"))
                  if d in renamed and renamed[d] != issue_id]
+        def text(value: str) -> str:
+            return relabeled(value, renamed)
+
         issues.append(Issue(
-            id=issue_id, title=text_of(item.get("title"), "названия"),
-            user_story=text_of(item.get("user_story"), "user story"),
+            id=issue_id, title=text(text_of(item.get("title"), "названия")),
+            user_story=text(text_of(item.get("user_story"), "user story")),
             main_entry_points=texts_of(item.get("main_entry_points")),
-            current_state=text_of(item.get("current_state"), "нынешнего состояния", False),
-            scope=texts_of(item.get("scope")), outcome_id=item["outcome_id"],
+            current_state=text(text_of(item.get("current_state"), "нынешнего состояния", False)),
+            scope=[text(line) for line in texts_of(item.get("scope"))],
+            outcome_id=item["outcome_id"],
             adr_ids=[a for a in texts_of(item.get("adr_ids")) if a in context.adrs],
-            constraint_ids=ints_in(item.get("constraint_ids"), context.limits),
-            risk_ids=ints_in(item.get("risk_ids"), context.limits),
+            constraint_ids=ints_in(item.get("constraint_ids"), context.constraints),
+            risk_ids=ints_in(item.get("risk_ids"), context.risks),
             depends_on=list(dict.fromkeys(after)),
-            open_questions=texts_of(item.get("open_questions"))))
+            open_questions=[text(line) for line in texts_of(item.get("open_questions"))]))
     cycle = cycle_of(issues)
     if cycle:
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")

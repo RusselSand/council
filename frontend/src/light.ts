@@ -67,9 +67,9 @@ export const exportedNotes = (stream: Stream, notes: string | null): boolean =>
 export const exportedTo = (stream: Stream, notes: string | null): boolean =>
   !!stream.notes && notes !== null && stream.notes.root === notes
 
-/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
+/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие и файлы задач прежних выгрузок — не в счёт. */
 export const exportedCount = (stream: Stream): number =>
-  stream.notes?.notes.filter(note => !note.kept).length ?? 0
+  stream.notes?.notes.filter(note => !note.kept && note.type !== 'issue').length ?? 0
 
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.

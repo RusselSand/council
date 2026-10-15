@@ -47,7 +47,8 @@ export function TasksStage({ council, settings, onChange }: Readonly<{
     try {
       return await api.resetTasks(council.id, at)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) onChange(await api.council(council.id))
+      // Группы уже другие или совет ещё работает с планом (другая вкладка) — показываем нынешнее.
+      if (e instanceof ApiError && (e.status === 409 || e.status === 423)) onChange(await api.council(council.id))
       throw e
     }
   })
