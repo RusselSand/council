@@ -823,6 +823,7 @@ export const ru = {
   'step.outcome_judge': 'Судья итогов',
   'step.issue_discovery': 'Нарезка на задачи',
   'step.issue_judge': 'Судья задач',
+  'step.issue_gap_check': 'Проверка пробелов задач',
   'step.issue_dependencies': 'Зависимости задач',
 
   'label.idea': 'идея',

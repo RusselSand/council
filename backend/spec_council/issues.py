@@ -10,6 +10,11 @@
 пробел того же ответа (G-n) или открытый вопрос потока. Пробел, совпавший с открытым вопросом
 отбора, — блокировка им, с решённым — уже ответ.
 Список задач может быть и пустым: всё уже реализовано или заблокировано.
+
+Итог режут, видя только его решения, поэтому пробел задачи бывает вопросом, на который уже есть
+ответ в другом месте отбора. Такие ищет судья (answers_of): решённый вопрос — итог режут заново
+с его решением, а задача, которой оно нужно, идёт после задачи, которая его реализует
+(owner_dependencies); открытый — задачи держит он (without_gaps).
 """
 
 import itertools
@@ -32,6 +37,7 @@ ITEM_MAX = 1000
 ISSUE_ID = re.compile(r"I?(\d+)", re.IGNORECASE)
 GAP_ID = re.compile(r"G(\d+)", re.IGNORECASE)
 OUTCOME_ID = re.compile(r"O?(\d+)", re.IGNORECASE)
+QUESTION_ID = re.compile(r"Q(\d+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -477,4 +483,99 @@ def dependencies_of(data: dict, answer: Answer,
         [*issue.depends_on, *added.get(issue.name, [])]))) for issue in answer.issues]
     if cycle := cycle_of(issues):
         raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
+    return Answer(tuple(after_blocked(issues)), answer.gaps)
+
+
+@dataclass(frozen=True)
+class Found:
+    """Ответ на пробел среди вопросов отбора: решённые вопросы, чьи решения итогу нужны, или
+    открытые, которые и есть этот пробел."""
+
+    decided: tuple[str, ...]
+    opened: tuple[str, ...]
+    reason: str
+
+
+def answers_of(data: dict, gaps: Iterable[str], decided: frozenset[str],
+               opened: frozenset[str]) -> dict[str, Found]:
+    """Ответ судьи о пробелах: на какие уже есть ответ и в каких вопросах отбора. gaps — номера
+    пробелов, которые ему показали (G-n). Чужой номер пробела или вопроса отбрасывается; пробел,
+    у которого не осталось ни одного вопроса, — без ответа. Если среди вопросов есть открытый,
+    пробел — он: решённые рядом с ним ответа ещё не дают."""
+    items = data.get("answers")
+    if not isinstance(items, list):
+        raise BadAnswer("нет списка answers")
+    known = set(gaps)
+    found: dict[str, Found] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("gap_id")
+        gap = GAP_ID.fullmatch(raw.strip()) if isinstance(raw, str) else None
+        name = f"G{int(gap.group(1))}" if gap else ""
+        if name not in known:
+            continue
+        ids = [f"Q{int(match.group(1))}" for value in as_list(item.get("question_ids"))
+               if isinstance(value, str) and (match := QUESTION_ID.fullmatch(value.strip()))]
+        ids = list(dict.fromkeys(ids))
+        open_ids = tuple(q for q in ids if q in opened)
+        decided_ids = () if open_ids else tuple(q for q in ids if q in decided)
+        if open_ids or decided_ids:
+            found[name] = Found(decided_ids, open_ids, reason_of(item.get("reason")))
+    return found
+
+
+def without_gaps(answer: Answer, replaced: Mapping[str, tuple[str, ...]]) -> Answer:
+    """Пробелы, на которые нашёлся ответ, — вон: G-n из replaced не держит больше задачи, а на
+    его месте в blocked_by — то, что ему сопоставлено (открытые вопросы или ничего). Номера
+    оставшихся пробелов — по порядку."""
+    kept: list[Gap] = []
+    renamed: dict[str, str] = {}
+    for n, gap in enumerate(answer.gaps, 1):
+        if f"G{n}" not in replaced:
+            kept.append(gap)
+            renamed[f"G{n}"] = f"G{len(kept)}"
+
+    def blocked(names: tuple[str, ...]) -> tuple[str, ...]:
+        result: set[str] = set()
+        for name in names:
+            if name in replaced:
+                result.update(replaced[name])
+            else:
+                result.add(renamed.get(name, name))
+        return tuple(sorted(result))
+
+    return Answer(tuple(replace(issue, blocked_by=blocked(issue.blocked_by))
+                        for issue in answer.issues), tuple(kept))
+
+
+def owner_dependencies(answer: Answer, needs: Mapping[str, Iterable[str]],
+                       owners: Mapping[str, str],
+                       carried: Iterable[tuple[str, Iterable[str], Iterable[str]]] = ()
+                       ) -> Answer:
+    """Задача, которой нужно решение, найденное в ответ на пробел её итога (needs — итог и такие
+    решения), идёт после задач, которые это решение реализуют: задач итога-владельца (owners —
+    решение и итог, что его реализует), у которых оно в adr_ids, а если такой нет — всех задач
+    этого итога. Задачи берутся и новые, и перенесённые (carried — номер, итоги, решения).
+    Решение своего итога или без итога-владельца зависимости не даёт; зависимость, которая
+    замкнула бы круг, не ставится."""
+    issues = list(answer.issues)
+    pool = [(issue.name, set(issue.outcome_ids), set(issue.adr_ids)) for issue in issues]
+    pool += [(name, set(outcome_ids), set(adr_ids)) for name, outcome_ids, adr_ids in carried]
+    for n, issue in enumerate(issues):
+        wanted = {adr for outcome in issue.outcome_ids for adr in needs.get(outcome, ())}
+        for adr in sorted(wanted & set(issue.adr_ids), key=lambda name: int(name.split("-")[1])):
+            owner = owners.get(adr)
+            if owner is None or owner in issue.outcome_ids:
+                continue
+            theirs = [name for name, outcome_ids, _ in pool if owner in outcome_ids and name]
+            doing = [name for name, outcome_ids, adr_ids in pool
+                     if owner in outcome_ids and adr in adr_ids and name]
+            for after in doing or theirs:
+                current = issues[n]
+                if after in current.depends_on or after == current.name:
+                    continue
+                trial = replace(current, depends_on=(*current.depends_on, after))
+                if not cycle_of([*issues[:n], trial, *issues[n + 1:]]):
+                    issues[n] = trial
     return Answer(tuple(after_blocked(issues)), answer.gaps)

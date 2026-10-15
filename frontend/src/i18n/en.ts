@@ -827,6 +827,7 @@ export const en: Dict = {
   'step.outcome_judge': 'Outcome judge',
   'step.issue_discovery': 'Issue cutting',
   'step.issue_judge': 'Issue judge',
+  'step.issue_gap_check': 'Issue gap check',
   'step.issue_dependencies': 'Issue dependencies',
 
   'label.idea': 'idea',

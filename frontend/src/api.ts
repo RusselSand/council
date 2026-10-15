@@ -8,7 +8,8 @@ export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'stru
   | 'design_discovery' | 'design_judge' | 'project_decisions_discovery' | 'project_decisions_judge'
   | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
-  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge' | 'issue_dependencies'
+  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge'
+  | 'issue_gap_check' | 'issue_dependencies'
   | 'notes_translation'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
