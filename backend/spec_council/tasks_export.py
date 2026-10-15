@@ -24,7 +24,7 @@ from .models import (
     TasksExport,
     VanishedNote,
 )
-from .notes import Catalog, issues_in
+from .notes import Catalog, NotesError, issues_in
 from .questions import same_question
 from .tasks import relabeled
 
@@ -34,12 +34,14 @@ def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | 
              occupied: Collection[str] = ()) -> list[IssueNumber]:
     """Номера задач на весь проект: прежняя задача (по названию и сути) — прежний номер, новая —
     следующий после самого большого в каталоге заметок, прежней выгрузке и папке задач (files —
-    номера её файлов: новая задача не ляжет в чужой файл). Прежний номер, который упомянут в
-    каталоге, занял другой совет (reserved) или под ним в папке лежит файл другой задачи
-    (occupied), — уже не наш: тогда новый."""
+    номера её файлов: новая задача не ляжет в чужой файл). Прежний номер, который занял другой
+    совет (reserved), под ним в папке лежит файл другой задачи (occupied) или его упоминает
+    каталог, хотя прежняя выгрузка его не раздавала, — уже не наш: тогда новый. Свой номер,
+    упомянутый в заметке, — всё ещё свой: заметка на эту задачу и ссылается."""
     known = {number.key: number.id for number in previous.numbers} if previous else {}
+    ours = set(known.values())
     foreign = {issue for note in catalog.notes.values() for issue in issues_in(note.body)}
-    foreign |= set(reserved) | set(occupied)
+    foreign = (foreign - ours) | set(reserved) | set(occupied)
     used = [int(found.group(1)) for note in catalog.notes.values()
             for issue in issues_in(note.body) if (found := ISSUE.fullmatch(issue))]
     used += [int(found.group(1)) for number in (*known.values(), *reserved, *files, *occupied)
@@ -119,6 +121,13 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     by_issue = {number.issue_id: number for number in numbers}
     filed = {note.id: note for note in previous.notes} if previous else {}
     reuse = previous is not None and previous.language == language
+    # Итог и решения задачи — заметки каталога: какую с тех пор удалили, на ту файл задачи
+    # сослался бы впустую.
+    gone = sorted({name for issue in plan.issues for name in (issue.outcome_id, *issue.adr_ids)
+                   if name not in catalog.notes})
+    if gone:
+        raise NotesError(f"В каталоге заметок больше нет {', '.join(gone)}, а план на них стоит: "
+                         "верните заметки или выгрузите потоки заново и спланируйте снова")
     notes: list[NotePlan] = []
     for issue in plan.issues:
         number = by_issue[issue.id]
@@ -136,7 +145,15 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
                              old, old.key if old else None, shelf, reuse))
     current = {number.id for number in numbers}
-    vanished = [VanishedNote(id=old.id, type="issue", text=shelf.files[old.id].body)
+    # Файлы, что останутся в папке как есть: не из плана или правленные руками. Исчезнувшую
+    # задачу, на которую они ссылаются, удалить нельзя.
+    staying = [note for note in shelf.files.values()
+               if note.id not in current
+               or any(plan_note.id == note.id and plan_note.action == "edited"
+                      for plan_note in notes)]
+    vanished = [VanishedNote(id=old.id, type="issue", text=shelf.files[old.id].body,
+                             linked_from=sorted(note.id for note in staying
+                                                if old.id in note.links and note.id != old.id))
                 for old in filed.values()
                 if old.id not in current and old.id in shelf.files and old.id not in reserved]
     return notes, vanished, numbers

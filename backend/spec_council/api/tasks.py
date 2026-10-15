@@ -275,10 +275,16 @@ def current_plan(council: Council, notes: Path) -> TaskPlan:
 
 def drafted_for(council: Council, shelf: Shelf, store: Store
                 ) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber]]:
+    """Что выгрузил бы совет сейчас. Не выгрузить (заметку, на которую стоит план, удалили) —
+    422 с причиной."""
     fragments = {f.id: f for f in council.slicing.fragments} if council.slicing else {}
-    return drafted_tasks(current_plan(council, shelf.root), fragments, shelf,
-                         export_in(council.tasks_export, shelf.issues), words_for(language()),
-                         notes_language(), reserved_by_others(store, council.id, shelf.issues))
+    plan = current_plan(council, shelf.root)
+    try:
+        return drafted_tasks(plan, fragments, shelf, export_in(council.tasks_export, shelf.issues),
+                             words_for(language()), notes_language(),
+                             reserved_by_others(store, council.id, shelf.issues))
+    except NotesError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @router.post("/{council_id}/tasks/draft", status_code=202,

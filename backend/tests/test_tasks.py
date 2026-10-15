@@ -12,9 +12,10 @@ from spec_council.app import app
 from spec_council.deps import get_agents, get_issues_of, get_launcher, get_notes_of
 from spec_council.export import words_for
 from spec_council.groups import arranged
+from spec_council.issue_files import rendered as issue_rendered
 from spec_council.models import CouncilStatus, Issue, Slicing, Structure, StructureProposal
 from spec_council.models import LabeledFragment as Fragment
-from spec_council.notes import Catalog
+from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
 from spec_council.tasks_export import issue_text
 from tests.test_streams import (
@@ -284,6 +285,63 @@ def test_writing_again_keeps_the_numbers_and_human_edits(agents, folders):
     drafts(council_id)
     [again] = council(council_id).tasks_draft.notes
     assert again.id == "ISS-0001" and again.text.startswith("# Своя задача")
+
+
+def test_a_number_mentioned_in_a_note_stays_with_its_task(agents, folders):
+    """Заметка проекта ссылается на выгруженную задачу: номер всё ещё этой задачи."""
+    notes, _ = folders
+    council_id = ready()
+    plans(council_id)
+    drafts(council_id)
+    writes(council_id)
+    mention = Note("IDEA-0099", "idea", "Сделано в ISS-0001.", ())
+    path = path_of(notes, mention)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered(mention), encoding="utf-8")
+    resets(council_id)
+    plans(council_id)
+    drafts(council_id)
+    assert [n.id for n in council(council_id).tasks_draft.notes] == ["ISS-0001"]
+
+
+def test_a_note_the_plan_stands_on_deleted_since_is_not_drafted(agents, folders):
+    notes, _ = folders
+    council_id = ready()
+    plans(council_id)
+    (notes / "outcomes" / "OUT-0001.md").unlink()
+    res = drafts(council_id)
+    assert res.status_code == 422 and "OUT-0001" in res.json()["detail"]
+
+
+def test_a_vanished_task_another_file_still_waits_for_is_not_deleted(agents, folders):
+    _, issues = folders
+    council_id = ready()
+    plans(council_id)
+    drafts(council_id)
+    writes(council_id)
+    # Свою задачу человек положил руками: она ждёт ISS-0001.
+    own = Note("ISS-0005", "issue", "# Своя", ("ISS-0001",))
+    (issues / "ISS-0005.md").write_text(issue_rendered(own), encoding="utf-8")
+    resets(council_id)
+    renamed = Agents.task_plan
+
+    def other(prompt):
+        found = renamed(prompt)
+        for issue in found["issues"]:
+            issue["title"], issue["user_story"] = "Другая задача", "As a team, I want other."
+        return found
+
+    agents.task_plan = other
+    plans(council_id)
+    drafts(council_id)
+    [gone] = council(council_id).tasks_draft.vanished
+    assert (gone.id, gone.linked_from) == ("ISS-0001", ["ISS-0005"])
+    res = client.post(
+        f"/api/councils/{council_id}/tasks/write",
+        json={"run": "g1", "revision": 0, "draft": council(council_id).tasks_draft.run,
+              "edits": {}, "delete": ["ISS-0001"]})
+    assert res.status_code == 422 and "ISS-0005" in res.json()["detail"]
+    assert (issues / "ISS-0001.md").exists()
 
 
 def test_a_plan_whose_notes_folder_changed_is_not_exported(agents, folders, tmp_path):
