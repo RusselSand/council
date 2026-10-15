@@ -145,8 +145,12 @@ hold:
 - this OUTCOME cannot be described or checked without the choice. A question that does not block
   this OUTCOME is not its gap.
 
-The absence of an explicit rule is not a gap by itself: what the accepted decisions do not change
-stays as it is now in the code.
+The absence of an explicit rule is not a gap by itself when the current behavior is known: what
+the accepted decisions do not change stays as it is now in the code. Known means `verified` in the
+REPOSITORY CONTEXT. If the repository was not investigated, or that behavior is `inferred`,
+`unknown` or in a part the investigation did not finish (`complete: false`,
+`remaining_follow_up`), the current behavior is not known: do not assume it. Then a missing rule
+is a gap when it meets the conditions above.
 
 An accepted ADR applies within the OPEN QUESTION it answers: do not extend it to other parts of the
 system to find a gap.
