@@ -18,7 +18,6 @@ from ..models import (
     DecisionsSearch,
     DesignScan,
     IdeaDiscovery,
-    IssueDiscovery,
     Label,
     NotesDraft,
     OutcomeDiscovery,
@@ -27,6 +26,8 @@ from ..models import (
     RepositoryScan,
     Slicing,
     Structure,
+    TaskPlan,
+    TasksDraft,
 )
 from ..pipeline import CouncilRun, GroupingRun, SlicingRun
 
@@ -54,7 +55,7 @@ PROBE_ATTEMPTS = 3
 
 RunState = (Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
             | DecisionsSearch | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis
-            | OutcomeDiscovery | IssueDiscovery | NotesDraft)
+            | OutcomeDiscovery | TaskPlan | NotesDraft | TasksDraft)
 
 
 @dataclass(frozen=True)
@@ -274,8 +275,13 @@ def running(state: RunState | None) -> bool:
 
 def seeking(council: Council) -> bool:
     """Совет работает хоть над одним потоком — ищет идею, вопросы, варианты, проверяет выбор
-    или собирает итоги: новая нарезка, раскладка или другой состав групп стёрли бы потоки из-под
-    него."""
+    или собирает итоги, — исследует код и макет или строит и выгружает план задач: новая
+    нарезка, раскладка или другой состав групп стёрли бы потоки из-под него."""
+    research = council.research
+    if research is not None and (running(research.scan) or running(research.design_scan)):
+        return True
+    if running(council.tasks) or running(council.tasks_draft):
+        return True
     return any(running(getattr(stream, field))
                for stream in council.streams or [] for field in STREAM_RUNS)
 

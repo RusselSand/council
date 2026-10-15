@@ -12,7 +12,6 @@ from spec_council.deps import data_folder
 from spec_council.models import (
     CouncilStatus,
     Group,
-    IssueDiscovery,
     LabeledFragment,
     ModelRun,
     RepositoryScan,
@@ -232,9 +231,8 @@ def test_streams_saved_before_the_design_step_passed_it_by_skipping(tmp_path):
     assert second.design is None                        # вопросов не было — шаг впереди
 
 
-def test_a_scan_and_a_cut_saved_with_one_repository_read_as_a_list_of_one():
-    """Совет, сохранённый, пока рабочая копия у скана была одна: её поля — первая в списке, и
-    нарезка помнит её коммит и правки; без кода — пустой список."""
+def test_a_scan_saved_with_one_repository_reads_as_a_list_of_one():
+    """Совет, сохранённый, пока рабочая копия у скана была одна: её поля — первая в списке."""
     scan = RepositoryScan.model_validate({
         "state": "done", "run": "r1", "idea": "Идея", "path": "project", "root": "/repos/project",
         "commit_sha": "abc", "dirty": True, "files": 2, "outside": 1,
@@ -245,11 +243,6 @@ def test_a_scan_and_a_cut_saved_with_one_repository_read_as_a_list_of_one():
         "name": "", "path": "project", "root": "/repos/project", "checkout": "", "within": "",
         "commit_sha": "abc", "dirty": True, "files": 2, "outside": 1,
         "omitted": ["vendor/ — подмодуль не скачан"], "omitted_count": 1}]
-    old = {"state": "done", "run": "i1", "outcomes": "o1", "steps": []}
-    cut = IssueDiscovery.model_validate({**old, "code": True, "commit_sha": "abc", "dirty": True})
-    assert [(s.commit_sha, s.dirty) for s in cut.sources] == [("abc", True)]
-    blind = IssueDiscovery.model_validate({**old, "code": False, "commit_sha": "", "dirty": False})
-    assert blind.sources == []
 
 
 def test_councils_are_read_under_the_models_of_today(tmp_path):

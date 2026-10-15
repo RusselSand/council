@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useOutletContext, useParams } from 'react-router'
 import {
-  api, ApiError, councilPath, foldersOf, isNotFound, searchesOf, seeking,
+  api, ApiError, councilPath, foldersOf, isNotFound, planning, researching, searchesOf, seeking,
   type Council, type CouncilPatch, type Label, type Slicing, type Stream,
 } from '../api'
 import type { Layout } from '../App'
@@ -12,10 +12,12 @@ import { useInterval } from '../useInterval'
 import { useLoad } from '../useLoad'
 import { BriefStage } from './BriefStage'
 import { GroupsStage } from './GroupsStage'
+import { ResearchStage } from './ResearchStage'
 import { SlicesStage } from './SlicesStage'
 import { StreamsStage } from './StreamsStage'
+import { TasksStage } from './TasksStage'
 
-export const STAGES = ['brief', 'slices', 'structure', 'streams', 'history'] as const
+export const STAGES = ['brief', 'slices', 'structure', 'research', 'streams', 'tasks'] as const
 
 /** Путь этапа под /councils/:id/. У потоков в нём ещё буква открытого потока. */
 export const stagePath = (stage: Stage) => (stage === 'streams' ? 'streams/:stream?' : stage)
@@ -100,7 +102,8 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
   const adopt = useCallback((fresh: Council, sent?: Slicing | null) => {
     acted.current += 1
     update(([c, settings]) => [{
-      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams, project: fresh.project,
+      ...c, status: fresh.status, structure: fresh.structure, streams: fresh.streams, research: fresh.research,
+      tasks: fresh.tasks, tasks_draft: fresh.tasks_draft, tasks_export: fresh.tasks_export, project: fresh.project,
       slicing: sent ? rebased(fresh.slicing, sent, c.slicing) : fresh.slicing,
     }, settings])
     refreshProjects()
@@ -157,6 +160,10 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
       if (c.slicing?.state === 'running') next.slicing = fresh.slicing
       if (c.structure?.state === 'running') next.structure = fresh.structure
       if (c.streams && seeking(c)) next.streams = followed(c.streams, fresh.streams)
+      // Исследование — на весь совет: пока на экране идёт его скан, берём его с сервера целиком.
+      if (researching(c)) next.research = fresh.research
+      // План задач — тоже на весь совет: пока на экране он строится или переводится его выгрузка, берём с сервера.
+      if (planning(c)) Object.assign(next, { tasks: fresh.tasks, tasks_draft: fresh.tasks_draft, tasks_export: fresh.tasks_export })
       return [next, settings]
     }), [update])
   const working = council?.slicing?.state === 'running' || council?.structure?.state === 'running'
@@ -209,7 +216,7 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
           )
         })}
       </nav>
-      <main className={stage === 'streams' ? 'main wide' : 'main'}>
+      <main className={stage === 'streams' || stage === 'research' || stage === 'tasks' ? 'main wide' : 'main'}>
         <h1 className="sr-only">{title ?? t('common.loading')}</h1>
         {state.kind === 'loading' && <div className="card muted">{t('common.loading')}</div>}
         {state.kind === 'ok' && stage === 'brief' && (
@@ -223,11 +230,14 @@ function CouncilView({ id, stage }: Readonly<{ id: string; stage: Stage }>) {
         {state.kind === 'ok' && stage === 'structure' && (
           <GroupsStage council={state.data[0]} settings={state.data[1]} onStart={adopt} />
         )}
+        {state.kind === 'ok' && stage === 'research' && (
+          <ResearchStage council={state.data[0]} settings={state.data[1]} onChange={adopt} />
+        )}
         {state.kind === 'ok' && stage === 'streams' && (
           <StreamsStage council={state.data[0]} settings={state.data[1]} onChange={adopt} />
         )}
-        {state.kind === 'ok' && stage === 'history' && (
-          <div className="card placeholder">{t('council.stub', { stage: t(`stage.${stage}`) })}</div>
+        {state.kind === 'ok' && stage === 'tasks' && (
+          <TasksStage council={state.data[0]} settings={state.data[1]} onChange={adopt} />
         )}
       </main>
     </>

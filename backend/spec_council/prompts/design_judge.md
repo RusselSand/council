@@ -3,8 +3,8 @@
 You check the completeness and reliability of the Figma investigation performed by independent agents.
 
 You are given:
-- the approved IDEA;
-- the group fragments;
+- the approved IDEA: the ideas of all groups of the council, one per line (`A. title: idea`) — the investigation serves every one of them;
+- the fragments of all groups;
 - a link to Figma;
 - a snapshot of the Figma file in the current directory, read-only: what it contains is in FIGMA SOURCE;
 - the results of the independent Design Discovery.
@@ -95,6 +95,8 @@ Determine:
 Do not require an investigation of the whole Figma file.
 
 But do not declare the investigation complete if known relevant pages or states are missed.
+
+Check coverage for the idea of each group separately: an idea whose screens were not investigated is a gap, even if the other ideas are covered well.
 
 ## 6. Targeted follow-up
 
@@ -235,7 +237,7 @@ Before answering, check:
 
 {{idea}}
 
-## GROUP FRAGMENTS
+## FRAGMENTS OF ALL GROUPS
 
 {{fragments}}
 

@@ -3,8 +3,8 @@
 You check the completeness and reliability of the repository investigation performed by independent agents.
 
 You are given:
-- the approved IDEA;
-- the group fragments;
+- the approved IDEA: the ideas of all groups of the council, one per line (`A. title: idea`) — the investigation serves every one of them;
+- the fragments of all groups;
 - the technical inventory;
 - read access to the repository;
 - the commit SHA;
@@ -83,6 +83,8 @@ Determine:
 Do not use a fixed list of mandatory areas for every task.
 
 Assess the need to investigate each area relative to the IDEA and the discovered dependencies.
+
+Check coverage for the idea of each group separately: an idea whose code was not investigated is a gap, even if the other ideas are covered well.
 
 If the agents investigated different parts of the system, merge the results, but do not consider the merge automatically complete.
 
@@ -231,7 +233,7 @@ Before answering, check:
 
 {{idea}}
 
-## GROUP FRAGMENTS
+## FRAGMENTS OF ALL GROUPS
 
 {{fragments}}
 

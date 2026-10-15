@@ -10,34 +10,30 @@ from spec_council.figma import FigmaError, link_of
 from spec_council.models import (
     Choice,
     Decision,
-    Issue,
     LabeledFragment,
     OpenQuestion,
-    Outcome,
-    OutcomeDiscovery,
-    OutcomeGap,
     ProjectDecision,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
     StepName,
-    Stream,
-    StreamIdea,
 )
 from spec_council.pipeline import (
     DecisionRun,
     DesignRun,
     GroupingRun,
     IdeaRun,
-    IssueRun,
     ModelFailed,
     OutcomeRun,
     ProposalRun,
     QuestionRun,
     RepositoryRun,
     SlicingRun,
+    TaskRun,
 )
 from spec_council.repository import Inventory, RepositoryError, Source
+from spec_council.slicing import BadAnswer
+from spec_council.tasks import Allowed, Context, Inputs, plan_of
 from tests.figma_fake import LINK, FakeFigma
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
@@ -1118,406 +1114,125 @@ def test_a_figma_refusal_fails_the_scan_before_any_model_is_asked():
     assert runner.keys == [] and result.source is None
 
 
-# --- нарезка на задачи
+# --- план задач совета
 
-APPROVED = OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
-    Outcome(id="O1", title="Поиск по базе", behavior="Ответ находится поиском.",
-            adr_ids=["ADR-1"], constraint_ids=[5], acceptance_criteria=["Находит по слову."]),
-    Outcome(id="O2", title="Хранение базы", behavior="База где-то живёт.", blocked_by=["Q2"])])
+PLAN_CONTEXT = Context(outcomes={
+    "OUT-0001": Allowed(adrs=frozenset({"ADR-0003"}), constraints=frozenset({5}),
+                        risks=frozenset({7})),
+    "OUT-0002": Allowed(adrs=frozenset(), constraints=frozenset(), risks=frozenset())})
+PLAN_INPUTS = Inputs(values={"ideas": "A. Поиск: " + FIND, "outcomes": "[ИТОГИ]",
+                             "decisions": "[РЕШЕНИЯ]", "constraints_and_risks": "[]"},
+                     context=PLAN_CONTEXT, outcomes=["OUT-0001", "OUT-0002"],
+                     skipped=["Поток B: O1 «Ещё» не лёг в заметки — в план не входит"],
+                     basis={"A": "o1:n1"})
 
 
-def task(id_, title, outcomes=("O1",), **extra):
+def task(id_, title, outcome="OUT-0001", **extra):
     return {"id": id_, "title": title,
             "user_story": f"As a member, I want {title}, so that I find answers.",
             "main_entry_points": ["api/deps.py"], "current_state": "Поиска нет.",
-            "scope": [f"{title}: сделать."], "outcome_ids": list(outcomes), "adr_ids": ["ADR-1"],
-            "constraint_ids": ["F5"], "risk_ids": [], "depends_on": [], "blocked_by": [],
+            "scope": [f"{title}: сделать."], "outcome_id": outcome, "adr_ids": ["ADR-0003"],
+            "constraint_ids": [5], "risk_ids": [], "depends_on": [], "open_questions": [],
             **extra}
 
 
-def cut(replies, sources=PROJECT, copy=None, outcomes=APPROVED):
-    runner, reports = FakeRunner({("issue_dependencies", "fable"): {"dependencies": []},
-                                  ("issue_gap_check", "fable"): {"answers": []},
-                                  **replies}), []
-    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
-                    decisions=DECIDED, proposals=FOUND, outcomes=outcomes)
-    result = IssueRun("c1", stream, GROUP_FRAGMENTS,
-                      ["sol", "fable"], "fable", runner, reports.append, sources=sources,
-                      repository="КАРТА РЕПОЗИТОРИЯ", copy=copy or copy_as("снимок-1")).run()
+def plans(replies, sources=PROJECT, copy=None):
+    runner, reports = FakeRunner(replies), []
+    result = TaskRun("c1", ["sol", "fable"], "fable", runner, reports.append, PLAN_INPUTS,
+                     sources=sources, repository="КАРТА РЕПОЗИТОРИЯ",
+                     copy=copy or copy_as("снимок-1")).run()
     return result, runner
 
 
-def by_outcome(on_o1, on_o2):
-    """Ответ модели — по тому, какой итог ей дали резать: итоги режут по одному. Ответ-функция
-    получает промпт."""
-    def answer(prompt):
-        reply = on_o1 if json.loads(section(prompt, "OUTCOME"))["id"] == "O1" else on_o2
-        return reply(prompt) if callable(reply) else reply
-    return answer
-
-
-# Итог O2 держит открытый вопрос: его задача заблокирована им.
-STORE = {"issues": [task("I1", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[])]}
-
-
-def test_approved_outcomes_are_cut_into_numbered_issues_reading_the_code():
+def test_the_plan_of_the_council_is_judged_when_the_plans_differ_reading_the_code():
     judge = {"issues": [task("I7", "Индекс базы"),
-                        task("I3", "Выдача ответа", depends_on=["I7"], blocked_by=["G1"])],
-             "gaps": [{"question": "Сколько хранить историю?", "reason": "не решено"}]}
-    result, runner = cut({
-        ("issue_discovery", "sol"): by_outcome({"issues": [task("I1", "Поиск")]}, STORE),
-        ("issue_discovery", "fable"): by_outcome({"issues": [task("I1", "Индекс")]}, STORE),
-        ("issue_judge", "fable"): judge})
-    assert result.state == "done"
-    assert [(i.id, i.title, i.outcome_ids, i.depends_on, i.blocked_by)
+                        task("I3", "Выдача ответа", depends_on=["I7"],
+                             open_questions=["Сколько хранить историю?"]),
+                        task("I9", "Хранение", outcome="OUT-0002", adr_ids=[])]}
+    result, runner = plans({("task_plan", "sol"): {"issues": [task("I1", "Поиск")]},
+                            ("task_plan", "fable"): {"issues": [task("I1", "Индекс")]},
+                            ("task_plan_judge", "fable"): judge})
+    assert result.state == "done", result.error
+    assert [(i.id, i.title, i.outcome_id, i.depends_on, i.open_questions)
             for i in result.issues] == [
-        ("I1", "Индекс базы", ["O1"], [], ["G1"]),     # пробел итога O1 — держит и её
-        ("I2", "Выдача ответа", ["O1"], ["I1"], ["G1"]),
-        ("I3", "Хранение", ["O2"], [], ["Q2"])]
-    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
-        ("G1", "Сколько хранить историю?", ["O1"])]
-    assert result.uncovered_outcome_ids == []                       # считает код, не модель
-    assert (result.outcomes, result.code) == ("o1", True)
-    assert [(s.name, s.commit_sha) for s in result.sources] == [("", "abc123")]
-    # Последним резали O2: модели видят только его — открытый вопрос, держащий итог, текстом
-    # и с вариантами, а не одним номером.
-    outcome = json.loads(section(runner.asked["issue_discovery", "sol"], "OUTCOME"))
-    assert outcome["id"] == "O2"
-    assert WHERE.text in json.dumps(outcome, ensure_ascii=False) and "Notion" in json.dumps(
-        outcome, ensure_ascii=False)
-    # Судья сводил O1: его решения, ограничения и нарезки участников.
-    prompt = runner.asked["issue_judge", "fable"]
-    assert json.loads(section(prompt, "OUTCOME"))["id"] == "O1"
-    assert '"id": "ADR-1"' in section(prompt, "ACCEPTED ADRS OF THE OUTCOME")
-    assert "Бюджет — до $200." in section(prompt, "CONSTRAINTS AND RISKS OF THE OUTCOME")
+        ("I1", "Индекс базы", "OUT-0001", [], []),
+        ("I2", "Выдача ответа", "OUT-0001", ["I1"], ["Сколько хранить историю?"]),
+        ("I3", "Хранение", "OUT-0002", [], [])]
+    assert result.uncovered == []
+    assert result.skipped == PLAN_INPUTS.skipped
+    assert result.basis == {"A": "o1:n1"}
+    assert result.code and [(s.name, s.commit_sha) for s in result.sources] == [("", "abc123")]
+    prompt = runner.asked["task_plan_judge", "fable"]
+    assert "[ИТОГИ]" in section(prompt, "OUTCOMES") and FIND in section(prompt, "IDEAS")
     context = section(prompt, "REPOSITORY CONTEXT")
     assert "abc123" in context and context.endswith("КАРТА РЕПОЗИТОРИЯ")
-    assert "Индекс" in section(prompt, "INDEPENDENT ISSUE CANDIDATES")
-    # Задачи двух итогов — зависимости между ними ставит судья, видя все задачи.
-    issues = json.loads(section(runner.asked["issue_dependencies", "fable"], "ISSUES"))
-    assert [(i["id"], i["outcome_ids"]) for i in issues] == [
-        ("I1", ["O1"]), ("I2", ["O1"]), ("I3", ["O2"])]
-    # Модели — и участники, и судьи — читают один свежий снимок рабочей копии.
+    assert "Индекс" in prompt and "Поиск" in prompt                  # оба плана
     [place] = set(runner.workspaces.values())
-    assert place.name.startswith("council-scan-")
-    assert not place.exists()
+    assert place.name.startswith("council-scan-") and not place.exists()
 
 
-def test_the_dependency_judge_puts_issues_of_one_outcome_after_another():
-    result, _ = cut({("issue_discovery", "sol"): by_outcome({"issues": [task("I1", "Индекс")]},
-                                                            STORE),
-                     ("issue_discovery", "fable"): by_outcome({"issues": [task("I1", "Индекс")]},
-                                                              STORE),
-                     ("issue_dependencies", "fable"): {"dependencies": [
-                         {"issue_id": "I2", "depends_on": ["I1"], "reason": "нужен индекс"}]}},
-                    sources=[])
-    assert [(i.id, i.depends_on) for i in result.issues] == [("I1", []), ("I2", ["I1"])]
-    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
-
-
-def test_issues_of_one_outcome_need_no_dependency_judge():
-    one = APPROVED.model_copy(update={"outcomes": APPROVED.outcomes[:1]})
+def test_the_same_plans_need_no_judge_and_without_a_scan_no_code():
     same = {"issues": [task("I1", "Поиск")]}
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=[], outcomes=one)
+    result, runner = plans({("task_plan", "sol"): same, ("task_plan", "fable"): same},
+                           sources=[])
     assert result.state == "done"
-    steps = {s.name.value: s.state for s in result.steps}
-    assert (steps["issue_judge"], steps["issue_dependencies"]) == ("skipped", "skipped")
-    assert ("issue_dependencies", "fable") not in runner.asked
-
-
-def test_without_a_scan_the_issues_are_cut_without_code_and_the_same_sets_need_no_judge():
-    same = by_outcome({"issues": [task("I1", "Поиск")]}, STORE)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=[])
-    assert result.state == "done"
-    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
+    assert {s.name.value: s.state for s in result.steps}["task_plan_judge"] == "skipped"
     assert (result.code, result.sources) == (False, [])
     assert set(runner.workspaces.values()) == {None}
-    assert "abc123" not in section(runner.asked["issue_discovery", "sol"], "REPOSITORY CONTEXT")
+    assert result.uncovered == ["OUT-0002"]                          # считает код
+    assert "abc123" not in section(runner.asked["task_plan", "sol"], "REPOSITORY CONTEXT")
 
 
-def test_a_snapshot_that_cannot_be_made_fails_the_cut_with_its_reason():
+def test_a_snapshot_that_cannot_be_made_fails_the_plan_with_its_reason():
     def broken(found, into):
         raise RepositoryError("Рабочая копия менялась")
 
-    result, _ = cut({}, copy=broken)
-    assert result.state == "failed"
-    assert "менялась" in result.error
-    assert (result.code, result.sources) == (False, [])         # снимка нет — кода не читали
+    result, _ = plans({}, copy=broken)
+    assert result.state == "failed" and "менялась" in result.error
+    assert (result.code, result.sources) == (False, [])
 
 
-def test_issues_read_every_scanned_repository():
-    same = by_outcome({"issues": [task("I1", "Поиск")]}, STORE)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=TWO_REPOS)
+def test_the_plan_reads_every_scanned_repository():
+    same = {"issues": [task("I1", "Поиск")]}
+    result, runner = plans({("task_plan", "sol"): same, ("task_plan", "fable"): same},
+                           sources=TWO_REPOS)
     assert [(s.name, s.commit_sha, s.dirty) for s in result.sources] == [
         ("back", "abc123", False), ("front", "def456", True)]
-    context = section(runner.asked["issue_discovery", "sol"], "REPOSITORY CONTEXT")
+    context = section(runner.asked["task_plan", "sol"], "REPOSITORY CONTEXT")
     assert "back: abc123" in context and "front: def456" in context
 
 
-def test_an_issue_of_another_outcome_is_not_an_issue_of_this_one():
-    """Итог режут за раз: задача, которая называет чужой итог, отбрасывается, а нарезка,
-    где таких все, — негодный ответ."""
-    wrong = {"issues": [task("I1", "Поиск", outcomes=("O2",))]}
-    result, _ = cut({("issue_discovery", "sol"): by_outcome(wrong, STORE),
-                     ("issue_discovery", "fable"): by_outcome(wrong, STORE)}, sources=[])
-    assert result.state == "failed"
-    assert "ровно одного утверждённого итога" in result.error
+def test_a_plan_keeps_only_what_the_data_has():
+    """Задача чужого итога отброшена; решения, ограничения и зависимости — только из данных,
+    номера — заново по порядку."""
+    found = plan_of({"issues": [
+        task("X", "Чужая", outcome="OUT-0099"),
+        task("A1", "Индекс", adr_ids=["ADR-0003", "ADR-0404"], constraint_ids=[5, 6, 7],
+             risk_ids=[5, 7], depends_on=["A1", "Z"]),
+        task("A2", "Выдача", depends_on=["A1", "A1"],
+             scope=["После A1: отдать ответ, не трогая A10."], open_questions=["Ждать ли A1?"])]},
+        PLAN_CONTEXT)
+    assert [(i.id, i.title, i.adr_ids, i.constraint_ids, i.risk_ids, i.depends_on)
+            for i in found] == [
+        ("I1", "Индекс", ["ADR-0003"], [5], [7], []),
+        ("I2", "Выдача", ["ADR-0003"], [5], [], ["I1"])]
+    # Номера задач в тексте — новые: агент и человек видят те же, что в плане.
+    assert found[1].scope == ["После I1: отдать ответ, не трогая A10."]
+    assert found[1].open_questions == ["Ждать ли I1?"]
 
 
-def test_an_issue_inherits_what_blocks_its_outcomes():
-    """Модель забыла, что итог держит открытый вопрос или пробел: задача по нему не «можно
-    брать» — блокировки итога переходят к ней, пробел итога становится пробелом нарезки."""
-    gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
-    outcomes = APPROVED.model_copy(update={"outcomes": [
-        APPROVED.outcomes[0].model_copy(update={"gaps": [gap]}), APPROVED.outcomes[1]]})
-    same = by_outcome({"issues": [task("I1", "Индекс")],
-                       "gaps": [{"question": "Сколько хранить историю?", "reason": "свой"}]},
-                      STORE)
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    sources=[], outcomes=outcomes)
-    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
-    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
-        ("G1", "Сколько хранить историю?", ["O1"])]
+def test_a_task_refers_only_to_what_its_own_outcome_has():
+    """ADR-0003, F5 и F7 — у OUT-0001; задача OUT-0002 сослаться на них не может."""
+    [other] = plan_of({"issues": [task("A1", "Хранение", outcome="OUT-0002", constraint_ids=[5],
+                                       risk_ids=[7])]}, PLAN_CONTEXT)
+    assert (other.adr_ids, other.constraint_ids, other.risk_ids) == ([], [], [])
 
 
-def test_a_gap_found_for_an_outcome_holds_every_issue_of_it():
-    """Пробел найден, пока резали O1, а задачу по O1 модель им не пометила: он держит и её."""
-    same = by_outcome({"issues": [task("I1", "Индекс")],
-                       "gaps": [{"question": "Сколько хранить историю?", "reason": ""}]}, STORE)
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    sources=[])
-    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", ["G1"]), ("I2", ["Q2"])]
-
-
-def test_an_issue_inherits_the_decisions_and_limits_of_its_outcomes():
-    """Модель не повторила решение и ограничение итога — задача стоит на них всё равно: иначе
-    агент сделал бы ей наперекор."""
-    bare = by_outcome({"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}, STORE)
-    result, _ = cut({("issue_discovery", "sol"): bare, ("issue_discovery", "fable"): bare},
-                    sources=[])
-    assert (result.issues[0].adr_ids, result.issues[0].constraint_ids) == (["ADR-1"], [5])
-
-
-def test_what_holds_an_outcome_left_out_of_every_issue_stays_in_sight():
-    """Итог, по которому не нарезали ни одной задачи (его держит пробел): пробел не теряется —
-    он среди пробелов нарезки, его несут в вопросы."""
-    gap = OutcomeGap(question="Сколько хранить историю?", reason="нет решения")
-    outcomes = APPROVED.model_copy(update={"outcomes": [
-        APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={"gaps": [gap]})]})
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, {"issues": []})
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    sources=[], outcomes=outcomes)
-    assert result.uncovered_outcome_ids == ["O2"]
-    assert [(g.id, g.question, g.outcome_ids) for g in result.gaps] == [
-        ("G1", "Сколько хранить историю?", ["O2"])]
-    assert result.issues[0].blocked_by == []                     # I1 — про O1, его не держит
-
-
-def test_answers_that_differ_only_in_what_the_outcomes_give_need_no_judge():
-    """Один участник повторил решение и ограничение итога, другой — нет: после наследования это
-    одна и та же нарезка, судья не нужен."""
-    full = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
-    bare = by_outcome({"issues": [task("I1", "Индекс", adr_ids=[], constraint_ids=[])]}, STORE)
-    result, _ = cut({("issue_discovery", "sol"): full, ("issue_discovery", "fable"): bare},
-                    sources=[])
-    assert {s.name.value: s.state for s in result.steps}["issue_judge"] == "skipped"
-
-
-def test_an_issue_does_not_carry_the_acceptance_criteria_of_its_outcome():
-    """Итог готов, когда готовы все его задачи: его критерии в задачу не переходят."""
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=[])
-    assert [issue.acceptance_criteria for issue in result.issues] == [[], []]
-
-
-def test_an_outcome_cut_sees_the_decisions_it_relies_on_and_its_issues_stand_on_them():
-    """Итог опирается на решение другого итога: его задачи видят это решение — с пометкой, что
-    реализует его другой итог, — и стоят на нём."""
-    relying = APPROVED.model_copy(update={"outcomes": [
-        APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={
-            "relies_on_adr_ids": ["ADR-1"]})]})
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=[], outcomes=relying)
-    given = section(runner.asked["issue_discovery", "sol"], "ACCEPTED ADRS OF THE OUTCOME")
-    adrs = json.loads(given.split("\n\n", 1)[1])                  # после пояснения о role
-    assert [(adr["id"], adr["role"]) for adr in adrs] == [("ADR-1", "relies_on")]
-    assert [issue.adr_ids for issue in result.issues] == [["ADR-1"], ["ADR-1"]]
-
-
-
-# --- пробелы задач, на которые ответ уже есть в отборе
-
-HOW_TO_SEARCH = "Каким поиском искать ответ?"
-# O2 больше не держит открытый вопрос: его режут, и его задачу держит только пробел.
-FREE = APPROVED.model_copy(update={"outcomes": [
-    APPROVED.outcomes[0], APPROVED.outcomes[1].model_copy(update={"blocked_by": []})]})
-
-
-def asking(question=HOW_TO_SEARCH):
-    """Задача O2 и пробел, который её держит."""
-    return {"issues": [task("I1", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[],
-                            blocked_by=["G1"])],
-            "gaps": [{"question": question, "reason": "не знаем, какой поиск"}]}
-
-
-def gaps_in(prompt):
-    return json.loads(section(prompt, "GAPS"))
-
-
-def relies_on_adr_1(prompt):
-    return '"ADR-1"' in section(prompt, "ACCEPTED ADRS OF THE OUTCOME")
-
-
-def test_a_gap_answered_elsewhere_recuts_the_outcome_with_that_decision_and_orders_issues():
-    """Режа O2, модели не видят решения O1 и спрашивают то, на что ответ — решение Q1 (ADR-1,
-    его реализует O1). Судья находит ответ, O2 режут заново с ADR-1, и задача, которой оно
-    нужно, идёт после задачи O1, что его реализует. К человеку пробел не идёт."""
-    def store(prompt):
-        if not relies_on_adr_1(prompt):
-            return asking()
-        return {"issues": [task("I1", "Хранение", outcomes=("O2",), adr_ids=["ADR-1"],
-                                constraint_ids=[])]}
-
-    def check(prompt):
-        return {"answers": [{"gap_id": gaps_in(prompt)[0]["id"], "question_ids": ["Q1"],
-                             "reason": "решено в Q1"}]}
-
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, store)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same,
-                          ("issue_gap_check", "fable"): check}, sources=[], outcomes=FREE)
-    assert result.state == "done", result.error
-    assert result.gaps == []
-    assert [(i.id, i.outcome_ids, i.adr_ids, i.depends_on, i.blocked_by)
-            for i in result.issues] == [
-        ("I1", ["O1"], ["ADR-1"], [], []), ("I2", ["O2"], ["ADR-1"], ["I1"], [])]
-    assert [(a.question, a.question_ids, a.outcome_ids) for a in result.answered_gaps] == [
-        (HOW_TO_SEARCH, ["Q1"], ["O2"])]
-    # Судья видел вопросы отбора с решениями и тем, какой итог их реализует.
-    questions = json.loads(section(runner.asked["issue_gap_check", "fable"],
-                                   "QUESTIONS OF THE IDEA"))
-    assert [(q["id"], q["status"], q.get("adr_id"), q.get("implemented_by"))
-            for q in questions] == [("Q1", "decided", "ADR-1", "O1"), ("Q2", "open", None, None)]
-    assert {s.name.value: s.state for s in result.steps}["issue_gap_check"] == "done"
-
-
-def test_a_gap_that_is_an_open_question_blocks_the_issue_with_it_without_a_recut():
-    calls = []
-
-    def store(prompt):
-        calls.append(prompt)
-        return asking("Где хранить базу знаний?")
-
-    def check(prompt):
-        return {"answers": [{"gap_id": "G1", "question_ids": ["Q2", "Q1"],
-                             "reason": "это и есть Q2"}]}
-
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, store)
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same,
-                     ("issue_gap_check", "fable"): check}, sources=[], outcomes=FREE)
-    assert result.gaps == []
-    assert [(i.id, i.blocked_by) for i in result.issues] == [("I1", []), ("I2", ["Q2"])]
-    assert len(calls) == 2                       # оба участника — один раз: заново не резали
-    # Открытый вопрос рядом с решённым: пробел — он, решённый ответа ещё не даёт.
-    assert [a.question_ids for a in result.answered_gaps] == [["Q2"]]
-
-
-def test_a_gap_nobody_asked_goes_to_the_person_and_no_gaps_need_no_check():
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, asking())
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                    sources=[], outcomes=FREE)
-    assert [(g.id, g.question) for g in result.gaps] == [("G1", HOW_TO_SEARCH)]
-    assert result.answered_gaps == []
-
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, STORE)
-    result, runner = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same},
-                         sources=[])
-    assert {s.name.value: s.state for s in result.steps}["issue_gap_check"] == "skipped"
-    assert ("issue_gap_check", "fable") not in runner.asked
-
-
-def test_a_gap_answered_by_what_the_outcome_already_sees_goes_without_a_recut():
-    """Ответ — решение, которое итог и так видит (здесь — найденное в прошлый раз): резать
-    заново незачем, пробел просто снимается."""
-    wordings = {}
-
-    def store(prompt):
-        # Оба участника видят тот же промпт — одна формулировка на ход.
-        wordings.setdefault(prompt, f"Каким поиском искать ответ, вариант {len(wordings) + 1}?")
-        return asking(wordings[prompt])
-
-    def check(prompt):
-        return {"answers": [{"gap_id": gap["id"], "question_ids": ["Q1"]}
-                            for gap in gaps_in(prompt)]}
-
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, store)
-    result, _ = cut({("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same,
-                     ("issue_gap_check", "fable"): check}, sources=[], outcomes=FREE)
-    assert result.state == "done", result.error
-    assert len(wordings) == 2                    # одна перенарезка: второй раз ADR-1 уже есть
-    assert result.gaps == [] and len(result.answered_gaps) == 2
-    assert result.issues[1].blocked_by == []
-
-
-def test_recuts_stop_after_the_limit_and_what_is_left_goes_to_the_person():
-    """Каждая перенарезка снова спрашивает уже решённое — другими словами и про новое решение.
-    Две перенарезки, а третий пробел идёт к человеку непроверенным."""
-    more = [OpenQuestion(id="Q3", text="Как ранжировать?", source="discovered"),
-            OpenQuestion(id="Q4", text="Как показывать ответ?", source="discovered")]
-    decided = [*DECIDED, Decision(question_id="Q3", proposal="F2"),
-               Decision(question_id="Q4", proposal="F3")]
-    outcomes = FREE.model_copy(update={"outcomes": [
-        FREE.outcomes[0].model_copy(update={"adr_ids": ["ADR-1", "ADR-3", "ADR-4"]}),
-        FREE.outcomes[1]]})
-    answers = {"вариант 1": "Q1", "вариант 2": "Q3", "вариант 3": "Q4"}
-    wordings = {}
-
-    def store(prompt):
-        wordings.setdefault(prompt, f"Каким поиском искать ответ, вариант {len(wordings) + 1}?")
-        return asking(wordings[prompt])
-
-    same = by_outcome({"issues": [task("I1", "Индекс")]}, store)
-    checks = []
-
-    def check(prompt):
-        checks.append(prompt)
-        return {"answers": [{"gap_id": gap["id"], "question_ids": [
-            next(q for key, q in answers.items() if key in gap["question"])]}
-            for gap in gaps_in(prompt)]}
-
-    runner = FakeRunner({("issue_dependencies", "fable"): {"dependencies": []},
-                         ("issue_discovery", "sol"): same, ("issue_discovery", "fable"): same,
-                         ("issue_gap_check", "fable"): check})
-    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"),
-                    scope=[SEARCH, WHERE, *more], decisions=decided, proposals=FOUND,
-                    outcomes=outcomes)
-    result = IssueRun("c1", stream, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
-                      lambda _: None, copy=copy_as("снимок-1")).run()
-    assert result.state == "done", result.error
-    assert (len(wordings), len(checks)) == (3, 2)
-    assert [a.question_ids for a in result.answered_gaps] == [["Q1"], ["Q3"]]
-    assert [g.question for g in result.gaps] == ["Каким поиском искать ответ, вариант 3?"]
-
-
-def test_an_issue_may_wait_only_for_carried_issues_of_its_own_outcome():
-    """Режут O2, а перенесённая задача — итога O1: модель её не видит, и ссылка на неё — мимо;
-    порядок между итогами ставит судья зависимостей."""
-    carried = Issue(id="I1", title="Индекс", user_story="As a member, I want an index.",
-                    outcome_ids=["O1"], adr_ids=["ADR-1"])
-    store = {"issues": [task("I2", "Хранение", outcomes=("O2",), adr_ids=[], constraint_ids=[],
-                             depends_on=["I1"])]}
-    runner, reports = FakeRunner({("issue_discovery", "sol"): store,
-                                  ("issue_discovery", "fable"): store,
-                                  ("issue_dependencies", "fable"): {"dependencies": []}}), []
-    stream = Stream(group="A", idea=StreamIdea(text=FIND, by="human"), scope=[SEARCH, WHERE],
-                    decisions=DECIDED, proposals=FOUND, outcomes=APPROVED)
-    result = IssueRun("c1", stream, GROUP_FRAGMENTS, ["sol", "fable"], "fable", runner,
-                      reports.append, carried=[carried], cut=["O2"],
-                      copy=copy_as("снимок-1")).run()
-    assert result.state == "done", result.error
-    assert [(i.id, i.outcome_ids, i.depends_on) for i in result.issues] == [
-        ("I1", ["O1"], []), ("I2", ["O2"], [])]
+def test_a_plan_with_a_later_dependency_or_without_a_title_is_a_bad_answer():
+    with pytest.raises(BadAnswer, match="после себя"):
+        plan_of({"issues": [task("A", "Один", depends_on=["B"]),
+                            task("B", "Два", depends_on=["A"])]}, PLAN_CONTEXT)
+    with pytest.raises(BadAnswer, match="названия"):
+        plan_of({"issues": [task("A", " ")]}, PLAN_CONTEXT)
+    with pytest.raises(BadAnswer, match="issues"):
+        plan_of({}, PLAN_CONTEXT)

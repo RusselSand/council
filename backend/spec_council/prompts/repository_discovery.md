@@ -3,8 +3,8 @@
 You investigate an existing repository to establish how it is built now, in the context of the approved IDEA.
 
 You are given:
-- the approved IDEA;
-- the fragments of the corresponding group;
+- the approved IDEA: the ideas of all groups of the council, one per line (`A. title: idea`) — the investigation serves every one of them;
+- the fragments of all groups;
 - the technical inventory of the repository;
 - read access to the repository;
 - the commit SHA of the version under investigation.
@@ -245,7 +245,7 @@ Before answering, check:
 
 {{idea}}
 
-## GROUP FRAGMENTS
+## FRAGMENTS OF ALL GROUPS
 
 {{fragments}}
 

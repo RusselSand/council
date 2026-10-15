@@ -43,10 +43,8 @@ class StepName(StrEnum):
     decision_judge = "decision_judge"        # судья сводит их анализы в один итог по вопросу
     outcome_discovery = "outcome_discovery"  # участники собирают решения в изменения системы
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
-    issue_discovery = "issue_discovery"  # участники нарезают утверждённый итог на задачи
-    issue_judge = "issue_judge"          # судья сводит их нарезки итога в одну
-    issue_gap_check = "issue_gap_check"  # судья ищет ответ на пробелы задач среди вопросов
-    issue_dependencies = "issue_dependencies"  # судья ставит зависимости между задачами итогов
+    task_plan = "task_plan"              # участники планируют задачи на весь совет
+    task_plan_judge = "task_plan_judge"  # судья сводит их планы в один
     notes_translation = "notes_translation"  # судья переводит заметки на язык документации
 
 
@@ -787,43 +785,35 @@ class OutcomeDiscovery(BaseModel):
     # Прошлые решения проекта, к которым собирали: номер — отпечаток того, что видели модели
     # (project.fingerprint). Решение с тех пор поправили — итог на нём не закрепляется.
     projects: dict[str, str] = {}
+    # Человек утвердил эти итоги: поток выгружают в заметки к ним. Собрали заново — новая сборка
+    # не утверждена.
+    approved: bool = False
     error: str | None = None
 
 
-class IssueGap(BaseModel):
-    """Неопределённость, без решения которой часть работы не начать: материал для нового
-    открытого вопроса, а не ответ на него."""
-
-    # G1, G2… по порядку: на него ссылается blocked_by задачи.
-    id: str
-    question: str
-    reason: str = ""
-    outcome_ids: list[str] = []
-
-
 class Issue(BaseModel):
-    """Задача для coding agent — часть одного утверждённого итога: кому и зачем (user story),
-    где менять (точки входа), что меняем (current_state) и что именно сделать, с границами
-    (scope). Задача, которой не хватает решения, заблокирована: недостающее не додумывается."""
+    """Задача для coding agent из плана совета — часть ровно одного утверждённого итога: кому и
+    зачем (user story), где менять (точки входа), что меняем (current_state), что именно сделать,
+    с границами (scope), и что неясно в реализации (open_questions) — без решения: его принимают
+    с агентом. Итог и решения — номерами заметок (OUT-…, ADR-…): поток выгружен до плана."""
 
-    # I1, I2… по порядку.
+    # I1, I2… по порядку плана.
     id: str
     title: str
     user_story: str
     main_entry_points: list[str] = []
     current_state: str = ""
     scope: list[str] = []
-    outcome_ids: list[str] = []
+    # Итог задачи — номер его заметки (OUT-…).
+    outcome_id: str
+    # Решения, на которых задача стоит, — номера заметок (ADR-…).
     adr_ids: list[str] = []
     constraint_ids: list[int] = []
     risk_ids: list[int] = []
-    # Задачи, результат которых нужен этой.
+    # Задачи плана, результат которых нужен этой.
     depends_on: list[str] = []
-    # Пробелы нарезки (G-n) и открытые вопросы потока, без решения которых её не сделать.
-    blocked_by: list[str] = []
-    # Критерии итогов, которые раньше переносились в задачу; теперь не переносятся — итог готов,
-    # когда готовы все его задачи. Поле — для сохранённых прежде нарезок.
-    acceptance_criteria: list[str] = []
+    # Что неясно в реализации: вопросы человеку и агенту, без ответа.
+    open_questions: list[str] = []
 
 
 # issue — не заметка графа, а файл задачи в папке задач проекта (issue_files.py).
@@ -874,24 +864,23 @@ class IssueNumber(BaseModel):
 
 
 class NotesDraft(BaseModel):
-    """Черновик выгрузки потока в заметки: что ляжет, что изменится, что исчезло и номера
-    задач. Собирается сразу; если язык документации другой, — ход судьи с переводом. К
-    каким задачам собран (issues): нарезали заново — черновик устарел."""
+    """Черновик выгрузки потока в заметки: что ляжет, что изменится и что исчезло. Собирается
+    сразу; если язык документации другой, — ход судьи с переводом. К каким утверждённым итогам
+    собран (outcomes): собрали и утвердили другие — черновик устарел."""
 
     state: Literal["running", "done", "failed"]
     run: str = ""
-    issues: str = ""
+    outcomes: str = ""
     language: str = ""
     # Каталог, для которого собран: номера и действия — его. Записать в другой — 409.
     root: str = ""
-    # Папка задач, для которой собран; "" — у проекта её нет, задачи только строками в итогах.
-    issues_root: str = ""
     steps: list[Step] = []
     notes: list[NotePlan] = []
     vanished: list[VanishedNote] = []
-    numbers: list[IssueNumber] = []
     # Что не выгружается и почему: итог без решений, решение из другой идеи в итоге.
     skipped: list[str] = []
+    # Номер заметки у каждого решения (ADR-n) и итога (O-n) потока, что ляжет в каталог.
+    refs: dict[str, str] = {}
     error: str | None = None
 
 
@@ -912,84 +901,44 @@ class ExportedNote(BaseModel):
 
 
 class NotesExport(BaseModel):
-    """Последняя выгрузка потока: по ней повторная находит свои заметки и номера задач."""
+    """Последняя выгрузка потока: по ней повторная находит свои заметки."""
 
     run: str
-    issues: str
+    # К каким утверждённым итогам выгрузили (OutcomeDiscovery.run).
+    outcomes: str = ""
     language: str
     # Каталог, куда записали: номера выгрузки заняты только в нём.
     root: str = ""
-    # Папка, куда записали файлы задач: в другой их файлов нет. "" — не записывали.
-    issues_root: str = ""
     notes: list[ExportedNote] = []
-    numbers: list[IssueNumber] = []
+    # Номер заметки у каждого решения (ADR-n) и итога (O-n) потока: по ним план задач называет
+    # итоги и решения.
+    refs: dict[str, str] = {}
 
 
-class AnsweredGap(BaseModel):
-    """Пробел нарезки, на который уже есть ответ: решённый вопрос отбора — тогда итог нарезан
-    заново с его решением — или открытый — тогда задачи держит он. question_ids — номера
-    вопросов отбора (Q-n), не ADR: номера ADR сдвигаются вместе с отбором."""
+class Research(BaseModel):
+    """Этап «Исследование» — на весь совет, между группами и потоками: необязательный скан
+    репозитория и шаг «Репозиторий», потом необязательный скан макета и шаг «Дизайн». Одна карта
+    кода и одно описание макета под идеи всех групп. Поток берёт их себе копией, когда его
+    начинают (Stream.scan, repository, design_scan, design): исследование потом можно пройти
+    заново, а начатые потоки работают с тем, с чем начали, пока их не начнут заново."""
 
-    question: str
-    reason: str = ""
-    outcome_ids: list[str] = []
-    question_ids: list[str] = []
-
-
-class IssueDiscovery(BaseModel):
-    """Нарезка утверждённых итогов на задачи: участники по отдельности, судья сводит их в
-    итоговый набор. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же
-    рабочей копии заново — точки входа проверяются по коду. Ход по шагам и итог."""
-
-    state: Literal["running", "done", "failed"]
-    run: str = ""
-    # К каким итогам нарезали (OutcomeDiscovery.run): собрали другие — нарезают заново.
-    outcomes: str = ""
-    # С какого кода нарезали: code — читали ли его вообще (без скана — нет), и каждая рабочая
-    # копия — имя в снимке, путь, коммит и правки.
-    code: bool = False
-    sources: list[ScannedRepository] = []
-    steps: list[Step]
-    issues: list[Issue] = []
-    gaps: list[IssueGap] = []
-    # Задачи, перенесённые из прежней нарезки (их номера): их итоги закреплены и те же — их не
-    # нарезают заново, они уже в разработке.
-    kept: list[str] = []
-    # Каким был каждый итог, когда его нарезали (outcome_print): тот же — его задачи переносят.
-    cut: dict[str, str] = {}
-    # Решения, к которым резали (decisions_key): ADR-n задачи — n-е из них; по ним номера ADR
-    # перенесённой задачи пересчитывают к новому отбору.
-    decisions: list[str] = []
-    # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
-    uncovered_outcome_ids: list[str] = []
-    # Пробелы задач, на которые нашёлся ответ среди вопросов отбора: к человеку они не идут.
-    answered_gaps: list[AnsweredGap] = []
-    error: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def one_source(cls, data: object) -> object:
-        """Нарезка, сохранённая, пока рабочая копия была одна: её коммит и правки — первая в
-        sources."""
-        if isinstance(data, dict) and "sources" not in data and "commit_sha" in data:
-            rest = {key: value for key, value in data.items()
-                    if key not in ("commit_sha", "dirty")}
-            sources = [{"commit_sha": data["commit_sha"], "dirty": data.get("dirty", False)}]
-            return {**rest, "sources": sources if data.get("code") else []}
-        return data
+    scan: RepositoryScan | None = None
+    repository: RepositoryStep | None = None
+    design_scan: DesignScan | None = None
+    design: DesignStep | None = None
 
 
 class Stream(BaseModel):
     """Поток — подтверждённая группа под той же буквой. Его цепочка: идея — у группы без неё
-    её ищет совет (discovery), утверждает человек (idea); потом необязательный скан
-    репозитория — его ведёт совет (scan), а человек утверждает карту или пропускает шаг
-    (repository), и карта идёт во все следующие шаги; потом так же необязательный скан
-    макета Figma (design_scan) и шаг «Дизайн» (design); потом вопросы — их ищет совет
+    её ищет совет (discovery), утверждает человек (idea) ещё на этапе «Группы»; потом поток
+    начинают — он берёт себе копию исследования совета (scan, repository, design_scan, design),
+    и карта кода и описание макета идут во все следующие шаги; потом вопросы — их ищет совет
     (questions), а человек отбирает, какие решать (scope); потом варианты ответа — их ищет
     совет (proposals), а человек выбирает по варианту на вопрос или оставляет его unresolved
     (choices); потом совет проверяет выбор и подбирает вариант для unresolved (analysis), а
-    человек фиксирует решения (decisions); из них совет собирает итоги (outcomes), а
-    утверждённые человеком итоги нарезает на задачи для coding agents (issues)."""
+    человек фиксирует решения (decisions); из них совет собирает итоги (outcomes), человек их
+    утверждает, и поток выгружают в заметки (notes). Задачи режет этап «Задачи» — на весь
+    совет (Council.tasks)."""
 
     group: str
     discovery: IdeaDiscovery | None = None
@@ -1015,11 +964,9 @@ class Stream(BaseModel):
     # прежний с этим номером убрали, — номер не достанется другому вопросу.
     asked: int = 0
     outcomes: OutcomeDiscovery | None = None
-    issues: IssueDiscovery | None = None
-    # Последние собранные итоги и нарезанные задачи, пока правка выше их сняла: из них
-    # закрепляют готовые итоги и их задачи, а не собирают и не нарезают заново.
+    # Последние собранные итоги, пока правка выше их сняла: из них закрепляют готовые, а не
+    # собирают заново.
     earlier_outcomes: OutcomeDiscovery | None = None
-    earlier_issues: IssueDiscovery | None = None
     # Черновик выгрузки в заметки и последняя выгрузка. Выгрузку правки выше не сбрасывают:
     # по ней повторная находит свои прежние заметки.
     notes_draft: NotesDraft | None = None
@@ -1034,18 +981,65 @@ class Stream(BaseModel):
         from .work import saved_outcomes_of
         return saved_outcomes_of(self)
 
-    @computed_field
-    @property
-    def saved_issues(self) -> list[Issue]:
-        """Прежние задачи, которые перенесутся, если их итоги и решения те же."""
-        from .work import saved_issues_of
-        return saved_issues_of(self)
 
-
-# Ходы потока по его цепочке: поиск идеи, скан репозитория, скан макета, поиск вопросов,
-# вариантов, проверка выбора, сборка итогов, нарезка на задачи.
+# Ходы потока по его цепочке: поиск идеи, копия исследования (её поля — не ходы, но так
+# правка идеи видит всё ниже), отбор решений проекта, поиск вопросов, вариантов, проверка
+# выбора, сборка итогов, перевод заметок.
 STREAM_RUNS = ("discovery", "scan", "design_scan", "decisions_search", "questions",
-               "proposals", "analysis", "outcomes", "issues", "notes_draft")
+               "proposals", "analysis", "outcomes", "notes_draft")
+
+
+class TaskPlan(BaseModel):
+    """План задач на весь совет: участники по отдельности строят план по утверждённым и
+    выгруженным итогам всех потоков, судья сводит. Ход по шагам и итог. Если исследование
+    прошли сканом, модели читают снимок тех же рабочих копий заново — точки входа проверяются
+    по коду."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    # К чему спланировали: у каждого потока — его утверждённые итоги и выгрузка
+    # («сборка:выгрузка»), у исследования (ключ research) — как пройдены его шаги. Поменяли —
+    # план устарел: видно, а сбрасывает человек.
+    basis: dict[str, str] = {}
+    # С какого кода планировали: code — читали ли его вообще, и каждая рабочая копия.
+    code: bool = False
+    sources: list[ScannedRepository] = []
+    steps: list[Step]
+    issues: list[Issue] = []
+    # Итоги (OUT-…), ни одна задача которых не вошла в план: считает код, а не модель.
+    uncovered: list[str] = []
+    # Что в план не вошло и почему: итог потока, который не лёг в заметки.
+    skipped: list[str] = []
+    error: str | None = None
+
+
+class TasksDraft(BaseModel):
+    """Черновик выгрузки плана в папку задач проекта: файл на задачу с номером на весь проект
+    (ISS-…), что с каждым будет и что исчезло. К какому плану собран (plan): спланировали
+    заново — черновик устарел."""
+
+    state: Literal["running", "done", "failed"]
+    run: str = ""
+    plan: str = ""
+    language: str = ""
+    # Папка задач, для которой собран: записать в другую — 409.
+    root: str = ""
+    steps: list[Step] = []
+    notes: list[NotePlan] = []
+    vanished: list[VanishedNote] = []
+    numbers: list[IssueNumber] = []
+    error: str | None = None
+
+
+class TasksExport(BaseModel):
+    """Последняя выгрузка плана: по ней повторная находит свои файлы и номера задач."""
+
+    run: str
+    plan: str = ""
+    language: str
+    root: str = ""
+    notes: list[ExportedNote] = []
+    numbers: list[IssueNumber] = []
 
 
 class Council(BaseModel):
@@ -1065,6 +1059,12 @@ class Council(BaseModel):
     structure: Structure | None = None
     # Потоки подтверждённых групп, по их порядку. None — группы ещё не подтверждены.
     streams: list[Stream] | None = None
+    # Исследование репозитория и макета на весь совет. None — к нему ещё не приступали.
+    research: Research | None = None
+    # План задач на весь совет, черновик его выгрузки и последняя выгрузка в папку задач.
+    tasks: TaskPlan | None = None
+    tasks_draft: TasksDraft | None = None
+    tasks_export: TasksExport | None = None
 
 
 class CouncilCreated(BaseModel):
@@ -1130,21 +1130,17 @@ REPOSITORIES_MAX = 10
 
 
 class ScanRepository(GroupsEdit):
-    """Человек запускает скан репозиториев потока: пути к рабочим копиям — абсолютные или от
-    каталога репозиториев (COUNCIL_REPOS); бэкенд и фронтенд в разных репозиториях — два пути.
-    idea — идея, которую человек видел: её поменяли в другой вкладке — 409, а не скан под
-    идею, которой он не видел."""
+    """Человек запускает скан репозиториев совета: пути к рабочим копиям — абсолютные или от
+    каталога репозиториев (COUNCIL_REPOS); бэкенд и фронтенд в разных репозиториях — два пути."""
 
     paths: list[str] = Field(min_length=1, max_length=REPOSITORIES_MAX)
-    idea: str
 
 
 class ApproveRepository(GroupsEdit):
-    """Человек проходит шаг «Репозиторий»: scan_run — утверждает карту этого скана, None —
-    пропускает шаг. Дальше — шаг «Дизайн». idea — идея, которую человек видел."""
+    """Человек проходит шаг «Репозиторий» исследования: scan_run — утверждает карту этого
+    скана, None — пропускает шаг. Дальше — шаг «Дизайн»."""
 
     scan_run: str | None = None
-    idea: str
 
 
 # Сколько ссылок на макет можно дать разом: страницы и фреймы одного файла.
@@ -1152,18 +1148,23 @@ LINKS_MAX = 10
 
 
 class ScanDesign(GroupsEdit):
-    """Человек запускает скан макета потока: ссылки на страницы или фреймы одного файла Figma
-    (без node-id — весь файл). idea — идея, которую человек видел."""
+    """Человек запускает скан макета совета: ссылки на страницы или фреймы одного файла Figma
+    (без node-id — весь файл)."""
 
     links: list[str] = Field(min_length=1, max_length=LINKS_MAX)
-    idea: str
 
 
 class ApproveDesign(GroupsEdit):
-    """Человек проходит шаг «Дизайн»: scan_run — утверждает описание этого скана макета, None
-    — пропускает шаг. И совет сразу ищет вопросы. idea — идея, которую человек видел."""
+    """Человек проходит шаг «Дизайн» исследования: scan_run — утверждает описание этого скана
+    макета, None — пропускает шаг. Исследование пройдено — потоки можно начинать."""
 
     scan_run: str | None = None
+
+
+class StartStream(GroupsEdit):
+    """Человек начинает поток: поток берёт себе исследование совета, и совет сразу отбирает
+    решения проекта или ищет вопросы. idea — идея, которую человек видел."""
+
     idea: str
 
 

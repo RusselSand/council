@@ -42,13 +42,10 @@ GIVEN = {
     "outcome_judge": {"idea", "questions_and_proposals", "accepted_adrs", "accepted_decisions",
                       "fixed_outcomes", "constraints_and_risks", "outcome_candidates",
                       "repository", "design"},
-    "issue_discovery": {"idea", "outcome", "accepted_adrs", "accepted_decisions",
-                        "fixed_issues", "constraints_and_risks", "repository_context", "design"},
-    "issue_judge": {"idea", "outcome", "accepted_adrs", "accepted_decisions", "fixed_issues",
-                    "constraints_and_risks", "repository_context", "design",
-                    "issue_candidates"},
-    "issue_gap_check": {"idea", "outcomes", "questions", "gaps"},
-    "issue_dependencies": {"idea", "outcomes", "issues", "repository_context"},
+    "task_plan": {"ideas", "outcomes", "decisions", "constraints_and_risks",
+                  "repository_context", "design"},
+    "task_plan_judge": {"ideas", "outcomes", "decisions", "constraints_and_risks",
+                        "repository_context", "design", "plan_candidates"},
 }
 
 

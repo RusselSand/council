@@ -2,9 +2,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
-  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotePlan, NotesDraft, NotesExport, IdeaDiscovery, IssueDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
+  Council, CouncilPatch, DecisionAnalysis, DecisionsSearch, DesignScan, NotePlan, NotesDraft, NotesExport, IdeaDiscovery, Label, OutcomeDiscovery, ProposalDiscovery,
   QuestionDiscovery,
-  Project, ProjectDraft, RepositoryScan, Settings, Slicing, Stream, StreamIdea, Structure, WorkingCopies,
+  Project, ProjectDraft, RepositoryScan, Research, Settings, Slicing, Stream, StreamIdea, Structure, TaskPlan,
+  TasksDraft, WorkingCopies,
 } from '../api'
 import { App } from '../App'
 import { setLanguage } from '../i18n'
@@ -17,7 +18,7 @@ import { ProjectsPage } from './ProjectsPage'
 const COUNCIL: Council = {
   id: 'demo-1', name: 'Сервис уведомлений', status: 'structure', brief: 'Хочу воркер',
   participants: ['sol', 'fable'], judge: 'fable', updated_at: '2026-09-17T10:00:00Z', project: '', slicing: null,
-  structure: null, streams: null,
+  structure: null, streams: null, research: null, tasks: null, tasks_draft: null, tasks_export: null,
 }
 const SETTINGS: Settings = {
   models: [
@@ -131,8 +132,12 @@ const QUESTIONS_FOUND: QuestionDiscovery = {
       proposal_ids: [], reason: 'без меры идею не проверить', note: null, revisits: null },
   ],
 }
-/** Шаги «Репозиторий» и «Дизайн» пропущены: так у потока с утверждённой идеей, если тест не скажет иначе. */
+/** Шаги исследования пропущены: так поток с утверждённой идеей начат, если тест не скажет иначе. */
 const SKIPPED = { by: 'skipped' as const, scan_run: '' }
+/** Исследование совета пройдено пропуском обоих шагов. */
+const RESEARCHED: Research = { scan: null, repository: SKIPPED, design_scan: null, design: SKIPPED }
+/** Своя идея группы B. */
+const OWN_B: StreamIdea = { text: 'Результат переживает сбой', by: 'council', evidence: [2] }
 /**
  * Совет с подтверждёнными группами: у A идея записана в тексте, у B её ищет совет. more —
  * что ещё у потоков: вопросы, отбор.
@@ -146,13 +151,13 @@ const confirmed = (search: IdeaDiscovery = FOUND, structure: Structure = GROUPED
       design_scan: null, design: ideas.A ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null, saved_outcomes: [], saved_issues: [],
+      earlier: [], earlier_outcomes: null, saved_outcomes: [],
       ...more.A },
     { group: 'B', discovery: search, idea: ideas.B ?? null, scan: null, repository: ideas.B ? SKIPPED : null,
       design_scan: null, design: ideas.B ? SKIPPED : null, decisions_search: null, project_decisions: null,
       notes_draft: null, notes: null,
       questions: null, scope: null, proposals: null, choices: null, analysis: null, decisions: null, outcomes: null,
-      issues: null, earlier: [], earlier_outcomes: null, earlier_issues: null, saved_outcomes: [], saved_issues: [],
+      earlier: [], earlier_outcomes: null, saved_outcomes: [],
       ...more.B },
   ] satisfies Stream[],
 })
@@ -205,7 +210,17 @@ const server = ({
     if (url.endsWith('/structure')) { groupStarts++; return group() }
     const editAction = /\/structure\/(\w+)$/.exec(url)?.[1]
     if (editAction) { edits.push({ action: editAction, body: JSON.parse(String(init?.body)) }); return edit() }
-    const streamAction = /\/streams\/(\w+)\/(idea|discovery|choices|analysis(?:\/Q\d+)?|decisions|repository(?:\/scan)?|design(?:\/scan)?|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes|issues)(?:\/discovery)?)$/.exec(url)
+    const researchAction = /\/research\/(repository(?:\/scan)?|design(?:\/scan)?|reset)$/.exec(url)
+    if (researchAction) {
+      streamCalls.push({ group: 'research', action: researchAction[1], body: JSON.parse(String(init?.body)) })
+      return stream()
+    }
+    const tasksAction = /\/councils\/[\w-]+\/tasks(?:\/(reset|draft|write))?$/.exec(url)
+    if (tasksAction) {
+      streamCalls.push({ group: 'tasks', action: tasksAction[1] ?? 'plan', body: JSON.parse(String(init?.body)) })
+      return stream()
+    }
+    const streamAction = /\/streams\/(\w+)\/(idea|discovery|start|choices|analysis(?:\/Q\d+)?|decisions|project-decisions(?:\/search)?|notes(?:\/draft)?|outcomes\/touched|(?:questions|proposals|outcomes)(?:\/discovery)?)$/.exec(url)
     if (streamAction) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       streamCalls.push({ group: streamAction[1], action: streamAction[2], body })
@@ -271,10 +286,10 @@ describe('HomePage', () => {
     const cards = within(pending).getAllByRole('link')
     expect(cards.map(card => [card.getAttribute('href'), card.querySelector('.corner')?.textContent])).toEqual([
       ['/councils/c2/slices', '?'],
-      ['/councils/c4/streams/A', '?'], ['/councils/c4/streams/B', '?'],
+      ['/councils/c4/structure', '?'], ['/councils/c4/structure', '?'],
       ['/councils/c5/slices', '!'],
     ])
-    expect(within(cards[2]).getByText('Поток B · идея')).toBeTruthy()
+    expect(within(cards[2]).getByText('Группа B · идея')).toBeTruthy()
     expect(within(cards[3]).getByText(ru['attention.slicingFailed'])).toBeTruthy()
 
     const all = screen.getByRole('region', { name: ru['home.all'] })
@@ -310,7 +325,7 @@ describe('Подтверждение групп и потоки', () => {
     within(await confirmCard()).getByRole('button', { name: ru['confirm.confirm'] }) as HTMLButtonElement
   const streamNav = () => screen.findByRole('navigation', { name: ru['streams.list'] })
 
-  it('«Подтвердить»: группы становятся потоками, экран уходит к первому', async () => {
+  it('«Подтвердить»: группы становятся потоками, а идеи групп утверждают здесь же', async () => {
     let current = grouped()
     fetchMock.mockImplementation(server({
       council: () => current,
@@ -318,24 +333,22 @@ describe('Подтверждение групп и потоки', () => {
     }))
     renderAt('/councils/demo-1/structure')
     fireEvent.click(await confirmButton())
-    const nav = await streamNav()
+    expect(await screen.findByRole('heading', { name: ru['ideas.title'] })).toBeTruthy()
     expect(edits).toEqual([{ action: 'confirm', body: { run: 'g1', revision: 0 } }])
-    expect(within(nav).getByText('Потоки · 2')).toBeTruthy()
-    const links = within(nav).getAllByRole('link')
-    expect(links.map(link => link.textContent)).toEqual([
-      `AВоркер${ru['streams.group.yours']}`, `BХранение${ru['streams.group.seeking']}`])
-    expect(links[0].getAttribute('aria-current')).toBe('page')
-    expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.done'])
+    expect(screen.getByText(ru['idea.textNote'])).toBeTruthy()                  // у A — из текста
+    expect(screen.getByText(ru['idea.seeking'], { exact: false })).toBeTruthy()  // у B — ищет ИИ
+    expect(within(await confirmCard()).getByText(ru['confirm.ideas'])).toBeTruthy()
+    expect(screen.queryByRole('link', { name: ru['confirm.open'] })).toBeNull()
+    expect(screen.getByRole('link', { name: /Группы/ }).textContent).toContain(ru['light.yours'])
   })
 
-  it('подтверждённые — ссылка «К потокам», а не кнопка', async () => {
-    fetchMock.mockImplementation(server({ council: () => confirmed() }))
+  it('идеи всех групп утверждены — ссылка «К исследованию», а не кнопка', async () => {
+    fetchMock.mockImplementation(server({ council: () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }) }))
     renderAt('/councils/demo-1/structure')
     const card = await confirmCard()
     expect(within(card).getByText(ru['confirm.done'])).toBeTruthy()
     fireEvent.click(within(card).getByRole('link', { name: ru['confirm.open'] }))
-    expect(await streamNav()).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['research.title'] })).toBeTruthy()
     expect(edits).toEqual([])
   })
 
@@ -392,7 +405,7 @@ describe('Подтверждение групп и потоки', () => {
       },
     }))
     renderAt('/councils/demo-1/structure')
-    expect(within(await confirmCard()).getByRole('link', { name: ru['confirm.open'] })).toBeTruthy()
+    expect(within(await confirmCard()).getByText(ru['confirm.done'])).toBeTruthy()
     fireEvent.click(within(await screen.findByRole('region', { name: 'Воркер' })).getByRole('button', { name: ru['groups.merge'] }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'B Хранение' }))
     expect((await confirmButton()).disabled).toBe(false)
@@ -415,48 +428,37 @@ describe('Подтверждение групп и потоки', () => {
     fetchMock.mockImplementation(server({ council: () => confirmed(FOUND, stale) }))
     renderAt('/councils/demo-1/streams')
     expect(await screen.findByText(ru['streams.stale'], { exact: false })).toBeTruthy()
-    expect((screen.getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: ru['start.start'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
-describe('Поток: группа и идея', () => {
+describe('Группы: идеи', () => {
   const streamNav = () => screen.findByRole('navigation', { name: ru['streams.list'] })
   const ideaField = () => screen.findByRole('textbox', { name: 'Идея потока B' }) as Promise<HTMLTextAreaElement>
-  const approveButton = () => screen.getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement
+  const ideaOf = (group: string) => screen.findByRole('region', { name: new RegExp(`^${group} `) })
+  const approveButton = async (group: string) =>
+    within(await ideaOf(group)).getByRole('button', { name: ru['idea.approve'] }) as HTMLButtonElement
+  const openGroups = (council: () => Council, stream?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, stream }))
+    renderAt('/councils/demo-1/structure')
+  }
   const openStream = (group: string, council: () => Council, stream?: () => Promise<Response>) => {
     fetchMock.mockImplementation(server({ council, stream }))
     renderAt(`/councils/demo-1/streams/${group}`)
   }
 
-  it('идея из текста: её только утверждают, шаги «Репозиторий» и «Дизайн» пропускают — и вопросы ищет ИИ', async () => {
-    const replies = [confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } }),
-                     confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { design: null } }),
-                     confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } })]
-    openStream('A', () => confirmed(), () => json(replies[streamCalls.length - 1]))
+  it('идея из текста: её только утверждают — здесь же, на этапе «Группы»', async () => {
+    openGroups(() => confirmed(), () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA })))
     expect(await screen.findByText(ru['idea.textNote'])).toBeTruthy()
-    expect(screen.queryByRole('textbox')).toBeNull()
-    fireEvent.click(approveButton())
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.skip'] }))
-    expect(await screen.findByRole('heading', { name: ru['design.title'] })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['design.skip'] }))
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } },
-                                 { group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } },
-                                 { group: 'A', action: 'design', body: { run: 'g1', revision: 0, scan_run: null, idea: TEXT_IDEA.text } }])
-    expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
-    expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
-    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText(ru['step.question_discovery'])).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
+    expect(within(await ideaOf('A')).queryByRole('textbox')).toBeNull()
+    fireEvent.click(await approveButton('A'))
+    await waitFor(async () => expect((await ideaOf('A')).textContent).toContain(ru['chain.ideaApproved']))
+    expect(streamCalls).toEqual([{ group: 'A', action: 'idea', body: { run: 'g1', revision: 0 } }])
   })
 
   it('идеи нет: в поле — выбор судьи, другой вариант можно взять и поправить', async () => {
     const mine = 'Результат переживает падение воркера'
-    openStream('B', () => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } },
-                                                            { B: { repository: null } })))
+    openGroups(() => confirmed(), () => json(confirmed(FOUND, GROUPED, { B: { text: mine, by: 'human', evidence: [] } })))
     const field = await ideaField()
     expect(field.value).toBe('Результат переживает сбой')
     expect(screen.getByText('почему: F2 — шире')).toBeTruthy()
@@ -473,49 +475,47 @@ describe('Поток: группа и идея', () => {
     fireEvent.change(field, { target: { value: mine } })
     expect(screen.queryByText(/почему:/)).toBeNull()
     expect(screen.getByText(ru['idea.byYou'], { selector: '.source-tag' })).toBeTruthy()
-    fireEvent.click(approveButton())
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'B', action: 'idea', body: { run: 'g1', revision: 0, text: mine } }])
+    fireEvent.click(await approveButton('B'))
+    await waitFor(() => expect(streamCalls).toEqual([
+      { group: 'B', action: 'idea', body: { run: 'g1', revision: 0, text: mine } }]))
   })
 
   it('ИИ не предложил идею — поле пустое, утвердить можно, только написав свою', async () => {
     const none: IdeaDiscovery = { ...FOUND, options: [],
                                   proposal: { idea: null, evidence: [], reason: 'цели нет', decided_by: 'agreed', option: null } }
-    openStream('B', () => confirmed(none))
+    openGroups(() => confirmed(none))
     const field = await ideaField()
     expect(field.value).toBe('')
     expect(screen.getByText(ru['idea.noneNote'].replace('{{reason}}', 'цели нет'))).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect((await approveButton('B')).disabled).toBe(true)
     fireEvent.change(field, { target: { value: '   ' } })
-    expect(approveButton().disabled).toBe(true)
+    expect((await approveButton('B')).disabled).toBe(true)
     fireEvent.change(field, { target: { value: 'Своя идея' } })
-    expect(approveButton().disabled).toBe(false)
+    expect((await approveButton('B')).disabled).toBe(false)
   })
 
-  it('«Сейчас»: где поток и чей ход, цепочка сегментами', async () => {
+  it('«Сейчас»: поток без идеи ждёт её, цепочка сегментами', async () => {
     openStream('B', () => confirmed(SEEKING))
     const now = await screen.findByRole('region', { name: 'Хранение' })
-    expect(within(now).getByText(`Сейчас · поток B · ${ru['now.running']}`)).toBeTruthy()
+    expect(within(now).getByText(`Сейчас · поток B · ${ru['now.idle']}`)).toBeTruthy()
     const segments = within(now).getAllByRole('listitem')
-    expect(segments.map(segment => segment.className)).toEqual([
-      'segment running', ...Array(8).fill('segment idle')])
-    expect(segments[0].textContent).toContain(ru['chain.ideaSeeking'])
-    expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual([
-      ` (${ru['light.running']})`, ...Array(8).fill(` (${ru['light.idle']})`)])
+    expect(segments.map(segment => segment.className)).toEqual(Array(6).fill('segment idle'))
+    expect(segments[0].textContent).toContain(ru['chain.startNoIdea'])
+    expect(segments.map(segment => segment.querySelector('.sr-only')?.textContent)).toEqual(
+      Array(6).fill(` (${ru['light.idle']})`))
   })
 
   it('пока ИИ ищет идею — утвердить нельзя, виден ход работы', async () => {
-    openStream('B', () => confirmed(SEEKING))
+    openGroups(() => confirmed(SEEKING))
     expect(await screen.findByText(ru['idea.seeking'], { exact: false })).toBeTruthy()
-    expect(screen.queryByRole('textbox')).toBeNull()
-    expect(approveButton().disabled).toBe(true)
-    expect(screen.getByText(ru['step.idea_discovery'])).toBeTruthy()
+    expect(within(await ideaOf('B')).queryByRole('textbox')).toBeNull()
+    expect((await approveButton('B')).disabled).toBe(true)
     expect(screen.getByText(ru['idea.capsAi'])).toBeTruthy()
   })
 
   it('поиск упал — причина и повтор; написать идею самому тоже можно', async () => {
     const failed: IdeaDiscovery = { ...SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
-    openStream('B', () => confirmed(failed), () => json(confirmed(SEEKING), 202))
+    openGroups(() => confirmed(failed), () => json(confirmed(SEEKING), 202))
     expect((await screen.findByRole('alert')).textContent).toBe('Нет подключения к моделям: GPT-5.6 Sol')
     expect(await ideaField()).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
@@ -523,15 +523,15 @@ describe('Поток: группа и идея', () => {
     expect(streamCalls).toEqual([{ group: 'B', action: 'discovery', body: undefined }])
   })
 
-  it('своя идея после упавшего поиска: поток прошёл шаг, повтора поиска больше нет', async () => {
+  it('своя идея после упавшего поиска: поток начат, повтора поиска больше нет', async () => {
     const failed: IdeaDiscovery = { ...SEEKING, state: 'failed', error: 'Нет подключения к моделям: GPT-5.6 Sol' }
     const own: StreamIdea = { text: 'Своя идея', by: 'human', evidence: [] }
-    openStream('B', () => confirmed(failed, GROUPED, { B: own }))
+    openStream('B', () => ({ ...confirmed(failed, GROUPED, { B: own }), research: RESEARCHED }))
     expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
     expect(screen.getByText(`Сейчас · поток B · ${ru['now.yours']}`)).toBeTruthy()
     expect(screen.getByText(ru['questions.notSought'], { exact: false })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByRole('heading', { name: ru['idea.title'] })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.queryByRole('button', { name: ru['run.retry'] })).toBeNull()
   })
@@ -546,30 +546,71 @@ describe('Поток: группа и идея', () => {
           if (first) { first = false; return json(confirmed(SEEKING)) }
           return new Promise<Response>(r => pending.push(c => r(new Response(JSON.stringify(c)))))
         }
-        // Утвердили идею A — и совет сразу ищет к ней вопросы.
-        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA },
-                                                      { A: { questions: QUESTIONS_SEEKING } })) })(url, init)
+        return server({ stream: () => json(confirmed(SEEKING, GROUPED, { A: TEXT_IDEA })) })(url, init)
       })
-      renderAt('/councils/demo-1/streams/A')
-      const nav = await streamNav()
-      const link = (name: RegExp) => within(nav).getByRole('link', { name })
+      renderAt('/councils/demo-1/structure')
+      const status = (group: string) => screen.getByRole('region', { name: new RegExp(`^${group} `) }).textContent
+      await screen.findByRole('heading', { name: ru['ideas.title'] })
       vi.advanceTimersByTime(POLL_MS)               // опрос ушёл до утверждения, ответа пока нет
       expect(pending).toHaveLength(1)
-      fireEvent.click(approveButton())
-      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
+      fireEvent.click(await approveButton('A'))
+      await waitFor(() => expect(status('A')).toContain(ru['chain.ideaApproved']))
 
-      pending[0](confirmed(FOUND))                  // в нём A ещё без идеи и без поиска вопросов
-      await waitFor(() => expect(link(/Воркер/).textContent).toContain(ru['streams.questions.seeking']))
-      expect(link(/Хранение/).textContent).toContain(ru['streams.group.seeking'])   // и B — как было
+      pending[0](confirmed(FOUND))                  // в нём A ещё без идеи
+      await waitFor(() => expect(status('A')).toContain(ru['chain.ideaApproved']))
+      expect(status('B')).toContain(ru['chain.ideaSeeking'])   // и B — как было
 
       vi.advanceTimersByTime(POLL_MS)               // следующий опрос — уже после утверждения
       await waitFor(() => expect(pending).toHaveLength(2))
-      pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_FOUND } }))
-      await waitFor(() => expect(link(/Хранение/).textContent).toContain(ru['streams.group.yours']))
-      expect(link(/Воркер/).textContent).toContain(ru['streams.questions.yours'])
+      pending[1](confirmed(FOUND, GROUPED, { A: TEXT_IDEA }))
+      await waitFor(() => expect(status('B')).toContain(ru['chain.ideaFound']))
+      expect(status('A')).toContain(ru['chain.ideaApproved'])
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('Поток: начало и вопросы', () => {
+  const openStream = (group: string, council: () => Council, stream?: () => Promise<Response>) => {
+    fetchMock.mockImplementation(server({ council, stream }))
+    renderAt(`/councils/demo-1/streams/${group}`)
+  }
+  const startAgain = () => screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement
+
+  it('поток начинают, когда исследование пройдено: он берёт его себе — и вопросы ищет ИИ', async () => {
+    const notStarted = { ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } }),
+                         research: RESEARCHED }
+    openStream('A', () => notStarted,
+               () => json({ ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }),
+                            research: RESEARCHED }))
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(screen.getByText(TEXT_IDEA.text)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['start.start'] }))
+    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'start', body: { run: 'g1', revision: 0, idea: TEXT_IDEA.text } }])
+    expect(screen.getByText(ru['questions.by.text'])).toBeTruthy()
+    expect(screen.getByText(ru['questions.seeking'], { exact: false })).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(ru['step.question_discovery'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(screen.getByText(ru['start.current'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('исследование не пройдено — начать нельзя; прошли заново — поток можно начать заново', async () => {
+    const waiting = confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null } })
+    openStream('A', () => waiting)
+    expect(await screen.findByText(ru['start.noResearch'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.start'] }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    const again = { ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA }),
+                    research: { ...RESEARCHED, repository: { by: 'scan' as const, scan_run: 'sc2' } } }
+    openStream('A', () => again)
+    fireEvent.click(await screen.findByRole('button', { name: /Начало/ }))
+    expect(await screen.findByText(ru['start.another'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: ru['start.again'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('вопрос об устройстве системы помечен «технические детали» — и в отборе он оставлен, как все', async () => {
@@ -582,11 +623,11 @@ describe('Поток: группа и идея', () => {
     expect(screen.getByText('Решать 2 из 2')).toBeTruthy()
   })
 
-  it('пока ИИ ищет вопросы к идее, её не поменять', async () => {
+  it('пока ИИ ищет вопросы, поток не начать заново', async () => {
     openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { questions: QUESTIONS_SEEKING } }))
     fireEvent.click(await screen.findByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(startAgain().disabled).toBe(true)
   })
 
   it('вопросы: происхождение, причина, предложения; убрать, вернуть, свой — и отбор уходит на сервер', async () => {
@@ -773,7 +814,7 @@ describe('Поток: группа и идея', () => {
     const chain = await screen.findByRole('region', { name: /Цепочка/ })
     expect(within(chain).getAllByText(ru['chain.you'])).toHaveLength(1)
     expect(within(chain).getByText(ru['chain.options.you'])).toBeTruthy()
-    expect(within(chain).queryByText(ru['chain.group.you'])).toBeNull()
+    expect(within(chain).queryByText(ru['chain.start.you'])).toBeNull()
   })
 
   it('свой вариант пишут прямо у вопроса — он уходит на сервер текстом, а номер даёт сервер', async () => {
@@ -864,8 +905,8 @@ describe('Поток: группа и идея', () => {
     expect(await screen.findByText(ru['questions.belowRunning'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['questions.approve'] }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: ru['questions.change'] }))
-    expect(await screen.findByText(ru['idea.belowRunning'])).toBeTruthy()
-    expect(approveButton().disabled).toBe(true)
+    expect(await screen.findByRole('heading', { name: ru['start.title'] })).toBeTruthy()
+    expect(startAgain().disabled).toBe(true)
   })
 
   it('ограничения, которые вариант учитывает, и связанные риски — раздельно', async () => {
@@ -889,25 +930,26 @@ describe('Поток: группа и идея', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Сервер останавливается, ход не запущен')
   })
 
-  it('утвердить к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
+  it('утвердить идею к прежним группам нельзя (409) — ошибка и нынешние группы', async () => {
     let current = confirmed()
-    openStream('B', () => current, () => {
+    fetchMock.mockImplementation(server({ council: () => current, stream: () => {
       current = confirmed(FOUND, { ...GROUPED, revision: 1,
                                    groups: [GROUPED.groups[0], { ...GROUPED.groups[1], title: 'Хранилище' }] })
       return json({ detail: 'Группы уже поменяли — правка была к прежним' }, 409)
-    })
-    await ideaField()
-    fireEvent.click(approveButton())
+    } }))
+    renderAt('/councils/demo-1/structure')
+    const idea = await screen.findByRole('region', { name: /^B / })
+    fireEvent.click(within(idea).getByRole('button', { name: ru['idea.approve'] }))
     expect((await screen.findByRole('alert')).textContent).toBe('Группы уже поменяли — правка была к прежним')
-    expect(await within(await streamNav()).findByRole('link', { name: /Хранилище/ })).toBeTruthy()
+    expect(await screen.findByRole('region', { name: /^B Хранилище/ })).toBeTruthy()
   })
 })
 
 
-describe('Поток: репозиторий', () => {
+describe('Исследование: репозиторий', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>) => {
     fetchMock.mockImplementation(server({ council, stream }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
   }
   const SCANNED: RepositoryScan = {
     state: 'done', run: 'sc1', idea: TEXT_IDEA.text, rounds: 3, complete: false, error: null,
@@ -930,24 +972,25 @@ describe('Поток: репозиторий', () => {
     },
     follow_up: [{ objective: 'Проверить очередь', reason: '', targets: ['infra/queue.yml'], related_finding_ids: [] }],
   }
-  /** Поток A: идея из текста утверждена, шаг «Репозиторий» ещё не пройден. */
-  const atStep = (more: Partial<Stream> = {}) =>
-    confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { repository: null, design: null, ...more } })
+  /** Идеи обеих групп утверждены, шаг «Репозиторий» исследования ещё не пройден. */
+  const atStep = (more: Partial<Research> = {}): Council => ({
+    ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }),
+    research: { scan: null, repository: null, design_scan: null, design: null, ...more } })
   const path = () => screen.getByRole('textbox', { name: ru['repository.path'] }) as HTMLInputElement
 
-  it('идею поменяли в другой вкладке (409) — ошибка у скана, и новый скан — уже к нынешней идее', async () => {
-    let current = atStep()
-    openStream(() => current, () => {
-      current = confirmed(FOUND, GROUPED, { A: { ...TEXT_IDEA, text: 'Другая идея.' } }, { A: { repository: null } })
-      return json({ detail: 'Идею потока поменяли — посмотрите на новую и повторите' }, 409)
-    })
-    expect(await screen.findByRole('heading', { name: ru['repository.title'] })).toBeTruthy()
-    fireEvent.change(path(), { target: { value: 'project' } })
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
-    expect((await screen.findByRole('alert')).textContent).toBe('Идею потока поменяли — посмотрите на новую и повторите')
-    fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
-    await waitFor(() => expect(streamCalls).toHaveLength(2))
-    expect(streamCalls[1].body).toMatchObject({ idea: 'Другая идея.' })
+  it('идеи поменяли после скана — видно, что исследование было к прежним, и его можно сбросить', async () => {
+    const before: RepositoryScan = { ...SCANNED, idea: 'A. Воркер: Прежняя идея.' }
+    openStream(() => atStep({ scan: before }), () => json(atStep()))
+    expect(await screen.findByText(ru['research.outdated'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['research.reset'] }))
+    await waitFor(() => expect(streamCalls).toEqual([
+      { group: 'research', action: 'reset', body: { run: 'g1', revision: 0 } }]))
+  })
+
+  it('пока идеи не утверждены, исследования нет — дорога к группам', async () => {
+    openStream(() => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }))
+    expect(await screen.findByText(ru['research.waits'], { exact: false })).toBeTruthy()
+    expect(screen.getByRole('link', { name: ru['streams.toGroups'] }).getAttribute('href')).toBe('/councils/demo-1/structure')
   })
 
   it('скан запускают по пути к рабочей копии; пока он идёт, шаг не пройти', async () => {
@@ -958,8 +1001,8 @@ describe('Поток: репозиторий', () => {
     fireEvent.change(path(), { target: { value: 'D:\\PROJECTS\\worker' } })
     fireEvent.click(screen.getByRole('button', { name: ru['repository.scan'] }))
     expect(await screen.findByText('ИИ исследует репозиторий, проход 1 из 3.', { exact: false })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'repository/scan',
-                                   body: { run: 'g1', revision: 0, paths: ['D:\\PROJECTS\\worker'], idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'repository/scan',
+                                   body: { run: 'g1', revision: 0, paths: ['D:\\PROJECTS\\worker'] } }])
     expect(screen.getByText(ru['repository.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['repository.skip'] }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByRole('button', { name: ru['repository.approve'] })).toBeNull()
@@ -988,7 +1031,7 @@ describe('Поток: репозиторий', () => {
   it('у совета с проектом его репозитории уже отмечены: лишний снимают, свой добавляют — сканируют вместе', async () => {
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }), stream: () => json(atStep()),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     const known = await screen.findByRole('group', { name: ru['repository.known'] })
     const boxes = within(known).getAllByRole('checkbox') as HTMLInputElement[]
     expect(boxes.map(box => [box.parentElement?.textContent, box.checked])).toEqual([['kromka-api', true], ['kromka-front', true]])
@@ -1006,7 +1049,7 @@ describe('Поток: репозиторий', () => {
     let project = PROJECT
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project: PROJECT.id }),
                                           settings: () => ({ ...SETTINGS, projects: [project] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     await screen.findByRole('group', { name: ru['repository.known'] })
     project = { ...PROJECT, repositories: [...PROJECT.repositories, 'kromka-worker'], revision: 1 }
     fireEvent.focus(window)
@@ -1019,7 +1062,7 @@ describe('Поток: репозиторий', () => {
     let project = PROJECT.id
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep(), project }),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     await screen.findByRole('checkbox', { name: 'kromka-api' })
     project = other.id
     fireEvent.focus(window)
@@ -1032,7 +1075,7 @@ describe('Поток: репозиторий', () => {
                                                                    { ...SCANNED.repositories[0], path: 'other' }] }
     fetchMock.mockImplementation(server({ council: () => ({ ...atStep({ scan: scanned }), project: PROJECT.id }),
                                           settings: () => ({ ...SETTINGS, projects: [PROJECT] }) }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
     const known = await screen.findByRole('group', { name: ru['repository.known'] })
     expect((within(known).getAllByRole('checkbox') as HTMLInputElement[]).map(box => box.checked)).toEqual([false, true])
     expect((screen.getByRole('textbox', { name: 'Рабочая копия 1' }) as HTMLInputElement).value).toBe('other')
@@ -1071,7 +1114,7 @@ describe('Поток: репозиторий', () => {
 
     fireEvent.click(screen.getByRole('button', { name: ru['repository.approve'] }))
     expect(await screen.findByRole('heading', { name: ru['design.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1', idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'repository', body: { run: 'g1', revision: 0, scan_run: 'sc1' } }])
   })
 
   it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {
@@ -1122,7 +1165,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выбор проверен, для unresolved ИИ предлагает вариант — принятое уходит на сервер с обоснованием', async () => {
     const assembling: OutcomeDiscovery = {
-      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], kept: [], touched: [], uncovered_adr_ids: [], error: null }
+      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], kept: [], touched: [], uncovered_adr_ids: [], approved: false, error: null }
     openStream(() => deciding(), () => json(deciding({ outcomes: assembling, decisions: [
       { question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' },
       { question_id: 'Q2', proposal: 'P2', rationale: 'Мера без опросов.', rationale_by: 'ai' }] })))
@@ -1268,7 +1311,7 @@ describe('Поток: решения и итоги', () => {
   const FIXED = [{ question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' as const },
                  { question_id: 'Q2', proposal: null, rationale: null, rationale_by: null }]
   const ASSEMBLED: OutcomeDiscovery = {
-    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [],
+    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [], approved: false,
     steps: [{ name: 'outcome_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'outcome_judge', state: 'skipped', runs: [] }],
     outcomes: [
@@ -1280,6 +1323,11 @@ describe('Поток: решения и итоги', () => {
         gaps: [{ question: 'Где хранить отчёт?', reason: 'нет решения' }] },
     ],
   }
+  /** Итоги, которые ничто не держит: их можно утвердить. */
+  const FREE: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [ASSEMBLED.outcomes[0]] }
+  /** Те же итоги, утверждённые: поток выгружают в заметки. */
+  const APPROVED: OutcomeDiscovery = { ...FREE, approved: true }
+
 
   it('итог показывает прошлые решения проекта, на которые опирается', async () => {
     const earlier = { adr_id: 'ADR-0001', idea: 'Воркер переживает сбой.', question: 'Где хранить состояние?',
@@ -1490,7 +1538,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('закреплённый итог, который задевают новые решения: утвердить нельзя, пока не решили — оставить или пересобрать', async () => {
-    const touched: OutcomeDiscovery = { ...ASSEMBLED, kept: ['O1'],
+    const touched: OutcomeDiscovery = { ...FREE, kept: ['O1'],
       touched: [{ outcome_id: 'O1', adr_ids: ['ADR-2'], reason: 'меняет хранение' }] }
     openStream(() => deciding({ decisions: FIXED, outcomes: touched }),
                () => json(deciding({ decisions: FIXED, outcomes: { ...touched, touched: [] } })))
@@ -1530,36 +1578,14 @@ describe('Поток: решения и итоги', () => {
     expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes/discovery', body: undefined }])
   })
 
-  const CUT: IssueDiscovery = {
-    state: 'done', run: 'i1', outcomes: 'o1', code: true, error: null, kept: [], cut: {},
-    sources: [{ name: '', path: 'project', root: '/repos/project', commit_sha: 'abcdef1234567890', dirty: false,
-                files: 12, outside: 0, omitted: [], omitted_count: 0 }],
-    steps: [{ name: 'issue_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
-            { name: 'issue_judge', state: 'skipped', runs: [] }],
-    issues: [
-      { id: 'I1', title: 'Сохранять состояние в файлы', main_entry_points: ['worker/state.py'],
-        user_story: 'As an operator, I want the state in files, so that a restart loses nothing.',
-        current_state: 'Состояние в памяти.', scope: ['Писать state.json после шага.'], outcome_ids: ['O1'],
-        adr_ids: ['ADR-1'], constraint_ids: [1], risk_ids: [], depends_on: [], blocked_by: [],
-        acceptance_criteria: ['После перезапуска состояние на месте.'] },
-      { id: 'I2', title: 'Считать потери', main_entry_points: [], current_state: '',
-        user_story: 'As an operator, I want losses counted, so that I see them.', scope: ['Считать потери.'],
-        outcome_ids: ['O2'], adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: ['I1'],
-        blocked_by: ['G1', 'Q2'], acceptance_criteria: [] },
-    ],
-    gaps: [{ id: 'G1', question: 'Где хранить отчёт?', reason: 'нет решения', outcome_ids: ['O2'] }],
-    uncovered_outcome_ids: [],
-  }
-
-  it('пока уточняют вопросы, сохранённые итоги и задачи видны: их шаги открываются из цепочки', async () => {
+  it('пока уточняют вопросы, сохранённые итоги видны: их шаг открывается из цепочки', async () => {
     // Выбор по новым вопросам ещё не утверждали: решение по Q1 — прежнее, из работы до правки отбора.
     const earlier = [{ key: `Q1: ${QUESTIONS_FOUND.questions[0].text}`, choice: { question_id: 'Q1', proposal: 'F2' },
                        analysis: CHECKED.analyses[0], decision: FIXED[0] }]
     openStream(() => deciding({ choices: null, analysis: null, earlier,
-                                saved_outcomes: [ASSEMBLED.outcomes[0]], saved_issues: [CUT.issues[0]] }))
+                                saved_outcomes: [ASSEMBLED.outcomes[0]] }))
     const chain = await screen.findByRole('region', { name: /Цепочка/ })
     expect(within(chain).getByText('сохранено итогов: 1')).toBeTruthy()
-    expect(within(chain).getByText('сохранено задач: 1')).toBeTruthy()
     fireEvent.click(within(chain).getByRole('button', { name: /Итоги/ }))
     expect(await screen.findByText(ru['outcomes.savedCaps'])).toBeTruthy()
     expect(screen.getByText(ru['outcomes.saved'])).toBeTruthy()
@@ -1567,9 +1593,6 @@ describe('Поток: решения и итоги', () => {
     expect(within(outcome).getByText(ru['outcomes.kept'])).toBeTruthy()
     expect(within(outcome).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()   // ADR-1 — решение по Q1
     expect(screen.queryByRole('button', { name: ru['outcomes.approve'] })).toBeNull()       // утверждать нечего
-    fireEvent.click(within(chain).getByRole('button', { name: /Задачи/ }))
-    expect(await screen.findByText(ru['issues.savedCaps'])).toBeTruthy()
-    expect(within(await card('Сохранять состояние в файлы')).getByText('Состояние в файлах')).toBeTruthy()   // итог O1
   })
 
   it('сохранённый итог на своём варианте — с его текстом, пока выбор не утвердили заново', async () => {
@@ -1589,92 +1612,34 @@ describe('Поток: решения и итоги', () => {
     expect(screen.getByText(ru['outcomes.assembling'], { exact: false })).toBeTruthy()
   })
 
-  it('итоги утверждают — совет нарезает их на задачи, экран переходит к задачам', async () => {
-    const cutting: IssueDiscovery = { ...CUT, state: 'running', issues: [], gaps: [] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }),
-               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: cutting })))
+  it('итоги утверждают — экран переходит к документации', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: FREE }),
+               () => json(deciding({ decisions: FIXED, outcomes: APPROVED })))
     await card('Состояние в файлах')
     expect(screen.getByText(ru['outcomes.approveHint'])).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['outcomes.approve'] }))
-    expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
-    expect(screen.getByText(ru['issues.cutting'], { exact: false })).toBeTruthy()
-    expect(screen.queryByText('По коду коммита abcdef12.')).toBeNull()                 // ещё не прочитан
+    expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([{ group: 'A', action: 'outcomes',
                                    body: { run: 'g1', revision: 0, outcomes_run: 'o1' } }])
   })
 
-  it('задачи: что, где и зачем; заблокированная держится пробелом и вопросом; пробел — в вопросы', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(deciding()))
-    const ready = await card('Сохранять состояние в файлы')
-    expect(within(ready).getByText(ru['issues.ready'])).toBeTruthy()
-    expect(within(ready).getByText('worker/state.py')).toBeTruthy()
-    expect(within(ready).getByText('— Писать state.json после шага.')).toBeTruthy()
-    expect(within(ready).getByText('— После перезапуска состояние на месте.')).toBeTruthy()   // итог готов, когда
-    expect(within(ready).getByText('Состояние в файлах')).toBeTruthy()                    // итог O1
-    expect(within(ready).getByText('Состояние держать в файлах, без базы.')).toBeTruthy()  // ADR-1
-    expect(screen.getByText('По коду коммита abcdef12.')).toBeTruthy()
-    const blocked = await card('Считать потери')
-    expect(within(blocked).getByText('заблокирована G1, Q2')).toBeTruthy()
-    expect(within(blocked).getByText('Не хватает решения: Q2. Задача не додумывается.')).toBeTruthy()
-    expect(within(blocked).getByText('Где хранить отчёт?', { exact: false })).toBeTruthy()
-    expect(within(blocked).getByText('I1')).toBeTruthy()                                  // после задачи I1
-    expect(screen.getAllByText('заблокировано 1 из 2').length).toBeGreaterThan(0)         // цепочка и «Сейчас»
-
-    const gaps = screen.getByRole('region', { name: ru['issues.gapsTitle'] })
-    fireEvent.click(within(gaps).getByRole('button', { name: ru['issues.toQuestions'] }))
-    expect(within(gaps).getByText(ru['gaps.added'])).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['gaps.toQuestions'] }))
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(screen.getByText('Где хранить отчёт?')).toBeTruthy()
-    expect(screen.getByText(/Новый вопрос ещё не в отборе/)).toBeTruthy()
+  it('итоги держит открытый вопрос или пробел — утвердить нельзя, видно почему', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }))
+    await card('Замер потерь')
+    expect((screen.getByRole('button', { name: ru['outcomes.approve'] }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(ru['outcomes.heldHint'])).toBeTruthy()
+    expect(screen.queryByText(ru['outcomes.approveHint'])).toBeNull()
   })
 
-  it('задача закреплённого итога из прежней нарезки — помечена перенесённой', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: { ...CUT, kept: ['I1'] } }))
-    expect(within(await card('Сохранять состояние в файлы')).getByText(ru['issues.kept'])).toBeTruthy()
-  })
-
-  it('задачи по коду нескольких репозиториев — видно коммит каждого', async () => {
-    const two: IssueDiscovery = { ...CUT, sources: [
-      { ...CUT.sources[0], name: 'back', path: 'back' },
-      { ...CUT.sources[0], name: 'front', path: 'web/front', commit_sha: '1234567890abcdef', dirty: true }] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: two }))
-    expect(await screen.findByText(
-      'По коду: back — коммит abcdef12; web/front — коммит 12345678 с незакоммиченными правками.')).toBeTruthy()
-  })
-
-  it('решение вне итогов видно и на задачах — поток не готов', async () => {
-    const lost: OutcomeDiscovery = { ...ASSEMBLED, uncovered_adr_ids: ['ADR-1'] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: lost, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
-    expect(await screen.findByText('Решения, не вошедшие ни в один итог, нет и в задачах: ADR-1.')).toBeTruthy()
-    expect(screen.getAllByText('вне итогов и задач: ADR-1').length).toBeGreaterThan(0)
-  })
-
-  it('итог без задач виден с тем, что его держит, — из него назад, к вопросу', async () => {
-    const onlyFirst: IssueDiscovery = { ...CUT, issues: [CUT.issues[0]], gaps: [], uncovered_outcome_ids: ['O2'] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: onlyFirst }))
-    const left = await screen.findByRole('region', { name: ru['issues.uncoveredTitle'] })
-    expect(within(left).getByText('Замер потерь', { exact: false })).toBeTruthy()
-    expect(within(left).getByText('держит Q2', { exact: false })).toBeTruthy()
-    fireEvent.click(within(left).getByRole('button', { name: ru['outcomes.back'] }))
-    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
-  })
-
-  it('итог без критериев готовности виден и на задачах — поток не готов', async () => {
-    const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: vague, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
-    expect(await screen.findByText('У итогов нет критериев готовности: O1 — задачи по ним не проверить.')).toBeTruthy()
-    expect(screen.getAllByText('без критериев: O1').length).toBeGreaterThan(0)
-  })
-
-  it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
-    await card('Сохранять состояние в файлы')
-    fireEvent.click(screen.getByRole('button', { name: ru['issues.change'] }))
+  it('утверждённые итоги — к документации, а не утверждать заново', async () => {
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED }))
+    expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
+    const chain = screen.getByRole('region', { name: /Цепочка/ })
+    fireEvent.click(within(chain).getByRole('button', { name: /Итоги/ }))
     expect(await screen.findByRole('heading', { name: ru['outcomes.title'] })).toBeTruthy()
     expect(screen.queryByRole('button', { name: ru['outcomes.approve'] })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: ru['outcomes.toIssues'] }))
-    expect(await screen.findByRole('heading', { name: ru['issues.title'] })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['outcomes.toNotes'] }))
+    expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
     expect(streamCalls).toEqual([])
   })
 
@@ -1795,7 +1760,7 @@ describe('Поток: решения и итоги', () => {
   const atStart = () => confirmed()
 
   const DRAFT: NotesDraft = {
-    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', steps: [], error: null,
+    state: 'done', run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', steps: [], error: null,
     notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', text: 'Хочу воркер.', generated: 'Хочу воркер.', links: [],
         action: 'create', current: null },
@@ -1806,20 +1771,17 @@ describe('Поток: решения и итоги', () => {
     ],
     vanished: [{ id: 'ADR-0003', type: 'adr', text: 'Старое решение.', linked_from: [] },
                { id: 'ADR-0004', type: 'adr', text: 'Ещё старое.', linked_from: ['OQ-0009'] }],
-    numbers: [{ key: 'i:сохранять', id: 'ISS-0012', issue_id: 'I1', title: 'Сохранять состояние в файлы', outcome_ids: ['O1'] }],
     skipped: ['O2 «Мера» не выгружается: у него нет решений этой идеи'],
   }
 
   it('документация: черновик заметок — правка текста, удаление исчезнувшего, запись', async () => {
-    const replies = [deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT }),
-                     deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT,
-                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } })]
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }),
+    const replies = [deciding({ decisions: FIXED, outcomes: APPROVED, notes_draft: DRAFT }),
+                     deciding({ decisions: FIXED, outcomes: APPROVED, notes_draft: DRAFT,
+                                notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: {} } })]
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED }),
              () => json(replies[streamCalls.length - 1]))
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
     expect(screen.getByText('Каталог заметок: /notes')).toBeTruthy()
-    expect(screen.getByText(ru['notes.noIssues'])).toBeTruthy()            // у проекта нет папки задач
     fireEvent.click(screen.getByRole('button', { name: ru['notes.build'] }))
     expect(await screen.findByText('O2 «Мера» не выгружается: у него нет решений этой идеи')).toBeTruthy()
     expect(screen.getByText(ru['notes.editedNote'])).toBeTruthy()
@@ -1838,58 +1800,18 @@ describe('Поток: решения и итоги', () => {
     expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('документация с папкой задач: файлы задач — в черновике, а черновик к другой папке задач не записать', async () => {
-    const issue: NotePlan = {
-      key: 'i:сохранять', id: 'ISS-0012', type: 'issue', text: '# Сохранять состояние в файлы\n\nКак воркер…',
-      generated: '# Сохранять состояние в файлы\n\nКак воркер…', links: ['OUT-0003', 'ADR-0005'], action: 'create',
-      current: null }
-    const filed: NotesDraft = { ...DRAFT, issues_root: '/issues', notes: [...DRAFT.notes, issue] }
-    let draft = filed
-    let exportRecord: NotesExport | null = null
-    fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: draft, notes: exportRecord }),
-                        project: PROJECT.id }),
-      settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, issues: 'kromka-api/issues', issues_root: '/issues' }] }),
-    }))
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText('Папка задач: /issues')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: ru['notes.type.issue'] })).toBeTruthy()
-    expect((screen.getByRole('textbox', { name: 'Текст заметки ISS-0012' }) as HTMLTextAreaElement).value)
-      .toBe('# Сохранять состояние в файлы\n\nКак воркер…')
-    expect(screen.getByText('→ OUT-0003, ADR-0005')).toBeTruthy()
-    expect(screen.getByText('3 заметки · 1 файл задачи')).toBeTruthy()
-    cleanup()
-    // Папку задач проекта сменили после сборки: черновик — к прежней.
-    draft = { ...filed, issues_root: '/old-issues' }
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText(ru['notes.movedIssues'])).toBeTruthy()
-    expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
-    cleanup()
-    // Выгружали, когда папка задач была другой: заметки на месте, а файлов задач здесь нет — выгружать снова.
-    draft = { ...filed, run: 'n2' }
-    exportRecord = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '/old-issues',
-                     notes: [], numbers: DRAFT.numbers }
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText(ru['notes.issuesElsewhere'])).toBeTruthy()
-    expect(screen.getByRole('button', { name: ru['notes.write'] })).toBeTruthy()
-  })
-
   it('папку проекта сменили в другой вкладке — черновик, собранный после, записать можно', async () => {
     let root = '/notes'
     fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: APPROVED }), project: PROJECT.id }),
       stream: () => {
         root = '/new'                         // пока экран был открыт, папку проекта поменяли
-        return json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }),
+        return json({ ...deciding({ decisions: FIXED, outcomes: APPROVED, notes_draft: { ...DRAFT, root: '/new' } }),
                       project: PROJECT.id })
       },
       settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: root }] }),
     }))
     renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
     expect(await screen.findByRole('button', { name: ru['notes.write'] })).toBeTruthy()
     expect(screen.queryByText(ru['notes.moved'])).toBeNull()
@@ -1899,43 +1821,39 @@ describe('Поток: решения и итоги', () => {
   it('проект совета сменили в другой вкладке — экран берёт его из ответа на действие', async () => {
     const other: Project = { ...PROJECT, id: 'p2', name: 'Другой', notes_root: '/other' }
     fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
-      stream: () => json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: APPROVED }), project: PROJECT.id }),
+      stream: () => json({ ...deciding({ decisions: FIXED, outcomes: APPROVED,
                                          notes_draft: { ...DRAFT, root: '/other' } }), project: other.id }),
       settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }),
     }))
     renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
     expect(await screen.findByRole('button', { name: ru['notes.write'] })).toBeTruthy()
     expect(screen.getByText('Каталог заметок: /other')).toBeTruthy()
   })
 
   it('черновик к прежней папке документации (проект сменили) — не записать, собрать заново', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/old' } }),
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, notes_draft: { ...DRAFT, root: '/old' } }),
              () => json(atStart()))
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.moved'])).toBeTruthy()
     expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
     expect((screen.getByRole('button', { name: ru['notes.rebuild'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('документация без каталога заметок — подсказка, собрать нельзя', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(atStart()), null)
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED }), () => json(atStart()), null)
     expect(await screen.findByText(ru['notes.noRoot'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
-    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', numbers: DRAFT.numbers, notes: [
+    const notes: NotesExport = { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
         links: [], digest: 'd1', kept: false },
       { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
-        links: [], digest: 'd2', kept: true }] }
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT, notes }),
+        links: [], digest: 'd2', kept: true }], refs: {} }
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, notes_draft: DRAFT, notes }),
              () => json(atStart()))
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText('Выгружено заметок: 1.')).toBeTruthy()
     const idea = screen.getByRole('textbox', { name: 'Текст заметки IDEA-0002' }) as HTMLTextAreaElement
     expect(idea.value).toBe('Воркер не теряет результат.')
@@ -1944,69 +1862,115 @@ describe('Поток: решения и итоги', () => {
 
   it('черновик заметок не собрался — причина видна, собрать можно снова', async () => {
     const detail = 'Каталог заметок /notes: в adrs/ADR-0001.md нет frontmatter'
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json({ detail }, 422))
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED }), () => json({ detail }, 422))
     fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
     expect((await screen.findByRole('alert')).textContent).toBe(detail)
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
-             () => json(atStart()))
-    const issue = await card('Сохранять состояние в файлы')
-    expect(within(issue).getByText('ISS-0012')).toBeTruthy()
-    expect(within(issue).getByText(ru['issues.commit'].replace('{{id}}', 'ISS-0012'))).toBeTruthy()
-  })
-
-  it('сохранённые и перенесённые задачи — с номером из выгрузки прежней нарезки, новые — без', async () => {
-    const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
-                                         outcome_ids: ['O2'] }]
-    const before = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers }
-    // Выгружали нарезку i1; потом её нарезали заново без выгрузки (i2, I1 перенесена), а теперь поправили отбор —
-    // нарезку сняли, I1 сохранена: номер у неё тот же, через сколько нарезок ни перенеси.
-    const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'] }
-    openWith(() => deciding({ choices: null, analysis: null, earlier_issues: recut, notes: before,
-                              saved_outcomes: [ASSEMBLED.outcomes[0]], saved_issues: [CUT.issues[0]] }),
-             () => json(atStart()))
-    const chain = await screen.findByRole('region', { name: /Цепочка/ })
-    fireEvent.click(within(chain).getByRole('button', { name: /Задачи/ }))
-    expect(within(await card('Сохранять состояние в файлы')).getByText('ISS-0012')).toBeTruthy()
-  })
-
-  it('новая нарезка: перенесённая задача — с прежним номером, новая под тем же I-номером — без', async () => {
-    const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
-                                         outcome_ids: ['O2'] }]
-    const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'],
-                                    issues: [CUT.issues[0], { ...CUT.issues[1], title: 'Другая задача' }] }
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: recut, earlier_issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers } }),
-             () => json(atStart()))
-    expect(within(await card('Сохранять состояние в файлы')).getByText('ISS-0012')).toBeTruthy()
-    expect(within(await card('Другая задача')).queryByText('ISS-0013')).toBeNull()
-  })
-
-  it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка: номеров у задач нет', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
+  it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED,
+                              notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: {} } }),
              () => json(atStart()), '/other')
-    const issue = await card('Сохранять состояние в файлы')
-    expect(within(issue).queryByText('ISS-0012')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.elsewhere'].replace('{{root}}', '/notes'))).toBeTruthy()
     expect(screen.getAllByText(ru['chain.notesElsewhere']).length).toBeGreaterThan(0)
   })
+})
 
-  it('нарезка упала — причина видна, её запускают снова', async () => {
-    const failed: IssueDiscovery = { ...CUT, state: 'failed', issues: [], gaps: [],
-                                     error: 'Нет подключения к моделям: GPT-5.6 Sol' }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: failed }),
-               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT })))
-    expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
-    expect(await slideTo('Сохранять состояние в файлы')).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'issues/discovery', body: undefined }])
+describe('Задачи', () => {
+  const OUTCOMES: OutcomeDiscovery = {
+    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [], approved: true,
+    steps: [],
+    outcomes: [{ id: 'O1', title: 'Состояние в файлах', behavior: 'Воркер хранит состояние в файлах.', adr_ids: ['ADR-1'],
+                 constraint_ids: [1], risk_ids: [], acceptance_criteria: ['После перезапуска состояние на месте.'],
+                 blocked_by: [], gaps: [] }],
+  }
+  const EXPORTED: NotesExport = {
+    run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', refs: { O1: 'OUT-0001', 'ADR-1': 'ADR-0005' },
+    notes: [{ key: 'a:x', id: 'ADR-0005', type: 'adr', generated: '…', written: 'Файлы, потому что проще.', links: [],
+              digest: 'd', kept: false }],
+  }
+  /** Поток утверждён и выгружен; у второго — свои номера заметок. */
+  const through: Partial<Stream> = { outcomes: OUTCOMES, notes: EXPORTED }
+  const throughB: Partial<Stream> = { outcomes: OUTCOMES, notes: { ...EXPORTED, refs: { O1: 'OUT-0002', 'ADR-1': 'ADR-0006' },
+                                                                     notes: [{ ...EXPORTED.notes[0], id: 'ADR-0006' }] } }
+  const PLAN: TaskPlan = {
+    state: 'done', run: 't1', basis: { A: 'o1:n1', B: 'o1:n1', research: '|' }, code: false, sources: [], steps: [], uncovered: [],
+    skipped: [], error: null,
+    issues: [
+      { id: 'I1', title: 'Сохранять состояние в файлы', user_story: 'As an operator, I want the state in files.',
+        main_entry_points: ['worker/state.py'], current_state: 'Состояние в памяти.', scope: ['Писать state.json после шага.'],
+        outcome_id: 'OUT-0001', adr_ids: ['ADR-0005'], constraint_ids: [1], risk_ids: [], depends_on: [],
+        open_questions: ['Где лежит state.json?'] },
+      { id: 'I2', title: 'Читать состояние при старте', user_story: 'As an operator, I want the worker to resume.',
+        main_entry_points: [], current_state: '', scope: ['Читать state.json при старте.'], outcome_id: 'OUT-0001',
+        adr_ids: [], constraint_ids: [], risk_ids: [], depends_on: ['I1'], open_questions: [] },
+    ],
+  }
+  const DRAFTED: TasksDraft = {
+    state: 'done', run: 'td1', plan: 't1', language: 'Russian', root: '/issues', steps: [], vanished: [], error: null,
+    numbers: [{ key: 'i:1', id: 'ISS-0001', issue_id: 'I1', title: PLAN.issues[0].title, outcome_ids: ['OUT-0001'] }],
+    notes: [{ key: 'i:1', id: 'ISS-0001', type: 'issue', text: '# Сохранять состояние в файлы', generated: '# Сохранять состояние в файлы',
+              links: ['OUT-0001', 'ADR-0005'], action: 'create', current: null }],
+  }
+  const council = (more: Partial<Council> = {}, a: Partial<Stream> = through, b: Partial<Stream> = throughB): Council =>
+    ({ ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: TEXT_IDEA }, { A: a, B: b }), project: PROJECT.id, ...more })
+  const open = (shown: () => Council, reply: () => Promise<Response> = () => json(shown())) => {
+    fetchMock.mockImplementation(server({ council: shown, stream: reply,
+      settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: '/notes', issues_root: '/issues' }] }) }))
+    renderAt('/councils/demo-1/tasks')
+  }
+  const planButton = () => screen.findByRole('button', { name: ru['tasks.plan'] }) as Promise<HTMLButtonElement>
+
+  it('план ждёт, пока каждый поток утвердят и выгрузят', async () => {
+    open(() => council({}, through, {}))
+    expect((await planButton()).disabled).toBe(true)
+    expect(screen.getByText(ru['tasks.stream.ready'])).toBeTruthy()
+    expect(screen.getByText(ru['tasks.stream.outcomes'])).toBeTruthy()
+  })
+
+  it('план строят по кнопке — задачи с итогом, решениями, порядком и открытыми вопросами', async () => {
+    open(() => council(), () => json(council({ tasks: PLAN })))
+    fireEvent.click(await planButton())
+    const first = await slideTo('Сохранять состояние в файлы')
+    expect(within(first).getByText('Состояние в файлах (A)', { exact: false })).toBeTruthy()       // итог OUT-0001
+    expect(within(first).getByText('Файлы, потому что проще.', { exact: false })).toBeTruthy()      // ADR-0005
+    expect(within(first).getByText('— Где лежит state.json?')).toBeTruthy()
+    expect(screen.getByText(ru['tasks.noCode'])).toBeTruthy()
+    const second = await slideTo('Читать состояние при старте')
+    expect(within(second).getByText('Сохранять состояние в файлы', { exact: false })).toBeTruthy()  // после I1
+    expect(streamCalls).toEqual([{ group: 'tasks', action: 'plan', body: { run: 'g1', revision: 0 } }])
+    expect(screen.queryByRole('button', { name: ru['tasks.plan'] })).toBeNull()                      // план уже есть
+  })
+
+  it('план выгружают в папку задач: черновик, правка, запись — и номер задачи для коммита', async () => {
+    const exported = { run: 'td1', plan: 't1', language: 'Russian', root: '/issues', numbers: DRAFTED.numbers,
+                       notes: [{ key: 'i:1', id: 'ISS-0001', type: 'issue' as const, generated: '…', written: '# Своя',
+                                 links: [], digest: 'd', kept: false }] }
+    const replies = [council({ tasks: PLAN, tasks_draft: DRAFTED }),
+                     council({ tasks: PLAN, tasks_draft: DRAFTED, tasks_export: exported })]
+    open(() => council({ tasks: PLAN }), () => json(replies[streamCalls.length - 1]))
+    expect(screen.queryByText('ISS-0001')).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: ru['tasks.build'] }))
+    const text = await screen.findByRole('textbox', { name: 'Текст задачи ISS-0001' })
+    fireEvent.change(text, { target: { value: '# Своя' } })
+    fireEvent.click(screen.getByRole('button', { name: ru['tasks.write'] }))
+    expect(await screen.findByText('Выгружено задач: 1.')).toBeTruthy()
+    expect(streamCalls).toEqual([
+      { group: 'tasks', action: 'draft', body: { run: 'g1', revision: 0 } },
+      { group: 'tasks', action: 'write', body: { run: 'g1', revision: 0, draft: 'td1', edits: { 'i:1': '# Своя' }, delete: [] } }])
+    const first = await slideTo('Сохранять состояние в файлы')
+    expect(within(first).getByText('ISS-0001')).toBeTruthy()
+    expect(within(first).getByText(/В финальном коммите укажите ISS-0001/)).toBeTruthy()
+  })
+
+  it('потоки поменяли после плана — видно, какие; сбрасывает человек', async () => {
+    const stale = { ...PLAN, basis: { A: 'o0:n1', B: 'o1:n1', research: 'scan:s0|skipped:' } }
+    open(() => council({ tasks: stale }), () => json(council()))
+    expect(await screen.findByText(ru['tasks.stale'].replace('{{groups}}', `A, ${ru['tasks.research']}`))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: ru['tasks.reset'] }))
+    expect((await planButton()).disabled).toBe(false)
+    expect(streamCalls).toEqual([{ group: 'tasks', action: 'reset', body: { run: 'g1', revision: 0 } }])
   })
 })
 
@@ -2806,10 +2770,10 @@ describe('Переключатель языка', () => {
   })
 })
 
-describe('Поток: дизайн', () => {
+describe('Исследование: дизайн', () => {
   const openStream = (council: () => Council, stream?: () => Promise<Response>, settings?: () => Settings) => {
     fetchMock.mockImplementation(server({ council, stream, settings }))
-    renderAt('/councils/demo-1/streams/A')
+    renderAt('/councils/demo-1/research')
   }
   const LINK = 'https://www.figma.com/design/AbC123/Billing?node-id=2-1'
   const node = (node_id: string, name: string) => ({ page_id: '1:0', node_id, name })
@@ -2832,9 +2796,10 @@ describe('Поток: дизайн', () => {
     },
     follow_up: [{ objective: 'Проверить пустой результат', reason: '', targets: [node('2:3', 'Search')], related_finding_ids: [] }],
   }
-  /** Поток A: идея из текста утверждена, шаг «Репозиторий» пропущен, «Дизайн» — ещё нет. */
-  const atDesign = (more: Partial<Stream> = {}) =>
-    confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { design: null, ...more } })
+  /** Идеи утверждены, шаг «Репозиторий» исследования пропущен, «Дизайн» — ещё нет. */
+  const atDesign = (more: Partial<Research> = {}): Council => ({
+    ...confirmed(FOUND, GROUPED, { A: TEXT_IDEA, B: OWN_B }),
+    research: { scan: null, repository: SKIPPED, design_scan: null, design: null, ...more } })
   const link = () => screen.getByRole('textbox', { name: ru['design.link'] }) as HTMLInputElement
 
   it('ссылки на фреймы добавляют и убирают; скан идёт по ним', async () => {
@@ -2847,8 +2812,8 @@ describe('Поток: дизайн', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Ссылка 2' }), { target: { value: `${LINK.split('?')[0]}?node-id=1-0` } })
     fireEvent.click(screen.getByRole('button', { name: ru['design.scan'] }))
     expect(await screen.findByText(ru['design.fetching'], { exact: false })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'design/scan', body: {
-      run: 'g1', revision: 0, links: [LINK, `${LINK.split('?')[0]}?node-id=1-0`], idea: TEXT_IDEA.text } }])
+    expect(streamCalls).toEqual([{ group: 'research', action: 'design/scan', body: {
+      run: 'g1', revision: 0, links: [LINK, `${LINK.split('?')[0]}?node-id=1-0`] } }])
     expect(screen.getByText(ru['design.capsAi'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['design.skip'] }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -2861,10 +2826,9 @@ describe('Поток: дизайн', () => {
     expect((screen.getByRole('button', { name: ru['design.skip'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('описание макета видно по разделам; утверждённое — к вопросам', async () => {
+  it('описание макета видно по разделам; утверждённое — исследование пройдено', async () => {
     openStream(() => atDesign({ design_scan: DESIGNED }),
-               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA },
-                                    { A: { design_scan: DESIGNED, design: { by: 'scan', scan_run: 'ds1' }, questions: QUESTIONS_SEEKING } })))
+               () => json(atDesign({ design_scan: DESIGNED, design: { by: 'scan', scan_run: 'ds1' } })))
     expect(await screen.findByText('Экран тредов с поиском')).toBeTruthy()
     expect(link().value).toBe(LINK)
     expect(screen.getByText('«Billing» · версия 42 · страниц: 1 · картинок: 2')).toBeTruthy()
@@ -2879,8 +2843,8 @@ describe('Поток: дизайн', () => {
     expect(screen.getByText(ru['step.design_discovery'])).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: ru['design.approve'] }))
-    expect(await screen.findByRole('heading', { name: ru['questions.title'] })).toBeTruthy()
-    expect(streamCalls).toEqual([{ group: 'A', action: 'design', body: { run: 'g1', revision: 0, scan_run: 'ds1', idea: TEXT_IDEA.text } }])
+    expect(await screen.findByText(ru['research.done'], { exact: false })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'research', action: 'design', body: { run: 'g1', revision: 0, scan_run: 'ds1' } }])
   })
 
   it('скан упал — причина видна, его запускают снова или пропускают шаг', async () => {

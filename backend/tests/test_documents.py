@@ -12,7 +12,6 @@ from spec_council.api.councils import council_lock
 from spec_council.app import app
 from spec_council.deps import (
     get_agents,
-    get_issues_of,
     get_launcher,
     get_notes_of,
     get_projects,
@@ -23,15 +22,13 @@ from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.projects import Projects
 from tests.test_project import put
 from tests.test_streams import (
-    TASK,
-    WHY,
     Agents,
     approves,
-    chosen_c,
     client,
     confirm,
     decide,
     decided_c,
+    free_c,
     get_store,
     grouped,
     streams_of,
@@ -69,26 +66,17 @@ def writes(council_id, group="C", draft=None, edits=None, delete=()):
                              "delete": list(delete)})
 
 
-def cut_c():
+def approved_c():
+    """Поток C, где решены оба вопроса: итог ничто не держит, и его утвердили."""
     council_id = grouped()
     confirm(council_id)
-    decided_c(council_id)
-    approves(council_id, "C")
+    free_c(council_id)
+    assert approves(council_id, "C").status_code == 200
     return council_id
 
 
-def free_c():
-    """Поток C, где решены оба вопроса: задачу ничто не держит, и она ложится файлом."""
-    council_id = grouped()
-    confirm(council_id)
-    chosen_c(council_id)
-    decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P2", WHY)])
-    approves(council_id, "C")
-    return council_id
-
-
-def test_a_cut_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir):
-    council_id = cut_c()
+def test_an_approved_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir):
+    council_id = approved_c()
     res = drafts(council_id)
     assert res.status_code == 202
     draft = streams_of(council_id)["C"].notes_draft
@@ -97,9 +85,8 @@ def test_a_cut_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir)
                                                               ("open_question", "create")]
     assert {n.type for n in draft.notes} == {"idea", "open_question", "proposal", "adr",
                                              "outcome"}
-    assert [(n.id, n.issue_id) for n in draft.numbers] == [("ISS-0001", "I1")]
     outcome = next(n for n in draft.notes if n.type == "outcome")
-    assert f"ISS-0001: {TASK} O1" in outcome.text
+    assert "ISS-" not in outcome.text                              # задач в итоге нет
     assert not notes_dir.exists()                                  # черновик файлов не пишет
 
     idea = draft.notes[0]
@@ -118,7 +105,7 @@ def test_a_cut_stream_is_drafted_then_written_as_linked_notes(agents, notes_dir)
 
 
 def test_without_a_notes_folder_there_is_nothing_to_draft(agents):
-    council_id = cut_c()                                             # совет без проекта
+    council_id = approved_c()                                             # совет без проекта
     res = drafts(council_id)
     assert res.status_code == 422 and "Папки документации нет" in res.json()["detail"]
 
@@ -129,7 +116,7 @@ def test_notes_go_to_the_documentation_folder_of_the_council_project(agents, tmp
     app.dependency_overrides[get_projects] = lambda: projects
     app.dependency_overrides[get_repositories] = lambda: tmp_path
     try:
-        council_id = cut_c()
+        council_id = approved_c()
         assert client.patch(f"/api/councils/{council_id}",
                             json={"project": project.id}).status_code == 200
         assert drafts(council_id).status_code == 202
@@ -149,7 +136,7 @@ def test_a_folder_changed_while_the_write_waits_for_the_lock_is_not_written_into
     app.dependency_overrides[get_repositories] = lambda: tmp_path
     result = []
     try:
-        council_id = cut_c()
+        council_id = approved_c()
         client.patch(f"/api/councils/{council_id}", json={"project": project.id})
         assert drafts(council_id).status_code == 202
         with council_lock:
@@ -173,7 +160,7 @@ def test_a_draft_waiting_for_the_lock_is_built_for_the_folder_it_finds_there(age
     app.dependency_overrides[get_repositories] = lambda: tmp_path
     result = []
     try:
-        council_id = cut_c()
+        council_id = approved_c()
         client.patch(f"/api/councils/{council_id}", json={"project": project.id})
         with council_lock:
             worker = threading.Thread(target=lambda: result.append(drafts(council_id)))
@@ -192,27 +179,27 @@ def test_a_draft_waiting_for_the_lock_is_built_for_the_folder_it_finds_there(age
 
 def test_a_project_with_unselected_decisions_sends_the_stream_back_before_drafting(
         agents, notes_dir, tmp_path):
-    council_id = cut_c()                       # вопросы искали без решений: в папке их не было
+    council_id = approved_c()                       # вопросы искали без решений: в папке их не было
     # Совету выбрали проект, в папке которого есть прошлые решения: поток их не отбирал.
     other = put(tmp_path / "other")
     app.dependency_overrides[get_notes_of] = lambda: lambda council: other
     res = drafts(council_id)
     assert res.status_code == 409 and "сменили" in res.json()["detail"]
     stream = streams_of(council_id)["C"]
-    assert (stream.decisions_search.state, stream.questions, stream.issues,
+    assert (stream.decisions_search.state, stream.questions, stream.outcomes,
             stream.notes_draft) == ("failed", None, None, None)
 
 
-def test_issues_must_be_cut_before_drafting(agents, notes_dir):
+def test_outcomes_must_be_approved_before_drafting(agents, notes_dir):
     council_id = grouped()
     confirm(council_id)
     decided_c(council_id)
     res = drafts(council_id)
-    assert res.status_code == 409 and "нарежьте задачи" in res.json()["detail"]
+    assert res.status_code == 409 and "утвердите итоги" in res.json()["detail"]
 
 
 def test_a_stale_draft_or_a_changed_catalog_is_not_written(agents, notes_dir):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     assert writes(council_id, draft="другой").status_code == 409
     # Пока смотрели черновик, в каталог выгрузили другой поток — номер IDEA-0001 занят.
@@ -226,7 +213,7 @@ def test_a_stale_draft_or_a_changed_catalog_is_not_written(agents, notes_dir):
 
 
 def test_a_hand_edited_note_deleted_after_the_draft_is_not_recreated(agents, notes_dir):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     assert writes(council_id).status_code == 200
     path = notes_dir / "ideas" / "IDEA-0001.md"
@@ -241,7 +228,7 @@ def test_a_hand_edited_note_deleted_after_the_draft_is_not_recreated(agents, not
 
 
 def test_a_draft_in_the_previous_notes_language_is_not_written(agents, notes_dir, monkeypatch):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)                                             # по-русски
     monkeypatch.setattr(documents, "notes_language", lambda: "English")   # язык сменили
     res = writes(council_id)
@@ -249,25 +236,8 @@ def test_a_draft_in_the_previous_notes_language_is_not_written(agents, notes_dir
     assert not notes_dir.exists()
 
 
-def test_a_draft_whose_issue_numbers_were_taken_meanwhile_is_not_written(agents, notes_dir):
-    council_id = cut_c()
-    past = Note("OUT-0001", "outcome", "Чужой итог", ("ADR-0099",))
-    path = path_of(notes_dir, past)
-    path.parent.mkdir(parents=True)
-    path.write_text(rendered(past), encoding="utf-8")
-    drafts(council_id)
-    assert [n.id for n in streams_of(council_id)["C"].notes_draft.numbers] == ["ISS-0001"]
-    # Пока смотрели черновик, в чужой итог дописали задачу: ISS-0001 уже занят.
-    taken = Note("OUT-0001", "outcome", "Чужой итог\n\nЗадачи:\n- ISS-0001: Чужая",
-                 ("ADR-0099",))
-    path.write_text(rendered(taken), encoding="utf-8")
-    res = writes(council_id)
-    assert res.status_code == 409 and "поменялся" in res.json()["detail"]
-    assert not (notes_dir / "ideas").exists()
-
-
 def test_a_vanished_note_edited_after_the_draft_is_not_deleted(agents, notes_dir):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     assert writes(council_id).status_code == 200
     # Прежняя выгрузка потока знала и вопрос, которого в потоке больше нет.
@@ -292,20 +262,20 @@ def test_a_vanished_note_edited_after_the_draft_is_not_deleted(agents, notes_dir
 
 
 def test_numbers_of_another_streams_export_are_not_given_again(agents, notes_dir):
-    first = cut_c()
+    first = approved_c()
     drafts(first)
     assert writes(first).status_code == 200
     for path in list(notes_dir.rglob("*.md")):                       # заметки удалили руками
         path.unlink()
-    second = cut_c()
+    second = approved_c()
     drafts(second)
     draft = streams_of(second)["C"].notes_draft
     # Номера первой выгрузки всё ещё её: вторая берёт следующие.
-    assert (draft.notes[0].id, [n.id for n in draft.numbers]) == ("IDEA-0002", ["ISS-0002"])
+    assert draft.notes[0].id == "IDEA-0002"
 
 
 def test_a_draft_is_not_written_into_another_folder(agents, notes_dir, tmp_path):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     assert streams_of(council_id)["C"].notes_draft.root == str(notes_dir)
     # Папку проекта сменили на другую пустую: номера вышли бы те же, но туда черновик не смотрели.
@@ -320,7 +290,7 @@ def test_a_draft_is_not_written_into_another_folder(agents, notes_dir, tmp_path)
 
 
 def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes_dir, tmp_path):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     assert writes(council_id).status_code == 200
     # Папку документации сменили: в новом каталоге под IDEA-0001 — чужая идея.
@@ -337,7 +307,7 @@ def test_an_export_to_another_catalog_is_not_the_previous_one_here(agents, notes
 
 
 def test_a_failed_save_of_the_export_puts_the_notes_back(agents, notes_dir, monkeypatch):
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
 
     def full(*args, **kwargs):
@@ -349,93 +319,18 @@ def test_a_failed_save_of_the_export_puts_the_notes_back(agents, notes_dir, monk
     assert [path for path in notes_dir.rglob("*") if path.is_file()] == []
 
 
-@pytest.fixture
-def issues_dir(tmp_path):
-    root = tmp_path / "issues"
-    app.dependency_overrides[get_issues_of] = lambda: lambda council: root
-    yield root
-    app.dependency_overrides.pop(get_issues_of)
-
-
-def test_free_issues_are_written_as_files_into_the_issues_folder(agents, notes_dir, issues_dir):
-    council_id = free_c()
-    assert drafts(council_id).status_code == 202
-    draft = streams_of(council_id)["C"].notes_draft
-    assert draft.issues_root == str(issues_dir)
-    filed = [note for note in draft.notes if note.type == "issue"]
-    assert [(n.id, n.action) for n in filed] == [("ISS-0001", "create")]
-    assert filed[0].text.startswith(f"# {TASK} O1\n")
-    assert not issues_dir.exists()                                 # черновик файлов не пишет
-
-    assert writes(council_id).status_code == 200
-    stream = streams_of(council_id)["C"]
-    assert stream.notes.issues_root == str(issues_dir)
-    text = (issues_dir / "ISS-0001.md").read_text(encoding="utf-8")
-    assert text.startswith("---\nid: ISS-0001\noutcomes: [OUT-0001]\n")
-    assert "В финальном коммите укажите номер задачи — ISS-0001." in text
-    assert Catalog.load(notes_dir).problems() == []
-    drafts(council_id)                                             # снова — ничего нового
-    assert {n.action for n in streams_of(council_id)["C"].notes_draft.notes} == {"same"}
-
-
-def test_a_draft_is_not_written_into_another_issues_folder(agents, notes_dir, issues_dir,
-                                                            tmp_path):
-    council_id = free_c()
-    drafts(council_id)
-    other = tmp_path / "tasks"
-    app.dependency_overrides[get_issues_of] = lambda: lambda council: other
-    res = writes(council_id)
-    assert res.status_code == 409 and "другой папки задач" in res.json()["detail"]
-    assert not other.exists() and not notes_dir.exists()
-    app.dependency_overrides[get_issues_of] = lambda: lambda council: None   # папку убрали
-    assert writes(council_id).status_code == 409
-
-
-def test_a_failed_save_puts_the_issue_files_back(agents, notes_dir, issues_dir, monkeypatch):
-    council_id = free_c()
-    drafts(council_id)
-
-    def full(*args, **kwargs):
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(get_store(), "update_council", full)
-    with pytest.raises(OSError):
-        writes(council_id)
-    assert [path for path in issues_dir.rglob("*") if path.is_file()] == []
-
-
-def test_issue_files_go_to_the_issues_folder_of_the_council_project(agents, tmp_path):
-    projects = Projects()
-    project = projects.create_project(ProjectDraft(name="Кромка", notes="app/docs/reasoning",
-                                                   issues="app/docs/issues"))
-    app.dependency_overrides[get_projects] = lambda: projects
-    app.dependency_overrides[get_repositories] = lambda: tmp_path
-    try:
-        council_id = free_c()
-        assert client.patch(f"/api/councils/{council_id}",
-                            json={"project": project.id}).status_code == 200
-        assert drafts(council_id).status_code == 202
-        assert writes(council_id).status_code == 200
-    finally:
-        app.dependency_overrides.pop(get_projects)
-        app.dependency_overrides.pop(get_repositories)
-    issues = (tmp_path / "app" / "docs" / "issues").resolve()
-    assert streams_of(council_id)["C"].notes.issues_root == str(issues)
-    assert (issues / "ISS-0001.md").exists()
-
-
 def test_decisions_wait_for_the_notes_translation(agents, notes_dir):
-    council_id = cut_c()
+    council_id = approved_c()
     get_store().update_council(council_id, {"streams": [
         s.model_copy(update={"notes_draft": NotesDraft(state="running", run="n1",
-                                                       issues=s.issues.run)})
+                                                       outcomes=s.outcomes.run)})
         if s.group == "C" else s for s in get_store().get_council(council_id).streams]})
     res = decide(council_id, "C", [("Q1", None, None), ("Q2", None, None)])
     assert res.status_code == 423
 
 
 def test_a_draft_that_cannot_be_built_says_why(agents, notes_dir):
-    council_id = cut_c()
+    council_id = approved_c()
     # Вопрос пересматривает прошлое решение, а его из каталога уже убрали.
     streams = [s.model_copy(update={"scope": [s.scope[0].model_copy(update={
         "revisits": "ADR-0042"}), *s.scope[1:]]}) if s.group == "C" else s
@@ -481,7 +376,7 @@ def translating(agents, monkeypatch):
 
 
 def test_notes_in_another_language_are_translated_by_the_judge(notes_dir, translating):
-    council_id = cut_c()
+    council_id = approved_c()
     assert drafts(council_id).status_code == 202
     draft = streams_of(council_id)["C"].notes_draft
     assert draft.state == "done" and draft.language == "English"
@@ -496,36 +391,11 @@ def test_notes_in_another_language_are_translated_by_the_judge(notes_dir, transl
     assert again.steps == []                                       # судью не звали
 
 
-def test_each_issue_file_is_translated_in_its_own_turn(notes_dir, issues_dir, translating):
-    council_id = free_c()
-    drafts(council_id)
-    draft = streams_of(council_id)["C"].notes_draft
-    assert draft.state == "done" and all(n.text.startswith("EN ") for n in draft.notes)
-    filed = [n.key for n in draft.notes if n.type == "issue"]
-    assert filed
-    assert [keys for _, keys in translating.turns] == [
-        [n.key for n in draft.notes if n.type != "issue"], *([key] for key in filed)]
-
-
-def test_a_failed_issue_turn_keeps_the_notes_turn_paid(notes_dir, issues_dir, translating):
-    council_id = free_c()
-    translating.broken = True
-    drafts(council_id)
-    draft = streams_of(council_id)["C"].notes_draft
-    assert draft.state == "failed" and "нет перевода заметок: i:" in draft.error
-    (notes_turn, _), (issue_turn, _) = translating.turns
-    assert translating.forgotten == [issue_turn]                   # заметки — всё ещё в лотке
-    translating.broken = False
-    drafts(council_id)
-    assert streams_of(council_id)["C"].notes_draft.state == "done"
-    assert translating.turns[2][0] == notes_turn                   # тот же ход — даром из лотка
-
-
 def test_a_language_the_council_has_no_wording_for_is_finished_by_the_judge(
         notes_dir, translating, monkeypatch):
     monkeypatch.setattr(documents, "language", lambda: "French")
     monkeypatch.setattr(documents, "notes_language", lambda: "French")
-    council_id = cut_c()
+    council_id = approved_c()
     drafts(council_id)
     draft = streams_of(council_id)["C"].notes_draft
     assert draft.state == "done" and draft.language == "French"
@@ -535,7 +405,7 @@ def test_a_language_the_council_has_no_wording_for_is_finished_by_the_judge(
 
 
 def test_without_models_a_translated_draft_is_recorded_failed(notes_dir, translating):
-    council_id = cut_c()
+    council_id = approved_c()
     translating.online = set()
     drafts(council_id)
     draft = streams_of(council_id)["C"].notes_draft

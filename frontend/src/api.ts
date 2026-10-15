@@ -8,8 +8,7 @@ export type StepName = 'slice' | 'slice_judge' | 'label' | 'label_judge' | 'stru
   | 'design_discovery' | 'design_judge' | 'project_decisions_discovery' | 'project_decisions_judge'
   | 'question_discovery' | 'question_judge'
   | 'proposal_discovery' | 'proposal_judge' | 'decision_analysis' | 'decision_judge'
-  | 'outcome_discovery' | 'outcome_judge' | 'issue_discovery' | 'issue_judge'
-  | 'issue_gap_check' | 'issue_dependencies'
+  | 'outcome_discovery' | 'outcome_judge' | 'task_plan' | 'task_plan_judge'
   | 'notes_translation'
 export interface ModelRun { model: string; state: RunState; error: string | null }
 /** skipped — судья не понадобился: участники сошлись. */
@@ -44,6 +43,20 @@ export interface Council {
   structure: Structure | null
   /** Потоки подтверждённых групп; null — группы ещё не подтверждены. */
   streams: Stream[] | null
+  /** Исследование репозитория и макета на весь совет; null — к нему ещё не приступали. */
+  research: Research | null
+  /** План задач на весь совет, черновик его выгрузки в папку задач и последняя выгрузка. */
+  tasks: TaskPlan | null; tasks_draft: TasksDraft | null; tasks_export: TasksExport | null
+}
+
+/**
+ * Этап «Исследование» — на весь совет: необязательный скан репозитория и шаг «Репозиторий», потом так же шаг
+ * «Дизайн». Одна карта кода и одно описание макета под идеи всех групп; поток берёт их себе копией, когда его
+ * начинают.
+ */
+export interface Research {
+  scan: RepositoryScan | null; repository: RepositoryStep | null
+  design_scan: DesignScan | null; design: DesignStep | null
 }
 
 /** Фрагменты вокруг одной задумки. Общий фрагмент стоит в нескольких группах тем же номером. */
@@ -306,41 +319,47 @@ export interface OutcomeDiscovery {
   kept: string[]
   /** Какие закреплённые итоги задевают новые решения — ждут решения человека. */
   touched: OutcomeTouch[]
+  /** Человек утвердил эти итоги: поток выгружают в заметки к ним. */
+  approved: boolean
 }
-/** Пробел нарезки (G1, G2…): без его решения часть работы не начать — материал для нового вопроса. */
-export interface IssueGap { id: string; question: string; reason: string; outcome_ids: string[] }
 /**
- * Задача для coding agent (I1, I2…) — часть одного утверждённого итога: кому и зачем
- * (user_story), где менять и что меняем, что именно сделать и где остановиться (scope).
- * depends_on — задачи, результат которых ей нужен; blocked_by — пробелы (G-n) и открытые
- * вопросы, без решения которых её не сделать; acceptance_criteria — критерии итога, которые
- * раньше переносились в задачу (у новых нарезок пусто).
+ * Задача для coding agent (I1, I2…) из плана совета — часть ровно одного утверждённого итога (outcome_id — номер его
+ * заметки, OUT-…): кому и зачем (user_story), где менять и что меняем, что именно сделать и где остановиться (scope).
+ * adr_ids — решения номерами заметок; depends_on — задачи плана, результат которых ей нужен; open_questions — что
+ * неясно в реализации: вопросы человеку и агенту, без ответа.
  */
 export interface Issue {
   id: string; title: string; user_story: string; main_entry_points: string[]; current_state: string
-  scope: string[]; outcome_ids: string[]; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
-  depends_on: string[]; blocked_by: string[]; acceptance_criteria: string[]
+  scope: string[]; outcome_id: string; adr_ids: string[]; constraint_ids: number[]; risk_ids: number[]
+  depends_on: string[]; open_questions: string[]
 }
 /**
- * Нарезка утверждённых итогов (outcomes — каких) на задачи. code — читали ли модели код (без
- * скана — нет), sources — каких рабочих копий; uncovered_outcome_ids — итоги, не вошедшие ни в одну задачу.
+ * План задач на весь совет. basis — к чему спланировали: у каждого потока «сборка итогов:выгрузка»; поток с тех пор
+ * поменяли — план устарел (это видно, сбрасывает человек). code — читали ли модели код, sources — каких рабочих
+ * копий; uncovered — итоги, не вошедшие ни в одну задачу; skipped — что в план не вошло и почему.
  */
-export interface IssueDiscovery {
-  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; code: boolean; sources: ScannedRepository[]
-  steps: Step[]; issues: Issue[]; gaps: IssueGap[]; uncovered_outcome_ids: string[]
-  error: string | null
-  /** Задачи, перенесённые из прежней нарезки: их итоги закреплены и те же — они уже в разработке. */
-  kept: string[]
-  /** Каким был каждый итог при нарезке: тот же — его задачи переносятся. */
-  cut: Record<string, string>
+export interface TaskPlan {
+  state: 'running' | 'done' | 'failed'; run: string; basis: Record<string, string>
+  code: boolean; sources: ScannedRepository[]; steps: Step[]; issues: Issue[]
+  uncovered: string[]; skipped: string[]; error: string | null
+}
+/** Номер задачи на весь проект (ISS-0012): его пишут в финальный коммит. */
+export interface IssueNumber { key: string; id: string; issue_id: string; title: string; outcome_ids: string[] }
+/** Черновик выгрузки плана в папку задач (root) — к плану plan; язык другой — переводит судья. */
+export interface TasksDraft {
+  state: 'running' | 'done' | 'failed'; run: string; plan: string; language: string; root: string
+  steps: Step[]; notes: NotePlan[]; vanished: VanishedNote[]; numbers: IssueNumber[]; error: string | null
+}
+/** Последняя выгрузка плана: из какого черновика, к какому плану и в какую папку. */
+export interface TasksExport {
+  run: string; plan: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[]
 }
 /**
  * Поток — подтверждённая группа под той же буквой. discovery — поиск её идеи, если её нет в
  * тексте; scan — необязательный скан репозитория под идею, repository — как прошли этот шаг
  * (карта идёт во все следующие); questions — поиск вопросов к утверждённой идее; scope — какие из них решать;
  * proposals — поиск вариантов к ним; choices — выбор по каждому; analysis — его проверка;
- * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них;
- * issues — нарезка утверждённых итогов на задачи.
+ * decisions — решения, которые зафиксировал человек; outcomes — итоги, собранные из них.
  */
 export interface Stream {
   group: string; discovery: IdeaDiscovery | null; idea: StreamIdea | null
@@ -352,15 +371,15 @@ export interface Stream {
   analysis: DecisionAnalysis | null; decisions: Decision[] | null
   /** Работа по вопросам до последней правки отбора или выбора: по тем же вопросам и выбору она переносится. */
   earlier: QuestionWork[]
-  /** Последние собранные итоги и нарезанные задачи, пока правка выше их сняла: из них закрепляют готовое. */
-  earlier_outcomes: OutcomeDiscovery | null; earlier_issues: IssueDiscovery | null
-  outcomes: OutcomeDiscovery | null; issues: IssueDiscovery | null
+  /** Последние собранные итоги, пока правка выше их сняла: из них закрепляют готовое. */
+  earlier_outcomes: OutcomeDiscovery | null
+  outcomes: OutcomeDiscovery | null
   notes_draft: NotesDraft | null; notes: NotesExport | null
   /**
    * Сохранённое, пока поток до него не дошёл (считает сервер): прежние итоги, которые закрепятся, если решения
-   * не поменяются, и задачи, которые перенесутся. Дошёл — шаг показывает свой прогон, а в нём они с начала.
+   * не поменяются. Дошёл — шаг показывает свой прогон, а в нём они с начала.
    */
-  saved_outcomes: Outcome[]; saved_issues: Issue[]
+  saved_outcomes: Outcome[]
 }
 /** issue — не заметка графа, а файл задачи для coding agent в папке задач проекта. */
 export type NoteType = 'idea' | 'open_question' | 'proposal' | 'adr' | 'outcome' | 'issue'
@@ -374,27 +393,23 @@ export interface NotePlan {
 }
 /** Заметка прошлой выгрузки, которой в потоке больше нет: удалить можно, только если вне потока на неё не ссылаются. */
 export interface VanishedNote { id: string; type: NoteType; text: string; linked_from: string[] }
-/** Номер задачи на весь проект: его пишут в финальный коммит. */
-export interface IssueNumber { key: string; id: string; issue_id: string; title: string; outcome_ids: string[] }
-/** Черновик выгрузки потока в заметки — к нарезанным задачам (issues); язык другой — переводит судья. */
+/** Черновик выгрузки потока в заметки — к утверждённым итогам (outcomes); язык другой — переводит судья. */
 export interface NotesDraft {
-  state: 'running' | 'done' | 'failed'; run: string; issues: string; language: string; steps: Step[]
+  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; language: string; steps: Step[]
   /** Каталог заметок, для которого черновик собран: в другой его не записать. */
   root: string
-  /** Папка задач, для которой собран; '' — у проекта её нет, задачи только строками в итогах. */
-  issues_root: string
-  notes: NotePlan[]; vanished: VanishedNote[]; numbers: IssueNumber[]; skipped: string[]; error: string | null
+  notes: NotePlan[]; vanished: VanishedNote[]; skipped: string[]; error: string | null
 }
 export interface ExportedNote {
   key: string; id: string; type: NoteType; generated: string; written: string; links: string[]; digest: string
   /** Исчезла из потока, а её оставили в каталоге: всё ещё потока, но в выгрузку не входит. */
   kept: boolean
 }
-/** Последняя выгрузка потока: из какого черновика и к каким задачам. */
+/** Последняя выгрузка потока: из какого черновика и к каким утверждённым итогам. */
 export interface NotesExport {
-  run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[]
-  /** Папка, куда записали файлы задач; '' — не записывали. */
-  issues_root: string
+  run: string; outcomes: string; language: string; root: string; notes: ExportedNote[]
+  /** Имена совета (O1, ADR-2) — номерами заметок этой выгрузки (OUT-…, ADR-…): так их называет план задач. */
+  refs: Record<string, string>
 }
 
 /** Правка с экрана: меняются только присланные поля. */
@@ -442,11 +457,11 @@ export const projectOf = (council: Council, settings: Settings): Project | null 
 export const notesOf = (council: Council, settings: Settings): string | null =>
   projectOf(council, settings)?.notes_root ?? null
 
-/** Папка задач совета — его проекта, как её находит сервер; null — задачи только строками в итогах. */
+/** Папка задач совета — его проекта, как её находит сервер; null — план задач не выгрузить. */
 export const issuesOf = (council: Council, settings: Settings): string | null =>
   projectOf(council, settings)?.issues_root ?? null
 
-/** Куда выгружают потоки совета: каталог заметок и папка задач его проекта. По ним выгрузка — выгрузка. */
+/** Куда выгружают совет: потоки — в каталог заметок, план задач — в папку задач его проекта. */
 export interface Folders { notes: string | null; issues: string | null }
 
 export const foldersOf = (council: Council, settings: Settings): Folders =>
@@ -512,29 +527,41 @@ export const api = {
   /** Искать идею потока заново: после сбоя или без подключения к моделям. */
   seekIdea: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/discovery`, { method: 'POST' }),
-  /** Сканировать репозитории под идею потока: пути — от каталога репозиториев или абсолютные. */
-  scanRepository: (id: string, at: GroupsVersion, group: string, paths: string[], idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository/scan`, {
+  /** Сканировать репозитории под идеи всех групп: пути — от каталога репозиториев или абсолютные. */
+  scanRepository: (id: string, at: GroupsVersion, paths: string[]) =>
+    request<Council>(`${councilUrl(id)}/research/repository/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, paths, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, paths }),
     }),
-  /** Пройти шаг «Репозиторий»: scanRun — утвердить карту этого скана, null — пропустить. Дальше — шаг «Дизайн». */
-  approveRepository: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/repository`, {
+  /** Пройти шаг «Репозиторий» исследования: scanRun — утвердить карту этого скана, null — пропустить. */
+  approveRepository: (id: string, at: GroupsVersion, scanRun: string | null) =>
+    request<Council>(`${councilUrl(id)}/research/repository`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun }),
     }),
-  /** Сканировать макет Figma под идею потока: ссылки на страницы или фреймы одного файла. */
-  scanDesign: (id: string, at: GroupsVersion, group: string, links: string[], idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design/scan`, {
+  /** Сканировать макет Figma под идеи всех групп: ссылки на страницы или фреймы одного файла. */
+  scanDesign: (id: string, at: GroupsVersion, links: string[]) =>
+    request<Council>(`${councilUrl(id)}/research/design/scan`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, links, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, links }),
     }),
-  /** Пройти шаг «Дизайн»: scanRun — утвердить описание этого скана, null — пропустить. Совет сразу ищет вопросы. */
-  approveDesign: (id: string, at: GroupsVersion, group: string, scanRun: string | null, idea: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/design`, {
+  /** Пройти шаг «Дизайн» исследования: scanRun — утвердить описание этого скана, null — пропустить. */
+  approveDesign: (id: string, at: GroupsVersion, scanRun: string | null) =>
+    request<Council>(`${councilUrl(id)}/research/design`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun, idea }),
+      body: JSON.stringify({ run: at.run, revision: at.revision, scan_run: scanRun }),
+    }),
+  /** Сбросить исследование: сканы и пройденные шаги снимаются, начатые потоки работают со своей копией. */
+  resetResearch: (id: string, at: GroupsVersion) =>
+    request<Council>(`${councilUrl(id)}/research/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision }),
+    }),
+  /** Начать поток: он берёт себе исследование совета, и совет сразу отбирает решения проекта или ищет вопросы. */
+  startStream: (id: string, at: GroupsVersion, group: string, idea: string) =>
+    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, idea }),
     }),
   /** Отметить прошлые решения проекта, которые учитывать в потоке (пусто — ни одного). Совет сразу ищет вопросы. */
   selectDecisions: (id: string, at: GroupsVersion, group: string, searchRun: string, keep: string[], idea: string) =>
@@ -597,7 +624,7 @@ export const api = {
   /** Собрать итоги заново: после сбоя или без подключения к моделям. */
   seekOutcomes: (id: string, group: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes/discovery`, { method: 'POST' }),
-  /** Утвердить итоги — те, что на экране (outcomesRun), — и совет нарежет их на задачи. */
+  /** Утвердить итоги — те, что на экране (outcomesRun): дальше поток выгружают в заметки. */
   approveOutcomes: (id: string, at: GroupsVersion, group: string, outcomesRun: string) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/outcomes`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -609,9 +636,30 @@ export const api = {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ run: at.run, revision: at.revision, outcomes_run: outcomesRun, outcome_id: outcomeId, rebuild }),
     }),
-  /** Нарезать заново: после сбоя или без подключения к моделям при утверждении. */
-  seekIssues: (id: string, group: string) =>
-    request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/issues/discovery`, { method: 'POST' }),
+  /** Построить план задач на весь совет: потоки утверждены и выгружены. После сбоя — заново. */
+  planTasks: (id: string, at: GroupsVersion) =>
+    request<Council>(`${councilUrl(id)}/tasks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision }),
+    }),
+  /** Сбросить план и черновик его выгрузки: выгрузка остаётся — по ней новая найдёт свои файлы и номера. */
+  resetTasks: (id: string, at: GroupsVersion) =>
+    request<Council>(`${councilUrl(id)}/tasks/reset`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision }),
+    }),
+  /** Собрать черновик выгрузки плана в папку задач. */
+  draftTasks: (id: string, at: GroupsVersion) =>
+    request<Council>(`${councilUrl(id)}/tasks/draft`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision }),
+    }),
+  /** Записать черновик draft в папку задач: правки текста по ключу файла и какие исчезнувшие файлы удалить. */
+  writeTasks: (id: string, at: GroupsVersion, draft: string, edits: Record<string, string>, remove: string[]) =>
+    request<Council>(`${councilUrl(id)}/tasks/write`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: at.run, revision: at.revision, draft, edits, delete: remove }),
+    }),
   /** text null — идея записана в тексте группы, её не правят. */
   approveIdea: (id: string, at: GroupsVersion, group: string, text: string | null) =>
     request<Council>(`${councilUrl(id)}/streams/${encodeURIComponent(group)}/idea`, {
@@ -681,10 +729,10 @@ export const groupsConfirmed = (council: Council): boolean =>
 
 /**
  * Ходы потока по цепочке, как STREAM_RUNS на сервере: поиск идеи, сканы репозитория и макета, отбор решений
- * проекта, поиск вопросов и вариантов, проверка выбора, сборка итогов, нарезка задач и перевод заметок.
+ * проекта, поиск вопросов и вариантов, проверка выбора, сборка итогов и перевод заметок.
  */
 const STREAM_RUNS = ['discovery', 'scan', 'design_scan', 'decisions_search', 'questions', 'proposals', 'analysis',
-  'outcomes', 'issues', 'notes_draft'] as const
+  'outcomes', 'notes_draft'] as const
 
 /** Ходы потока: какой идёт — страница опрашивает сервер. */
 export const searchesOf = (stream: Stream) => STREAM_RUNS.map(field => stream[field])
@@ -693,16 +741,92 @@ export const searchesOf = (stream: Stream) => STREAM_RUNS.map(field => stream[fi
 export const runningFrom = (stream: Stream, from: (typeof STREAM_RUNS)[number]): boolean =>
   STREAM_RUNS.slice(STREAM_RUNS.indexOf(from)).some(field => stream[field]?.state === 'running')
 
-/** Совет работает хоть над одним потоком: ищет, проверяет или собирает. */
-export const seeking = (council: Council): boolean =>
-  council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false
+/** Совет исследует код или макет: страница опрашивает сервер. */
+export const researching = (council: Council): boolean =>
+  council.research?.scan?.state === 'running' || council.research?.design_scan?.state === 'running'
+
+/** Совет строит план задач или переводит его выгрузку: страница опрашивает сервер. */
+export const planning = (council: Council): boolean =>
+  council.tasks?.state === 'running' || council.tasks_draft?.state === 'running'
+
+/** Совет работает хоть над одним потоком — ищет, проверяет или собирает, — исследует код и макет или планирует. */
+export const seeking = (council: Council): boolean => researching(council) || planning(council)
+  || (council.streams?.some(stream => searchesOf(stream).some(run => run?.state === 'running')) ?? false)
+
+/** Идеи всех групп одним текстом — как их помнит скан исследования: поменяли — исследование было к прежним. */
+export const ideasOf = (council: Council): string | null => {
+  const streams = council.streams
+  if (!streams || streams.some(stream => !stream.idea)) return null
+  const titles = new Map((council.structure?.groups ?? []).map(g => [g.id, g.title]))
+  return streams.map(stream => `${stream.group}. ${titles.get(stream.group) ?? ''}: ${stream.idea?.text}`).join('\n')
+}
+
+/** Исследование пройдено: оба шага — сканом или пропуском. Потоки можно начинать. */
+export const researched = (council: Council): boolean => !!council.research?.repository && !!council.research.design
+
+/** Поток начат с тем исследованием, что в совете сейчас: иначе его можно начать заново. */
+export const startedWithResearch = (council: Council, stream: Stream): boolean => {
+  const research = council.research
+  return !!stream.repository && !!stream.design && !!research?.repository && !!research.design
+    && stream.repository.by === research.repository.by && stream.repository.scan_run === research.repository.scan_run
+    && stream.design.by === research.design.by && stream.design.scan_run === research.design.scan_run
+}
 
 /** Итог готов к разработке: его не держит ни открытый вопрос, ни пробел, и есть чем проверить, что он готов. */
 export const outcomeReady = (outcome: Outcome): boolean =>
   outcome.blocked_by.length === 0 && outcome.gaps.length === 0 && outcome.acceptance_criteria.length > 0
 
-/** Задачу можно брать в работу: её не держит ни пробел, ни открытый вопрос. */
-export const issueReady = (issue: Issue): boolean => issue.blocked_by.length === 0
+/** Итоги потока можно утвердить: ни один не держит открытый вопрос или пробел — как проверяет сервер. */
+export const outcomesFree = (outcomes: Outcome[]): boolean =>
+  outcomes.every(outcome => outcome.blocked_by.length === 0 && outcome.gaps.length === 0)
+
+/** Ключ исследования в basis плана: рядом с буквами потоков. */
+export const RESEARCH_BASIS = 'research'
+
+/**
+ * К чему был бы план сейчас — как basis_of на сервере: у каждого потока «сборка итогов:выгрузка», у исследования —
+ * как пройдены его шаги: план читает его карту кода и описание макета.
+ */
+export const tasksBasis = (council: Council): Record<string, string> => {
+  const research = council.research
+  const steps = [research?.repository ?? null, research?.design ?? null]
+  return {
+    ...Object.fromEntries((council.streams ?? []).map(
+      stream => [stream.group, `${stream.outcomes?.run ?? ''}:${stream.notes?.run ?? ''}`])),
+    [RESEARCH_BASIS]: steps.map(step => (step ? `${step.by}:${step.scan_run}` : '')).join('|'),
+  }
+}
+
+/** План к другим итогам или выгрузкам, чем сейчас: поток поменяли после него — сбросить и спланировать заново. */
+export const tasksStale = (council: Council): boolean => {
+  const plan = council.tasks
+  if (!plan) return false
+  const now = tasksBasis(council)
+  const groups = new Set([...Object.keys(now), ...Object.keys(plan.basis)])
+  return [...groups].some(group => now[group] !== plan.basis[group])
+}
+
+/**
+ * Почему план строить рано — как not_ready на сервере: по потоку, который не утвердил итоги или не выгружен к ним
+ * в нынешний каталог заметок (notes). Пусто — можно.
+ */
+export interface TasksWait { group: string; why: 'outcomes' | 'notes' }
+export const tasksWaitFor = (council: Council, notes: string | null): TasksWait[] =>
+  (council.streams ?? []).flatMap((stream): TasksWait[] => {
+    const outcomes = stream.outcomes
+    if (!outcomes?.approved) return [{ group: stream.group, why: 'outcomes' }]
+    // Выгружен, когда совет ещё не помнил номера заметок (refs), — выгрузить заново.
+    if (!stream.notes || notes === null || stream.notes.root !== notes || stream.notes.outcomes !== outcomes.run
+        || Object.keys(stream.notes.refs ?? {}).length === 0) {
+      return [{ group: stream.group, why: 'notes' }]
+    }
+    return []
+  })
+
+/** План выгружен в нынешнюю папку задач (issues — её путь из настроек) — к нынешнему плану. */
+export const tasksExported = (council: Council, issues: string | null): boolean =>
+  !!council.tasks && !!council.tasks_export && issues !== null && council.tasks_export.root === issues
+  && council.tasks_export.plan === council.tasks.run
 
 /** Адрес страницы проекта. id всегда кодируется здесь, а не в местах вызова. */
 export const councilPath = (id: string, stage = 'brief') => `/councils/${encodeURIComponent(id)}/${stage}`

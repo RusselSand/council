@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
-import { Link, useNavigate } from 'react-router'
+import { Link } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, startOrFollow, structureIsStale,
+  api, ApiError, councilPath, groupsConfirmed, ideasOf, startOrFollow, structureIsStale,
   type Council, type Group, type GroupRelation, type LabeledFragment, type Settings, type Structure,
 } from '../api'
 import { LabelPill } from '../components/Labels'
@@ -11,12 +11,13 @@ import { Panel } from '../components/Panel'
 import { Progress } from '../components/Progress'
 import { ReadyBadge, RunStatus } from '../components/RunStatus'
 import { useAction } from '../useAction'
+import { IdeaStep } from './IdeaStep'
 
 /**
  * Группы: совет раскладывает фрагменты готовой нарезки вокруг идей — участники по
  * отдельности, судья только там, где раскладки разошлись. Человек может объединить,
  * разделить и переименовать группы и вернуть их как предложил совет. Подтверждённые группы
- * становятся потоками.
+ * становятся потоками, и здесь же утверждают идею каждой: дальше — исследование под идеи всех групп.
  */
 export function GroupsStage({ council, settings, onStart }: Readonly<{
   council: Council; settings: Settings; onStart: (started: Council) => void
@@ -45,6 +46,9 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
     <div className="slices-layout">
       <div className="slices-main">
         {lost}
+        {structure.state === 'done' && groupsConfirmed(council) && (
+          <Ideas council={council} structure={structure} settings={settings} onChange={onStart} />
+        )}
         {structure.state === 'done'
           ? <Result council={council} structure={structure} restart={restart} again={again} edits={edits} />
           : <RunStatus run={structure} kind="groups" restart={restart} onStart={onStart} />}
@@ -56,6 +60,31 @@ export function GroupsStage({ council, settings, onStart }: Readonly<{
         <Progress steps={structure.steps} models={settings.models} />
       </aside>
     </div>
+  )
+}
+
+/**
+ * Идеи подтверждённых групп: у каждой своя — из текста, найденная советом или своя. Утверждают по одной; когда
+ * утверждены все — дальше исследование.
+ */
+function Ideas({ council, structure, settings, onChange }: Readonly<{
+  council: Council; structure: Structure; settings: Settings; onChange: (council: Council) => void
+}>) {
+  const { t } = useTranslation()
+  return (
+    <section aria-labelledby="ideas-title">
+      <h2 id="ideas-title" className="panel-title large">{t('ideas.title')}</h2>
+      <p className="panel-hint">{t('ideas.hint')}</p>
+      {(council.streams ?? []).map(stream => {
+        const group = structure.groups.find(g => g.id === stream.group)
+        const search = stream.discovery
+        // Поиск закончился — черновик заново, из предложения совета.
+        return group && (
+          <IdeaStep key={`${stream.group}:${search?.run}:${search?.state}`} council={council} structure={structure}
+                    stream={stream} group={group} models={settings.models} onChange={onChange} />
+        )
+      })}
+    </section>
   )
 }
 
@@ -165,13 +194,13 @@ function Confirm({ council, structure, busy, edits }: Readonly<{
   council: Council; structure: Structure; busy: boolean; edits: ReturnType<typeof useGroupEdits>
 }>) {
   const { t } = useTranslation()
-  const nav = useNavigate()
   const confirmed = groupsConfirmed(council)
   const stale = structureIsStale(council)
-  const streams = councilPath(council.id, 'streams')
+  const research = councilPath(council.id, 'research')
+  const ideas = ideasOf(council) !== null
   const confirm = async () => {
     const at = { run: structure.run, revision: structure.revision }
-    if (await edits.edit(CONFIRM, () => api.confirmGroups(council.id, at))) nav(streams)
+    await edits.edit(CONFIRM, () => api.confirmGroups(council.id, at))
   }
 
   return (
@@ -181,8 +210,9 @@ function Confirm({ council, structure, busy, edits }: Readonly<{
       <p className="panel-hint">{t(confirmed ? 'confirm.done' : 'confirm.hint')}</p>
       {stale && !confirmed && <p className="fragment-note">{t('confirm.stale')}</p>}
       {edits.at === CONFIRM && edits.error && <p className="error-text" role="alert">{edits.error}</p>}
+      {confirmed && !ideas && <p className="fragment-note">{t('confirm.ideas')}</p>}
       {confirmed
-        ? <Link className="btn-primary large block" to={streams}>{t('confirm.open')}</Link>
+        ? ideas && <Link className="btn-primary large block" to={research}>{t('confirm.open')}</Link>
         : <button className="btn-primary large block" onClick={() => void confirm()} disabled={busy || stale}>
             {t('confirm.confirm')}
           </button>}
