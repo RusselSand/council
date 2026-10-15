@@ -6,12 +6,16 @@ import pytest
 
 from spec_council.issues import (
     Context,
+    Found,
     Parent,
+    answers_of,
     as_prompt,
     combined,
     dependencies_of,
     issue_set,
+    owner_dependencies,
     same_issues,
+    without_gaps,
 )
 from spec_council.slicing import BadAnswer
 
@@ -301,3 +305,63 @@ def test_a_gap_naming_only_a_foreign_outcome_is_not_retargeted_to_this_one():
     assert [(gap.question, gap.outcome_ids) for gap in answer.gaps] == [
         ("Сколько хранить?", ("O1",))]
     assert answer.issues[0].blocked_by == ("G1",)
+
+
+# --- пробелы, на которые ответ уже есть в отборе
+
+
+def test_the_gap_check_keeps_only_gaps_and_questions_it_was_shown():
+    found = answers_of({"answers": [
+        {"gap_id": "G1", "question_ids": ["Q1", "q3", "Q9"], "reason": "решено"},
+        {"gap_id": "G2", "question_ids": ["Q2", "Q1"]},
+        {"gap_id": "G3", "question_ids": ["Q9"]},
+        {"gap_id": "G7", "question_ids": ["Q1"]},
+        "G4"]}, gaps=["G1", "G2", "G3"], decided=frozenset({"Q1", "Q3"}),
+        opened=frozenset({"Q2"}))
+    assert found == {"G1": Found(("Q1", "Q3"), (), "решено"),
+                     "G2": Found((), ("Q2",), "")}            # открытый — пробел и есть он
+    with pytest.raises(BadAnswer, match="answers"):
+        answers_of({}, gaps=["G1"], decided=frozenset(), opened=frozenset())
+
+
+def test_a_settled_gap_holds_nothing_and_an_open_question_takes_its_place():
+    answer = cut_of("O1", issue("I1", blocked_by=["G1"]),
+                    issue("I2", "Выдача", depends_on=["I1"], blocked_by=["G2"]),
+                    gaps=[{"question": "Где отчёт?", "reason": ""},
+                          {"question": "Сколько хранить?", "reason": ""}])
+    assert [i.blocked_by for i in answer.issues] == [("G1", "G2"), ("G1", "G2")]
+    found = without_gaps(answer, {"G1": ("Q2",)})
+    assert [i.blocked_by for i in found.issues] == [("G1", "Q2"), ("G1", "Q2")]
+    assert [g.question for g in found.gaps] == ["Сколько хранить?"]
+    found = without_gaps(answer, {"G1": (), "G2": ()})
+    assert [i.blocked_by for i in found.issues] == [(), ()] and found.gaps == ()
+
+
+def test_an_issue_needing_a_found_decision_waits_for_the_issues_that_implement_it():
+    """O2 нашёл решение ADR-1, его реализует O1: задача O2, которая его называет, — после
+    задачи O1 с ADR-1; задача O2 без него и задача, чьё решение своё, — ни после чего."""
+    answer = combined([
+        cut_of("O1", issue("I1", adr_ids=["ADR-1"]), issue("I2", "Выдача", adr_ids=[])),
+        cut_of("O2", issue("I1", "Отчёт", outcomes=("O2",)),
+               issue("I2", "Экспорт", outcomes=("O2",), adr_ids=[]))])
+    found = owner_dependencies(answer, {"O2": {"ADR-1"}}, {"ADR-1": "O1"})
+    assert [(i.name, i.depends_on) for i in found.issues] == [
+        ("I1", ()), ("I2", ()), ("I3", ("I1",)), ("I4", ())]
+
+
+def test_without_an_issue_naming_the_decision_every_issue_of_its_owner_comes_first():
+    """Ни одна задача итога-владельца решение не называет — ждать всех его задач, и
+    перенесённых тоже; зависимость, что замкнула бы круг, не ставится."""
+    answer = combined([
+        cut_of("O1", issue("I1", adr_ids=[], depends_on=["I9"]), fixed=["I9"]),
+        cut_of("O2", issue("I1", "Отчёт", outcomes=("O2",)))], fixed=["I9"])
+    found = owner_dependencies(answer, {"O2": {"ADR-1"}}, {"ADR-1": "O1"},
+                               [("I9", ["O1"], [])])
+    assert [(i.name, i.depends_on) for i in found.issues] == [("I1", ("I9",)), ("I2", ("I1", "I9"))]
+    circle = combined([cut_of("O1", issue("I1", adr_ids=["ADR-1"])),
+                       cut_of("O2", issue("I1", "Отчёт", outcomes=("O2",)))])
+    # Задача O1 уже ждёт задачу O2 (так поставил бы судья): обратная замкнула бы круг.
+    circle = replace(circle, issues=(replace(circle.issues[0], depends_on=("I2",)),
+                                     circle.issues[1]))
+    found = owner_dependencies(circle, {"O2": {"ADR-1"}}, {"ADR-1": "O1"})
+    assert [(i.name, i.depends_on) for i in found.issues] == [("I1", ("I2",)), ("I2", ())]

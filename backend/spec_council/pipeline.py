@@ -99,10 +99,23 @@ from .groups import letter_for
 from .ideas import MergedOption, as_ids, declined, idea_options, judged_idea, merged, same_idea
 from .issues import Answer as IssueAnswer
 from .issues import Context as IssueContext
-from .issues import Parent, combined, dependencies_of, dependencies_prompt, issue_set, same_issues
+from .issues import (
+    Found,
+    Gap,
+    Parent,
+    answers_of,
+    combined,
+    dependencies_of,
+    dependencies_prompt,
+    issue_set,
+    owner_dependencies,
+    same_issues,
+    without_gaps,
+)
 from .issues import as_prompt as issue_prompt
 from .models import (
     SKIPPED,
+    AnsweredGap,
     Choice,
     Decision,
     DecisionAnalysis,
@@ -257,6 +270,8 @@ def start_idea(participants: list[str], judge: str) -> IdeaDiscovery:
 
 # Сколько проходов участников и судьи у скана: первый и до двух доисследований.
 SCAN_ROUNDS = 3
+# Сколько раз нарезка задач режет итог заново, найдя ответ на его пробел среди вопросов отбора.
+MAX_RECUTS = 2
 
 
 # Снимок рабочих копий хода в каталог: его отпечаток и какие файлы легли.
@@ -394,6 +409,8 @@ def start_issues(participants: list[str], judge: str, outcomes_run: str,
                           kept=[issue.id for issue in carried],
                           steps=[*steps(participants, judge,
                                         (StepName.issue_discovery, StepName.issue_judge)),
+                                 Step(name=StepName.issue_gap_check,
+                                      runs=[ModelRun(model=judge)]),
                                  Step(name=StepName.issue_dependencies,
                                       runs=[ModelRun(model=judge)])])
 
@@ -1374,18 +1391,35 @@ class DesignRun(CouncilRun[DesignScan]):
                 self.workspace = None
 
 
+def fresh_gaps(parts: Mapping[str, IssueAnswer], checked: set[str]) -> dict[str, Gap]:
+    """Пробелы нарезок, ещё не сверенные с вопросами отбора, — по тексту (как его сравнивает
+    same_question): тот же пробел у разных итогов — один, про итоги всех."""
+    found: dict[str, Gap] = {}
+    for part in parts.values():
+        for gap in part.gaps:
+            text = same_question(gap.question)
+            if text in checked:
+                continue
+            known = found.get(text)
+            found[text] = gap if known is None else Gap(known.question, known.reason, tuple(
+                sorted({*known.outcome_ids, *gap.outcome_ids}, key=lambda name: int(name[1:]))))
+    return found
+
+
 class IssueRun(CouncilRun[IssueDiscovery]):
-    """Нарезка утверждённых итогов на задачи для coding agents — по итогу за раз: группировку
-    уже проверили на итогах, задачи её не пересобирают, а только делят итог на части. По каждому
+    """Нарезка утверждённых итогов на задачи для coding agents — по итогу за раз: группировку уже
+    проверили на итогах, задачи её не пересобирают, а только делят итог на части. По каждому
     итогу участники по отдельности, судья сводит их нарезки, если они разошлись. Модели видят
     итог с его решениями — принятыми ADR и прошлыми решениями проекта, — ограничениями и
-    рисками. Потом судья, видя все задачи разом, ставит зависимости между задачами разных
-    итогов — самих задач он не меняет. Если шаг «Репозиторий» пройден сканом, модели читают
-    снимок тех же рабочих копий заново (_reading) — точки входа и нынешнее состояние проверяются
-    по коду, а карта скана идёт им в помощь; без скана кода нет. Задачу, которой не хватает
-    решения, блокирует пробел или открытый вопрос — недостающее не додумывается. Номера задач
-    (I-n) и пробелов (G-n) — сквозные по порядку итогов; какие итоги не вошли ни в одну задачу,
-    считает код, а не модель. Модель, упавшая на одном итоге, так и числится упавшей.
+    рисками. Новые пробелы судья сверяет со всеми вопросами отбора: на какой ответ уже есть, тот
+    к человеку не идёт (_cut). Потом судья, видя все задачи разом, ставит зависимости между
+    задачами разных итогов — самих задач он не меняет. Если шаг «Репозиторий» пройден сканом,
+    модели читают снимок тех же рабочих копий заново (_reading) — точки входа и нынешнее
+    состояние проверяются по коду, а карта скана идёт им в помощь; без скана кода нет. Задачу,
+    которой не хватает решения, блокирует пробел или открытый вопрос — недостающее не
+    додумывается. Номера задач (I-n) и пробелов (G-n) — сквозные по порядку итогов; какие итоги
+    не вошли ни в одну задачу, считает код, а не модель. Модель, упавшая на одном итоге, так и
+    числится упавшей.
 
     carried — задачи прежней нарезки тех же итогов, которые ничто не держит: они уже в
     разработке, их не нарезают заново, а модели видят задачи своего итога данностью; cut —
@@ -1420,12 +1454,15 @@ class IssueRun(CouncilRun[IssueDiscovery]):
         self.repository = repository
         self.design = design
         self.copy = copy
+        # Пробелы, на которые нашёлся ответ среди вопросов отбора.
+        self.answered: list[AnsweredGap] = []
+        self._judged = False
 
     def work(self) -> dict[str, Any]:
         if not self.cut:
             # Все итоги покрыты перенесёнными задачами: ни моделей, ни кода не нужно.
             for name in (StepName.issue_discovery, StepName.issue_judge,
-                         StepName.issue_dependencies):
+                         StepName.issue_gap_check, StepName.issue_dependencies):
                 self._skip(name)
             return self._numbered(IssueAnswer((), ()))
         with self._reading(self.sources, self.copy) as folder:
@@ -1438,81 +1475,170 @@ class IssueRun(CouncilRun[IssueDiscovery]):
             return self._numbered(self._linked(self._cut()))
 
     def _cut(self) -> IssueAnswer:
-        """Каждый итог, который надо нарезать, — своим ходом; нарезки — в одну."""
+        """Каждый итог, который надо нарезать, — своим ходом; нарезки — в одну. Итог режут, видя
+        только его решения, поэтому пробел задачи бывает вопросом, на который ответ уже есть в
+        отборе. Новые пробелы судья сверяет со всеми вопросами отбора (_answered): ответ в
+        открытом вопросе — задачи держит он; в решённом — итог режут заново, с этим решением
+        среди тех, на которые он опирается, а задача, которой оно нужно, идёт после задач, что
+        его реализуют. Перенарезок — не больше MAX_RECUTS: что осталось, идёт к человеку."""
         questions, adrs, limits = decided_context(self.scope, self.decisions,
                                                   self.found_proposals, self.fragments)
+        cutting = [outcome for outcome in self.outcomes if outcome.id in self.cut]
+        failures: dict[str, list[str]] = {}
+        self._judged = False
+        parts = {outcome.id: self._part(outcome, questions, adrs, limits, (), failures, "")
+                 for outcome in cutting}
+        # Пробелы итогов шаг итогов уже сверил со всеми вопросами — сверять только новые.
+        checked = {same_question(gap.question) for outcome in self.outcomes
+                   for gap in outcome.gaps}
+        extra: dict[str, set[str]] = {outcome.id: set() for outcome in cutting}
+        known: dict[str, Found] = {}          # ответы на пробелы — по тексту пробела
+        checks = recuts = 0
+        while True:
+            # Сначала — то, на что ответ уже известен: перенарезка могла спросить то же снова.
+            recut: set[str] = set()
+            for outcome in cutting:
+                settled: dict[str, tuple[str, ...]] = {}
+                for n, gap in enumerate(parts[outcome.id].gaps, 1):
+                    answer = known.get(same_question(gap.question))
+                    if answer is None:
+                        continue
+                    if answer.opened:
+                        settled[f"G{n}"] = answer.opened
+                        continue
+                    new = {adr["id"] for adr in adrs if adr["question_id"] in answer.decided}
+                    new -= {*extra[outcome.id], *outcome.adr_ids, *outcome.relies_on_adr_ids}
+                    if not new:
+                        # Ответ — решения, которые итог и так видел: резать заново незачем.
+                        settled[f"G{n}"] = ()
+                    elif recuts < MAX_RECUTS:
+                        extra[outcome.id] |= new
+                        recut.add(outcome.id)
+                parts[outcome.id] = without_gaps(parts[outcome.id], settled)
+            if recut:
+                recuts += 1
+                for outcome in cutting:
+                    if outcome.id in recut:
+                        parts[outcome.id] = self._part(
+                            outcome, questions, adrs, limits, tuple(sorted(extra[outcome.id])),
+                            failures, f"перенарезка {recuts}")
+                continue
+            fresh = fresh_gaps(parts, checked)
+            if not fresh or checks == MAX_RECUTS:
+                break
+            checks += 1
+            known |= self._answered(fresh, questions, adrs)
+            checked |= set(fresh)
+        if not checks:
+            self._skip(StepName.issue_gap_check)
+        if not self._judged:
+            self._skip(StepName.issue_judge)
+        owners = {adr: outcome.id for outcome in self.outcomes for adr in outcome.adr_ids}
+        fixed = frozenset(issue.id for issue in self.carried)
+        return owner_dependencies(
+            combined([parts[outcome.id] for outcome in cutting], fixed), extra, owners,
+            [(issue.id, issue.outcome_ids, issue.adr_ids) for issue in self.carried])
+
+    def _part(self, outcome: Outcome, questions: list[dict], adrs: list[dict],
+              limits: list[LabeledFragment], extra: tuple[str, ...],
+              failures: dict[str, list[str]], label: str) -> IssueAnswer:
+        """Нарезка одного итога: участники, а если их нарезки разошлись, — судья. extra —
+        решения других итогов, найденные в ответ на пробелы этого: итог опирается на них, но
+        задачам его они не навязываются — их называет та задача, которой они нужны."""
         opened = {q["id"]: {"id": q["id"], "question": q["text"], "proposals": q["proposals"]}
                   for q in questions if q["status"] == "open"}
         fixed = frozenset(issue.id for issue in self.carried)
-        failures: dict[str, list[str]] = {}
-        parts: list[IssueAnswer] = []
-        judged = False
-        for outcome in self.outcomes:
-            if outcome.id not in self.cut:
-                continue
-            own = [f for f in limits if f.id in {*outcome.constraint_ids, *outcome.risk_ids}]
-            # Решения итога — и те, что он реализует, и те, на которые опирается.
-            rests = (*outcome.adr_ids, *outcome.relies_on_adr_ids)
-            context = IssueContext(
-                frozenset({outcome.id}),
-                frozenset(rests),
-                frozenset(f.id for f in own if f.label == "constraint"),
-                frozenset(f.id for f in own if f.label == "risk"),
-                frozenset(q["id"] for q in questions if q["status"] == "open"),
-                {same_question(q.text): q.id for q in self.scope},
-                {outcome.id: Parent(rests, tuple(outcome.constraint_ids),
-                                    tuple(outcome.risk_ids), tuple(outcome.blocked_by),
-                                    tuple((g.question, g.reason) for g in outcome.gaps))},
-                # Сослаться можно только на перенесённые задачи этого итога — их модели и видят;
-                # порядок относительно задач других итогов ставит судья зависимостей.
-                frozenset(issue.id for issue in self.carried if outcome.id in issue.outcome_ids))
-            values = {
-                "idea": self.idea,
-                "outcome": as_json({
-                    "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
-                    "adr_ids": outcome.adr_ids, "adr_notes": outcome.adr_notes,
-                    "relies_on_adr_ids": outcome.relies_on_adr_ids,
-                    "project_decision_ids": outcome.project_decision_ids,
-                    "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
-                    "risk_ids": [f"F{i}" for i in outcome.risk_ids],
-                    "acceptance_criteria": outcome.acceptance_criteria,
-                    # Открытый вопрос, что держит итог, — текстом и с вариантами: по одному
-                    # номеру модели не поймут, чего не хватает и что от него зависит.
-                    "blocked_by": [opened.get(name, name) for name in outcome.blocked_by],
-                    "gaps": [gap.model_dump() for gap in outcome.gaps]}),
-                "accepted_adrs": as_json([
-                    {**adr, "role": "implements" if adr["id"] in outcome.adr_ids else "relies_on"}
-                    for adr in adrs if adr["id"] in rests]),
-                "accepted_decisions": accepted_prompt(
-                    [d for d in self.accepted if d.adr_id in outcome.project_decision_ids]),
-                "fixed_issues": as_json([{
-                    "id": issue.id, "title": issue.title, "user_story": issue.user_story,
-                    "scope": issue.scope}
-                    for issue in self.carried if outcome.id in issue.outcome_ids]),
-                "constraints_and_risks": limits_prompt(own),
-                "repository_context": self._code_note() + self.repository,
-                "design": self.design,
-            }
-            parse = partial(issue_set, context=context)
-            answers = self._ask_all(StepName.issue_discovery,
-                                    render("issue_discovery", **values), parse)
-            self._keep_failures(StepName.issue_discovery, outcome.id, failures)
-            # Одинаковые нарезки — одна; порядок — как у первого, кто её прислал.
-            sets: dict[str, IssueAnswer] = {}
-            for found in answers.values():
-                sets.setdefault(same_issues(found), found)
-            if len(answers) > 1 and len(sets) == 1:
-                chosen = next(iter(sets.values()))
-            else:
-                judged = True
-                variants = shuffled([issue_prompt(answer, fixed) for answer in sets.values()])
-                prompt = render("issue_judge", **values, issue_candidates=as_json(
-                    [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
-                chosen = self._ask_judge(StepName.issue_judge, prompt, parse)
-            parts.append(chosen)
-        if not judged:
-            self._skip(StepName.issue_judge)
-        return combined(parts, fixed)
+        own = [f for f in limits if f.id in {*outcome.constraint_ids, *outcome.risk_ids}]
+        # Решения итога — и те, что он реализует, и те, на которые опирается.
+        rests = (*outcome.adr_ids, *outcome.relies_on_adr_ids)
+        relies = [*outcome.relies_on_adr_ids, *(name for name in extra if name not in rests)]
+        context = IssueContext(
+            frozenset({outcome.id}),
+            frozenset({*rests, *extra}),
+            frozenset(f.id for f in own if f.label == "constraint"),
+            frozenset(f.id for f in own if f.label == "risk"),
+            frozenset(opened),
+            {same_question(q.text): q.id for q in self.scope},
+            {outcome.id: Parent(rests, tuple(outcome.constraint_ids),
+                                tuple(outcome.risk_ids), tuple(outcome.blocked_by),
+                                tuple((g.question, g.reason) for g in outcome.gaps))},
+            # Сослаться можно только на перенесённые задачи этого итога — их модели и видят;
+            # порядок относительно задач других итогов ставит судья зависимостей.
+            frozenset(issue.id for issue in self.carried if outcome.id in issue.outcome_ids))
+        values = {
+            "idea": self.idea,
+            "outcome": as_json({
+                "id": outcome.id, "title": outcome.title, "behavior": outcome.behavior,
+                "adr_ids": outcome.adr_ids, "adr_notes": outcome.adr_notes,
+                "relies_on_adr_ids": relies,
+                "project_decision_ids": outcome.project_decision_ids,
+                "constraint_ids": [f"F{i}" for i in outcome.constraint_ids],
+                "risk_ids": [f"F{i}" for i in outcome.risk_ids],
+                "acceptance_criteria": outcome.acceptance_criteria,
+                # Открытый вопрос, что держит итог, — текстом и с вариантами: по одному
+                # номеру модели не поймут, чего не хватает и что от него зависит.
+                "blocked_by": [opened.get(name, name) for name in outcome.blocked_by],
+                "gaps": [gap.model_dump() for gap in outcome.gaps]}),
+            "accepted_adrs": as_json([
+                {**adr, "role": "implements" if adr["id"] in outcome.adr_ids else "relies_on"}
+                for adr in adrs if adr["id"] in context.adrs]),
+            "accepted_decisions": accepted_prompt(
+                [d for d in self.accepted if d.adr_id in outcome.project_decision_ids]),
+            "fixed_issues": as_json([{
+                "id": issue.id, "title": issue.title, "user_story": issue.user_story,
+                "scope": issue.scope}
+                for issue in self.carried if outcome.id in issue.outcome_ids]),
+            "constraints_and_risks": limits_prompt(own),
+            "repository_context": self._code_note() + self.repository,
+            "design": self.design,
+        }
+        parse = partial(issue_set, context=context)
+        answers = self._ask_all(StepName.issue_discovery,
+                                render("issue_discovery", **values), parse)
+        self._keep_failures(StepName.issue_discovery,
+                            f"{outcome.id}, {label}" if label else outcome.id, failures)
+        # Одинаковые нарезки — одна; порядок — как у первого, кто её прислал.
+        sets: dict[str, IssueAnswer] = {}
+        for found in answers.values():
+            sets.setdefault(same_issues(found), found)
+        if len(answers) > 1 and len(sets) == 1:
+            return next(iter(sets.values()))
+        self._judged = True
+        variants = shuffled([issue_prompt(answer, fixed) for answer in sets.values()])
+        prompt = render("issue_judge", **values, issue_candidates=as_json(
+            [{"candidate": n, **v} for n, v in enumerate(variants, 1)]))
+        return self._ask_judge(StepName.issue_judge, prompt, parse)
+
+    def _answered(self, fresh: Mapping[str, Gap], questions: list[dict],
+                  adrs: list[dict]) -> dict[str, Found]:
+        """Судья сверяет новые пробелы со всеми вопросами отбора: на какие ответ уже есть.
+        Найденное — по тексту пробела (как его сравнивает same_question); оно же — в итог
+        нарезки, чтобы было видно, что к человеку не пошло и почему."""
+        owners = {adr: outcome.id for outcome in self.outcomes for adr in outcome.adr_ids}
+        titles = {outcome.id: outcome.title for outcome in self.outcomes}
+        numbered_gaps = {f"G{n}": (text, gap) for n, (text, gap) in enumerate(fresh.items(), 1)}
+        by_question = {adr["question_id"]: adr for adr in adrs}
+        shown = [{"id": q["id"], "question": q["text"], "status": q["status"],
+                  **({"adr_id": adr["id"], "decision": adr["decision"],
+                      "rationale": adr["rationale"], "implemented_by": owners.get(adr["id"])}
+                     if (adr := by_question.get(q["id"])) else {})}
+                 for q in questions]
+        prompt = render("issue_gap_check", idea=self.idea, outcomes=as_json(
+            [{"id": name, "title": title} for name, title in titles.items()]),
+            questions=as_json(shown),
+            gaps=as_json([{"id": name, "question": gap.question, "reason": gap.reason,
+                           "outcome_ids": list(gap.outcome_ids)}
+                          for name, (_, gap) in numbered_gaps.items()]))
+        decided = frozenset(q["id"] for q in questions if q["status"] == "decided")
+        opened = frozenset(q["id"] for q in questions if q["status"] == "open")
+        found = self._ask_judge(StepName.issue_gap_check, prompt, partial(
+            answers_of, gaps=numbered_gaps, decided=decided, opened=opened))
+        for name, answer in found.items():
+            _, gap = numbered_gaps[name]
+            self.answered.append(AnsweredGap(
+                question=gap.question, reason=answer.reason, outcome_ids=list(gap.outcome_ids),
+                question_ids=[*answer.opened, *answer.decided]))
+        return {numbered_gaps[name][0]: answer for name, answer in found.items()}
 
     def _linked(self, answer: IssueAnswer) -> IssueAnswer:
         """Зависимости между задачами разных итогов ставит судья, видя все задачи разом. Задачи
@@ -1574,7 +1700,8 @@ class IssueRun(CouncilRun[IssueDiscovery]):
                 "cut": {outcome.id: outcome_print(outcome, self.scope,
                                                   project_prints(self.accepted))
                         for outcome in self.outcomes},
-                "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered]}
+                "uncovered_outcome_ids": [o.id for o in self.outcomes if o.id not in covered],
+                "answered_gaps": self.answered}
 
 
 def translating(judge: str) -> list[Step]:

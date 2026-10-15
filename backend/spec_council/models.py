@@ -45,6 +45,7 @@ class StepName(StrEnum):
     outcome_judge = "outcome_judge"          # судья выбирает и сводит их в итоговый набор
     issue_discovery = "issue_discovery"  # участники нарезают утверждённый итог на задачи
     issue_judge = "issue_judge"          # судья сводит их нарезки итога в одну
+    issue_gap_check = "issue_gap_check"  # судья ищет ответ на пробелы задач среди вопросов
     issue_dependencies = "issue_dependencies"  # судья ставит зависимости между задачами итогов
     notes_translation = "notes_translation"  # судья переводит заметки на язык документации
 
@@ -924,6 +925,17 @@ class NotesExport(BaseModel):
     numbers: list[IssueNumber] = []
 
 
+class AnsweredGap(BaseModel):
+    """Пробел нарезки, на который уже есть ответ: решённый вопрос отбора — тогда итог нарезан
+    заново с его решением — или открытый — тогда задачи держит он. question_ids — номера
+    вопросов отбора (Q-n), не ADR: номера ADR сдвигаются вместе с отбором."""
+
+    question: str
+    reason: str = ""
+    outcome_ids: list[str] = []
+    question_ids: list[str] = []
+
+
 class IssueDiscovery(BaseModel):
     """Нарезка утверждённых итогов на задачи: участники по отдельности, судья сводит их в
     итоговый набор. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же
@@ -950,6 +962,8 @@ class IssueDiscovery(BaseModel):
     decisions: list[str] = []
     # Утверждённые итоги, не вошедшие ни в одну задачу: считает код, а не модель.
     uncovered_outcome_ids: list[str] = []
+    # Пробелы задач, на которые нашёлся ответ среди вопросов отбора: к человеку они не идут.
+    answered_gaps: list[AnsweredGap] = []
     error: str | None = None
 
     @model_validator(mode="before")

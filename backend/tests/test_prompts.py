@@ -47,6 +47,7 @@ GIVEN = {
     "issue_judge": {"idea", "outcome", "accepted_adrs", "accepted_decisions", "fixed_issues",
                     "constraints_and_risks", "repository_context", "design",
                     "issue_candidates"},
+    "issue_gap_check": {"idea", "outcomes", "questions", "gaps"},
     "issue_dependencies": {"idea", "outcomes", "issues", "repository_context"},
 }
 
