@@ -15,7 +15,7 @@ import { modelOf } from '../components/ModelBadge'
 import { Progress } from '../components/Progress'
 import { firstOpen, Slider, type Slide } from '../components/Slider'
 import {
-  CHAIN, chainLight, currentStep, exported, exportedCount, exportedFiles, exportedNotes, exportedTo, openable, streamLight, type ChainStep,
+  CHAIN, chainLight, currentStep, exported, exportedCount, exportedNotes, exportedTo, openable, streamLight, type ChainStep,
 } from '../light'
 import { useAction } from '../useAction'
 
@@ -158,10 +158,10 @@ function StreamPage({ council, structure, stream, models, repositories, figma, n
         {view === 'notes' && (
           // Новый черновик — и правки заново, к его заметкам.
           <NotesStep key={stream.notes_draft?.run ?? ''} council={council} structure={structure} stream={stream}
-                     group={group} root={notes} issues={issues} onChange={onChange} />
+                     group={group} root={notes} onChange={onChange} />
         )}
         {view === 'issues' && (
-          <IssuesStep council={council} stream={stream} group={group} notes={notes} onChange={onChange}
+          <IssuesStep council={council} stream={stream} group={group} onChange={onChange}
                       onBack={() => open('outcomes')} onNext={() => open('notes')}
                       onQuestion={question => { setFocus(question); setView('decisions') }} gaps={gaps} />
         )}
@@ -1283,10 +1283,8 @@ const NOTE_TYPES = ['idea', 'open_question', 'proposal', 'adr', 'outcome', 'issu
  * файл на каждую задачу, которую ничто не держит: номера, тексты и что с каждым будет. Человек правит тексты,
  * отмечает исчезнувшие к удалению и записывает. Файл, правленный руками после прошлой выгрузки, совет не трогает.
  */
-function NotesStep({ council, structure, stream, group, root, issues, onChange }: Readonly<{
+function NotesStep({ council, structure, stream, group, root, onChange }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group; root: string | null
-  /** Папка задач проекта; null — задачи только строками в итогах. */
-  issues: string | null
   onChange: (council: Council) => void
 }>) {
   const { t } = useTranslation()
@@ -1298,14 +1296,11 @@ function NotesStep({ council, structure, stream, group, root, issues, onChange }
   const act = useAction(onChange, 'notes.writeFailed')
   const at = { run: structure.run, revision: structure.revision }
   const building = draft?.state === 'running'
-  const stale = !!draft && stream.issues?.run !== draft.issues
+  const stale = !!draft && (!stream.outcomes?.approved || stream.outcomes.run !== draft.outcomes)
   // Проект совета или его папку сменили после сборки: черновик — к прежней папке.
   const moved = !!draft && draft.state === 'done' && !!root && draft.root !== root
-  // Папку задач проекта сменили, задали или убрали после сборки.
-  const movedIssues = !!draft && draft.state === 'done' && draft.issues_root !== (issues ?? '')
-  const ready = draft?.state === 'done' && !stale && !moved && !movedIssues
-  const files = draft?.notes.filter(note => note.type === 'issue').length ?? 0
-  const folders = { notes: root, issues }
+  const ready = draft?.state === 'done' && !stale && !moved
+  const folders = { notes: root, issues: null }
   const written = !!draft && stream.notes?.run === draft.run && exported(stream, folders)
   // Записанное — с правками человека: они есть только в выгрузке, черновик их не знает.
   const wrote = new Map(written ? stream.notes?.notes.map(note => [note.key, note.written]) : [])
@@ -1335,14 +1330,11 @@ function NotesStep({ council, structure, stream, group, root, issues, onChange }
       </section>
       <section className="card panel" aria-label={t('notes.title')}>
         {root ? <p className="repo-summary">{t('notes.where', { root })}</p> : <p className="fragment-note">{t('notes.noRoot')}</p>}
-        {root && <p className="repo-summary">{issues ? t('notes.whereIssues', { root: issues }) : t('notes.noIssues')}</p>}
         {stream.notes && (
           <p className={exported(stream, folders) ? 'check ok' : 'fragment-note'}>
             {t(exported(stream, folders) ? 'notes.written'
-               : stream.notes.root !== root ? 'notes.elsewhere'
-               : exportedNotes(stream, root) ? 'notes.issuesElsewhere' : 'notes.outdated',
-               { count: exportedCount(stream), root: stream.notes.root, issues: stream.notes.issues_root })}
-            {exported(stream, folders) && exportedFiles(stream) > 0 && ` ${t('notes.filesWritten', { count: exportedFiles(stream) })}`}
+               : stream.notes.root !== root ? 'notes.elsewhere' : 'notes.outdated',
+               { count: exportedCount(stream), root: stream.notes.root })}
           </p>
         )}
         <div className="stream-actions">
@@ -1355,7 +1347,6 @@ function NotesStep({ council, structure, stream, group, root, issues, onChange }
         {draft?.state === 'failed' && <p className="error-text" role="alert">{draft.error}</p>}
         {stale && <p className="fragment-note">{t('notes.stale')}</p>}
         {moved && !stale && <p className="fragment-note">{t('notes.moved')}</p>}
-        {movedIssues && !moved && !stale && <p className="fragment-note">{t('notes.movedIssues')}</p>}
         {ready && (
           <>
             <p className="repo-summary">{t('notes.language', { language: draft.language })}</p>
@@ -1420,20 +1411,9 @@ function NotesStep({ council, structure, stream, group, root, issues, onChange }
                 ))}</ul>
               </div>
             )}
-            {draft.numbers.length > 0 && (
-              <div>
-                <h3 className="panel-title caps notes-type">{t('notes.issues')}</h3>
-                <ul className="repo-list">{draft.numbers.map(number => (
-                  <li key={number.key}><span className="fragment-id">{number.id}</span> {number.issue_id} · {number.title}</li>
-                ))}</ul>
-              </div>
-            )}
             {act.error && <p className="error-text" role="alert">{act.error}</p>}
             <div className="stream-actions spread">
-              <span className="muted">
-                {t('notes.count', { count: draft.notes.length - files })}
-                {files > 0 && ` · ${t('notes.files', { count: files })}`}
-              </span>
+              <span className="muted">{t('notes.count', { count: draft.notes.length })}</span>
               <button className="btn-primary large" disabled={locked || written || !root} onClick={write}>
                 {t(written ? 'notes.done' : 'notes.write')}
               </button>
@@ -2301,22 +2281,14 @@ function OutcomesStep({ council, structure, stream, group, onChange, approve, on
  * Задачи: утверждённые итоги, нарезанные на задачи для coding agents. Задачу, которой не хватает
  * решения, держит пробел или открытый вопрос: пробел несут в вопросы, к вопросу возвращаются.
  */
-function IssuesStep({ council, stream, group, notes, onChange, onBack, onNext, onQuestion, gaps }: Readonly<{
-  council: Council; stream: Stream; group: Group; notes: string | null; onChange: (council: Council) => void
+function IssuesStep({ council, stream, group, onChange, onBack, onNext, onQuestion, gaps }: Readonly<{
+  council: Council; stream: Stream; group: Group; onChange: (council: Council) => void
   onBack: () => void; onNext: () => void; onQuestion: (question: string) => void; gaps: Gaps
 }>) {
   const { t } = useTranslation()
   const run = stream.issues
-  // Номера задач на весь проект — у выгруженного к этим задачам потока. Перенесённые и сохранённые задачи — копии
-  // прежних (и через несколько нарезок тоже) и, может, уже в работе: номер — из последней выгрузки, если там та же
-  // задача (тот же I-номер и название, как узнаёт её и выгрузка). Новые — без номера, пока не выгрузят.
-  const carried = new Map((run ? run.issues.filter(issue => run.kept.includes(issue.id)) : stream.saved_issues)
-    .map(issue => [issue.id, issue.title]))
-  let numbered = exportedNotes(stream, notes) ? stream.notes?.numbers ?? [] : []
-  if (!exportedNotes(stream, notes) && exportedTo(stream, notes)) {
-    numbered = (stream.notes?.numbers ?? []).filter(number => carried.get(number.issue_id) === number.title)
-  }
-  const numbers = new Map(numbered.map(n => [n.issue_id, n.id]))
+  // Номера задач на весь проект раздаёт этап «Задачи», а не поток.
+  const numbers = new Map<string, string>()
   const retry = useAction(onChange)
   const stale = structureIsStale(council)
   const scope = stream.scope ?? []

@@ -1122,7 +1122,7 @@ describe('Поток: решения и итоги', () => {
 
   it('выбор проверен, для unresolved ИИ предлагает вариант — принятое уходит на сервер с обоснованием', async () => {
     const assembling: OutcomeDiscovery = {
-      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], kept: [], touched: [], uncovered_adr_ids: [], error: null }
+      state: 'running', run: 'o1', decisions: [], steps: [], outcomes: [], kept: [], touched: [], uncovered_adr_ids: [], approved: false, error: null }
     openStream(() => deciding(), () => json(deciding({ outcomes: assembling, decisions: [
       { question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' },
       { question_id: 'Q2', proposal: 'P2', rationale: 'Мера без опросов.', rationale_by: 'ai' }] })))
@@ -1268,7 +1268,7 @@ describe('Поток: решения и итоги', () => {
   const FIXED = [{ question_id: 'Q1', proposal: 'F2', rationale: KEPT, rationale_by: 'ai' as const },
                  { question_id: 'Q2', proposal: null, rationale: null, rationale_by: null }]
   const ASSEMBLED: OutcomeDiscovery = {
-    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [],
+    state: 'done', run: 'o1', decisions: [], error: null, uncovered_adr_ids: [], kept: [], touched: [], approved: false,
     steps: [{ name: 'outcome_discovery', state: 'done', runs: [run('sol', 'done'), run('fable', 'done')] },
             { name: 'outcome_judge', state: 'skipped', runs: [] }],
     outcomes: [
@@ -1279,7 +1279,9 @@ describe('Поток: решения и итоги', () => {
         constraint_ids: [], risk_ids: [], acceptance_criteria: [], blocked_by: ['Q2'],
         gaps: [{ question: 'Где хранить отчёт?', reason: 'нет решения' }] },
     ],
-  }
+  }  /** Те же итоги, утверждённые: их режут на задачи и выгружают в заметки. */
+  const APPROVED: OutcomeDiscovery = { ...ASSEMBLED, approved: true }
+
 
   it('итог показывает прошлые решения проекта, на которые опирается', async () => {
     const earlier = { adr_id: 'ADR-0001', idea: 'Воркер переживает сбой.', question: 'Где хранить состояние?',
@@ -1592,7 +1594,7 @@ describe('Поток: решения и итоги', () => {
   it('итоги утверждают — совет нарезает их на задачи, экран переходит к задачам', async () => {
     const cutting: IssueDiscovery = { ...CUT, state: 'running', issues: [], gaps: [] }
     openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED }),
-               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: cutting })))
+               () => json(deciding({ decisions: FIXED, outcomes: APPROVED, issues: cutting })))
     await card('Состояние в файлах')
     expect(screen.getByText(ru['outcomes.approveHint'])).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['outcomes.approve'] }))
@@ -1604,7 +1606,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('задачи: что, где и зачем; заблокированная держится пробелом и вопросом; пробел — в вопросы', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(deciding()))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }), () => json(deciding()))
     const ready = await card('Сохранять состояние в файлы')
     expect(within(ready).getByText(ru['issues.ready'])).toBeTruthy()
     expect(within(ready).getByText('worker/state.py')).toBeTruthy()
@@ -1630,7 +1632,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('задача закреплённого итога из прежней нарезки — помечена перенесённой', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: { ...CUT, kept: ['I1'] } }))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: { ...CUT, kept: ['I1'] } }))
     expect(within(await card('Сохранять состояние в файлы')).getByText(ru['issues.kept'])).toBeTruthy()
   })
 
@@ -1638,13 +1640,13 @@ describe('Поток: решения и итоги', () => {
     const two: IssueDiscovery = { ...CUT, sources: [
       { ...CUT.sources[0], name: 'back', path: 'back' },
       { ...CUT.sources[0], name: 'front', path: 'web/front', commit_sha: '1234567890abcdef', dirty: true }] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: two }))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: two }))
     expect(await screen.findByText(
       'По коду: back — коммит abcdef12; web/front — коммит 12345678 с незакоммиченными правками.')).toBeTruthy()
   })
 
   it('решение вне итогов видно и на задачах — поток не готов', async () => {
-    const lost: OutcomeDiscovery = { ...ASSEMBLED, uncovered_adr_ids: ['ADR-1'] }
+    const lost: OutcomeDiscovery = { ...APPROVED, uncovered_adr_ids: ['ADR-1'] }
     openStream(() => deciding({ decisions: FIXED, outcomes: lost, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
     expect(await screen.findByText('Решения, не вошедшие ни в один итог, нет и в задачах: ADR-1.')).toBeTruthy()
     expect(screen.getAllByText('вне итогов и задач: ADR-1').length).toBeGreaterThan(0)
@@ -1652,7 +1654,7 @@ describe('Поток: решения и итоги', () => {
 
   it('итог без задач виден с тем, что его держит, — из него назад, к вопросу', async () => {
     const onlyFirst: IssueDiscovery = { ...CUT, issues: [CUT.issues[0]], gaps: [], uncovered_outcome_ids: ['O2'] }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: onlyFirst }))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: onlyFirst }))
     const left = await screen.findByRole('region', { name: ru['issues.uncoveredTitle'] })
     expect(within(left).getByText('Замер потерь', { exact: false })).toBeTruthy()
     expect(within(left).getByText('держит Q2', { exact: false })).toBeTruthy()
@@ -1661,14 +1663,14 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('итог без критериев готовности виден и на задачах — поток не готов', async () => {
-    const vague: OutcomeDiscovery = { ...ASSEMBLED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
+    const vague: OutcomeDiscovery = { ...APPROVED, outcomes: [{ ...ASSEMBLED.outcomes[0], acceptance_criteria: [] }] }
     openStream(() => deciding({ decisions: FIXED, outcomes: vague, issues: { ...CUT, issues: [CUT.issues[0]], gaps: [] } }))
     expect(await screen.findByText('У итогов нет критериев готовности: O1 — задачи по ним не проверить.')).toBeTruthy()
     expect(screen.getAllByText('без критериев: O1').length).toBeGreaterThan(0)
   })
 
   it('утверждённые итоги — к задачам, а не утверждать заново', async () => {
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }))
     await card('Сохранять состояние в файлы')
     fireEvent.click(screen.getByRole('button', { name: ru['issues.change'] }))
     expect(await screen.findByRole('heading', { name: ru['outcomes.title'] })).toBeTruthy()
@@ -1795,7 +1797,7 @@ describe('Поток: решения и итоги', () => {
   const atStart = () => confirmed()
 
   const DRAFT: NotesDraft = {
-    state: 'done', run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', steps: [], error: null,
+    state: 'done', run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', steps: [], error: null,
     notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', text: 'Хочу воркер.', generated: 'Хочу воркер.', links: [],
         action: 'create', current: null },
@@ -1806,20 +1808,18 @@ describe('Поток: решения и итоги', () => {
     ],
     vanished: [{ id: 'ADR-0003', type: 'adr', text: 'Старое решение.', linked_from: [] },
                { id: 'ADR-0004', type: 'adr', text: 'Ещё старое.', linked_from: ['OQ-0009'] }],
-    numbers: [{ key: 'i:сохранять', id: 'ISS-0012', issue_id: 'I1', title: 'Сохранять состояние в файлы', outcome_ids: ['O1'] }],
     skipped: ['O2 «Мера» не выгружается: у него нет решений этой идеи'],
   }
 
   it('документация: черновик заметок — правка текста, удаление исчезнувшего, запись', async () => {
-    const replies = [deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT }),
-                     deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT,
-                                notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } })]
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }),
+    const replies = [deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT, notes_draft: DRAFT }),
+                     deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT, notes_draft: DRAFT,
+                                notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [] } })]
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }),
              () => json(replies[streamCalls.length - 1]))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByRole('heading', { name: ru['notes.title'] })).toBeTruthy()
     expect(screen.getByText('Каталог заметок: /notes')).toBeTruthy()
-    expect(screen.getByText(ru['notes.noIssues'])).toBeTruthy()            // у проекта нет папки задач
     fireEvent.click(screen.getByRole('button', { name: ru['notes.build'] }))
     expect(await screen.findByText('O2 «Мера» не выгружается: у него нет решений этой идеи')).toBeTruthy()
     expect(screen.getByText(ru['notes.editedNote'])).toBeTruthy()
@@ -1838,52 +1838,13 @@ describe('Поток: решения и итоги', () => {
     expect((screen.getByRole('button', { name: ru['notes.done'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('документация с папкой задач: файлы задач — в черновике, а черновик к другой папке задач не записать', async () => {
-    const issue: NotePlan = {
-      key: 'i:сохранять', id: 'ISS-0012', type: 'issue', text: '# Сохранять состояние в файлы\n\nКак воркер…',
-      generated: '# Сохранять состояние в файлы\n\nКак воркер…', links: ['OUT-0003', 'ADR-0005'], action: 'create',
-      current: null }
-    const filed: NotesDraft = { ...DRAFT, issues_root: '/issues', notes: [...DRAFT.notes, issue] }
-    let draft = filed
-    let exportRecord: NotesExport | null = null
-    fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: draft, notes: exportRecord }),
-                        project: PROJECT.id }),
-      settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, issues: 'kromka-api/issues', issues_root: '/issues' }] }),
-    }))
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText('Папка задач: /issues')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: ru['notes.type.issue'] })).toBeTruthy()
-    expect((screen.getByRole('textbox', { name: 'Текст заметки ISS-0012' }) as HTMLTextAreaElement).value)
-      .toBe('# Сохранять состояние в файлы\n\nКак воркер…')
-    expect(screen.getByText('→ OUT-0003, ADR-0005')).toBeTruthy()
-    expect(screen.getByText('3 заметки · 1 файл задачи')).toBeTruthy()
-    cleanup()
-    // Папку задач проекта сменили после сборки: черновик — к прежней.
-    draft = { ...filed, issues_root: '/old-issues' }
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText(ru['notes.movedIssues'])).toBeTruthy()
-    expect(screen.queryByRole('button', { name: ru['notes.write'] })).toBeNull()
-    cleanup()
-    // Выгружали, когда папка задач была другой: заметки на месте, а файлов задач здесь нет — выгружать снова.
-    draft = { ...filed, run: 'n2' }
-    exportRecord = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '/old-issues',
-                     notes: [], numbers: DRAFT.numbers }
-    renderAt('/councils/demo-1/streams/A')
-    fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
-    expect(await screen.findByText(ru['notes.issuesElsewhere'])).toBeTruthy()
-    expect(screen.getByRole('button', { name: ru['notes.write'] })).toBeTruthy()
-  })
-
   it('папку проекта сменили в другой вкладке — черновик, собранный после, записать можно', async () => {
     let root = '/notes'
     fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }), project: PROJECT.id }),
       stream: () => {
         root = '/new'                         // пока экран был открыт, папку проекта поменяли
-        return json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }),
+        return json({ ...deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT, notes_draft: { ...DRAFT, root: '/new' } }),
                       project: PROJECT.id })
       },
       settings: () => ({ ...SETTINGS, projects: [{ ...PROJECT, notes_root: root }] }),
@@ -1899,8 +1860,8 @@ describe('Поток: решения и итоги', () => {
   it('проект совета сменили в другой вкладке — экран берёт его из ответа на действие', async () => {
     const other: Project = { ...PROJECT, id: 'p2', name: 'Другой', notes_root: '/other' }
     fetchMock.mockImplementation(server({
-      council: () => ({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), project: PROJECT.id }),
-      stream: () => json({ ...deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
+      council: () => ({ ...deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }), project: PROJECT.id }),
+      stream: () => json({ ...deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT,
                                          notes_draft: { ...DRAFT, root: '/other' } }), project: other.id }),
       settings: () => ({ ...SETTINGS, projects: [PROJECT, other] }),
     }))
@@ -1912,7 +1873,7 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('черновик к прежней папке документации (проект сменили) — не записать, собрать заново', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: { ...DRAFT, root: '/old' } }),
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT, notes_draft: { ...DRAFT, root: '/old' } }),
              () => json(atStart()))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.moved'])).toBeTruthy()
@@ -1921,19 +1882,19 @@ describe('Поток: решения и итоги', () => {
   })
 
   it('документация без каталога заметок — подсказка, собрать нельзя', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json(atStart()), null)
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }), () => json(atStart()), null)
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.noRoot'])).toBeTruthy()
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('после выгрузки видно записанное, а оставленные исчезнувшие заметки не в счёт', async () => {
-    const notes: NotesExport = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', numbers: DRAFT.numbers, notes: [
+    const notes: NotesExport = { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [
       { key: 'idea', id: 'IDEA-0002', type: 'idea', generated: 'Хочу воркер.', written: 'Воркер не теряет результат.',
         links: [], digest: 'd1', kept: false },
       { key: 'a:F1:F9', id: 'ADR-0003', type: 'adr', generated: 'Старое решение.', written: 'Старое решение.',
         links: [], digest: 'd2', kept: true }] }
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT, notes_draft: DRAFT, notes }),
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT, notes_draft: DRAFT, notes }),
              () => json(atStart()))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText('Выгружено заметок: 1.')).toBeTruthy()
@@ -1944,55 +1905,18 @@ describe('Поток: решения и итоги', () => {
 
   it('черновик заметок не собрался — причина видна, собрать можно снова', async () => {
     const detail = 'Каталог заметок /notes: в adrs/ADR-0001.md нет frontmatter'
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT }), () => json({ detail }, 422))
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT }), () => json({ detail }, 422))
     fireEvent.click(await screen.findByRole('button', { name: ru['issues.toNotes'] }))
     fireEvent.click(await screen.findByRole('button', { name: ru['notes.build'] }))
     expect((await screen.findByRole('alert')).textContent).toBe(detail)
     expect((screen.getByRole('button', { name: ru['notes.build'] }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('выгруженный поток: у задачи — номер на весь проект и что писать в коммит', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
-             () => json(atStart()))
-    const issue = await card('Сохранять состояние в файлы')
-    expect(within(issue).getByText('ISS-0012')).toBeTruthy()
-    expect(within(issue).getByText(ru['issues.commit'].replace('{{id}}', 'ISS-0012'))).toBeTruthy()
-  })
-
-  it('сохранённые и перенесённые задачи — с номером из выгрузки прежней нарезки, новые — без', async () => {
-    const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
-                                         outcome_ids: ['O2'] }]
-    const before = { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers }
-    // Выгружали нарезку i1; потом её нарезали заново без выгрузки (i2, I1 перенесена), а теперь поправили отбор —
-    // нарезку сняли, I1 сохранена: номер у неё тот же, через сколько нарезок ни перенеси.
-    const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'] }
-    openWith(() => deciding({ choices: null, analysis: null, earlier_issues: recut, notes: before,
-                              saved_outcomes: [ASSEMBLED.outcomes[0]], saved_issues: [CUT.issues[0]] }),
-             () => json(atStart()))
-    const chain = await screen.findByRole('region', { name: /Цепочка/ })
-    fireEvent.click(within(chain).getByRole('button', { name: /Задачи/ }))
-    expect(within(await card('Сохранять состояние в файлы')).getByText('ISS-0012')).toBeTruthy()
-  })
-
-  it('новая нарезка: перенесённая задача — с прежним номером, новая под тем же I-номером — без', async () => {
-    const numbers = [...DRAFT.numbers, { key: 'i:считать', id: 'ISS-0013', issue_id: 'I2', title: 'Считать потери',
-                                         outcome_ids: ['O2'] }]
-    const recut: IssueDiscovery = { ...CUT, run: 'i2', kept: ['I1'],
-                                    issues: [CUT.issues[0], { ...CUT.issues[1], title: 'Другая задача' }] }
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: recut, earlier_issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers } }),
-             () => json(atStart()))
-    expect(within(await card('Сохранять состояние в файлы')).getByText('ISS-0012')).toBeTruthy()
-    expect(within(await card('Другая задача')).queryByText('ISS-0013')).toBeNull()
-  })
-
-  it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка: номеров у задач нет', async () => {
-    openWith(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT,
-                              notes: { run: 'n1', issues: 'i1', language: 'Russian', root: '/notes', issues_root: '', notes: [], numbers: DRAFT.numbers } }),
+  it('выгрузка в прежний каталог (папку проекта сменили) — не выгрузка', async () => {
+    openWith(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT,
+                              notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [] } }),
              () => json(atStart()), '/other')
-    const issue = await card('Сохранять состояние в файлы')
-    expect(within(issue).queryByText('ISS-0012')).toBeNull()
+    await card('Сохранять состояние в файлы')
     fireEvent.click(screen.getByRole('button', { name: ru['issues.toNotes'] }))
     expect(await screen.findByText(ru['notes.elsewhere'].replace('{{root}}', '/notes'))).toBeTruthy()
     expect(screen.getAllByText(ru['chain.notesElsewhere']).length).toBeGreaterThan(0)
@@ -2001,8 +1925,8 @@ describe('Поток: решения и итоги', () => {
   it('нарезка упала — причина видна, её запускают снова', async () => {
     const failed: IssueDiscovery = { ...CUT, state: 'failed', issues: [], gaps: [],
                                      error: 'Нет подключения к моделям: GPT-5.6 Sol' }
-    openStream(() => deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: failed }),
-               () => json(deciding({ decisions: FIXED, outcomes: ASSEMBLED, issues: CUT })))
+    openStream(() => deciding({ decisions: FIXED, outcomes: APPROVED, issues: failed }),
+               () => json(deciding({ decisions: FIXED, outcomes: APPROVED, issues: CUT })))
     expect(await screen.findByText('Нет подключения к моделям: GPT-5.6 Sol')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['run.retry'] }))
     expect(await slideTo('Сохранять состояние в файлы')).toBeTruthy()

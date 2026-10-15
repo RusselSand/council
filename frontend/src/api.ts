@@ -306,6 +306,8 @@ export interface OutcomeDiscovery {
   kept: string[]
   /** Какие закреплённые итоги задевают новые решения — ждут решения человека. */
   touched: OutcomeTouch[]
+  /** Человек утвердил эти итоги: поток выгружают в заметки к ним. */
+  approved: boolean
 }
 /** Пробел нарезки (G1, G2…): без его решения часть работы не начать — материал для нового вопроса. */
 export interface IssueGap { id: string; question: string; reason: string; outcome_ids: string[] }
@@ -374,27 +376,21 @@ export interface NotePlan {
 }
 /** Заметка прошлой выгрузки, которой в потоке больше нет: удалить можно, только если вне потока на неё не ссылаются. */
 export interface VanishedNote { id: string; type: NoteType; text: string; linked_from: string[] }
-/** Номер задачи на весь проект: его пишут в финальный коммит. */
-export interface IssueNumber { key: string; id: string; issue_id: string; title: string; outcome_ids: string[] }
-/** Черновик выгрузки потока в заметки — к нарезанным задачам (issues); язык другой — переводит судья. */
+/** Черновик выгрузки потока в заметки — к утверждённым итогам (outcomes); язык другой — переводит судья. */
 export interface NotesDraft {
-  state: 'running' | 'done' | 'failed'; run: string; issues: string; language: string; steps: Step[]
+  state: 'running' | 'done' | 'failed'; run: string; outcomes: string; language: string; steps: Step[]
   /** Каталог заметок, для которого черновик собран: в другой его не записать. */
   root: string
-  /** Папка задач, для которой собран; '' — у проекта её нет, задачи только строками в итогах. */
-  issues_root: string
-  notes: NotePlan[]; vanished: VanishedNote[]; numbers: IssueNumber[]; skipped: string[]; error: string | null
+  notes: NotePlan[]; vanished: VanishedNote[]; skipped: string[]; error: string | null
 }
 export interface ExportedNote {
   key: string; id: string; type: NoteType; generated: string; written: string; links: string[]; digest: string
   /** Исчезла из потока, а её оставили в каталоге: всё ещё потока, но в выгрузку не входит. */
   kept: boolean
 }
-/** Последняя выгрузка потока: из какого черновика и к каким задачам. */
+/** Последняя выгрузка потока: из какого черновика и к каким утверждённым итогам. */
 export interface NotesExport {
-  run: string; issues: string; language: string; root: string; notes: ExportedNote[]; numbers: IssueNumber[]
-  /** Папка, куда записали файлы задач; '' — не записывали. */
-  issues_root: string
+  run: string; outcomes: string; language: string; root: string; notes: ExportedNote[]
 }
 
 /** Правка с экрана: меняются только присланные поля. */

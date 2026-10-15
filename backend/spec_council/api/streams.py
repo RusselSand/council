@@ -1403,7 +1403,8 @@ def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: 
                 # совета, под которым мы уже стоим.
                 issues = run.carried_only()
         return store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
-            update={"issues": issues,
+            update={"outcomes": stream.outcomes.model_copy(update={"approved": True}),
+                    "issues": issues,
                     "earlier_issues": remembered(stream)["earlier_issues"]}))}), runs
 
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))

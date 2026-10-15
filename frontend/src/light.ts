@@ -36,7 +36,7 @@ const ofRun = (run: Run | null): Light | null => {
  * на нём, потом так же шаг «Дизайн», пока не отобраны вопросы — на вопросах, пока не выбраны
  * варианты — на вариантах, пока не зафиксированы решения — на решениях, пока итоги не утверждены —
  * на итогах, пока задачи не нарезаны и не готовы — на задачах, дальше — документация. Выгрузить
- * можно и не все готовые задачи: черновик документации уже переводится или упал — поток на ней.
+ * можно сразу после утверждения итогов: черновик документации уже переводится или упал — поток на ней.
  */
 export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.idea) return 'group'
@@ -45,16 +45,14 @@ export const currentStep = (stream: Stream): ChainStep => {
   if (!stream.scope) return 'questions'
   if (!stream.choices) return 'options'
   if (!stream.decisions) return 'decisions'
-  if (!stream.issues) return 'outcomes'
-  if (stream.issues.state !== 'done') return 'issues'
-  return issuesLight(stream.issues, stream) === 'done' || ofRun(stream.notes_draft) ? 'notes' : 'issues'
+  if (!stream.outcomes?.approved) return 'outcomes'
+  if (ofRun(stream.notes_draft)) return 'notes'
+  if (!stream.issues || stream.issues.state !== 'done') return 'issues'
+  return issuesLight(stream.issues, stream) === 'done' ? 'notes' : 'issues'
 }
 
-/**
- * Докуда цепочку можно открыть: до текущего шага, а у нарезанных задач — и документацию, даже если какую-то
- * задачу держит пробел или открытый вопрос: выгрузить можно и такой поток.
- */
-export const reachable = (stream: Stream): ChainStep => stream.issues?.state === 'done' ? 'notes' : currentStep(stream)
+/** Докуда цепочку можно открыть: до текущего шага, а с утверждёнными итогами — и документацию. */
+export const reachable = (stream: Stream): ChainStep => stream.outcomes?.approved ? 'notes' : currentStep(stream)
 
 /** Шаг можно открыть: пройденный и текущий, а итоги и задачи — и раньше, если есть сохранённые: их видно. */
 export const openable = (stream: Stream, step: ChainStep): boolean =>
@@ -63,30 +61,22 @@ export const openable = (stream: Stream, step: ChainStep): boolean =>
   || (step === 'issues' && stream.saved_issues.length > 0)
 
 /**
- * Поток выгружен — заметки к нынешним задачам и в нынешний каталог, а файлы задач — в нынешнюю папку задач
- * (folders — их пути из настроек): нарезали заново, каталог или папку задач сменили — выгружать снова.
+ * Поток выгружен — заметки к нынешним утверждённым итогам и в нынешний каталог (folders — пути из настроек):
+ * собрали и утвердили другие итоги или каталог сменили — выгружать снова.
  */
-export const exported = (stream: Stream, folders: Folders): boolean =>
-  exportedNotes(stream, folders.notes) && stream.notes?.issues_root === (folders.issues ?? '')
+export const exported = (stream: Stream, folders: Folders): boolean => exportedNotes(stream, folders.notes)
 
-/**
- * Заметки потока выгружены к нынешним задачам и в нынешний каталог (notes — его путь из настроек), где бы ни
- * лежали файлы задач: номерам задач и решениям потока в каталоге папка задач не важна.
- */
+/** Заметки потока выгружены к нынешним утверждённым итогам и в нынешний каталог (notes — его путь из настроек). */
 export const exportedNotes = (stream: Stream, notes: string | null): boolean =>
-  exportedTo(stream, notes) && !!stream.issues && stream.notes?.issues === stream.issues.run
+  exportedTo(stream, notes) && !!stream.outcomes?.approved && stream.notes?.outcomes === stream.outcomes.run
 
-/** Поток выгружали в нынешний каталог (к каким задачам — неважно): каталог сменили — его выгрузка не там. */
+/** Поток выгружали в нынешний каталог (к каким итогам — неважно): каталог сменили — его выгрузка не там. */
 export const exportedTo = (stream: Stream, notes: string | null): boolean =>
   !!stream.notes && notes !== null && stream.notes.root === notes
 
-/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие и файлы задач — не в счёт. */
+/** Сколько заметок выгружено: оставленные в каталоге исчезнувшие — не в счёт. */
 export const exportedCount = (stream: Stream): number =>
   stream.notes?.notes.filter(note => !note.kept && note.type !== 'issue').length ?? 0
-
-/** Сколько файлов задач выгружено — в папку задач проекта. */
-export const exportedFiles = (stream: Stream): number =>
-  stream.notes?.notes.filter(note => !note.kept && note.type === 'issue').length ?? 0
 
 /**
  * Шаг цепочки потока. Пройденный — зелёный; на текущем — ход совета (идёт или упал) или ваш.
@@ -94,8 +84,8 @@ export const exportedFiles = (stream: Stream): number =>
  * проходит их утверждение: до него ход за вами. Задачи — последний шаг: нарезаны, ни одну не
  * держит пробел или открытый вопрос, пробелов нет, каждый итог вошёл в задачу и каждое решение —
  * в итог, а у каждого итога есть критерии готовности — зелёные; иначе ход за вами, как и если не
- * нарезалось ни одной. Документация — выгружена в каталог и папку задач folders (пути из настроек):
- * выгрузка в другой каталог или с файлами задач в другой папке не в счёт.
+ * нарезалось ни одной. Документация — выгружена к утверждённым итогам в каталог folders (путь из настроек):
+ * выгрузка в другой каталог не в счёт.
  */
 export const chainLight = (stream: Stream, step: ChainStep, folders: Folders): Light => {
   if (step === 'group') return stream.idea ? 'done' : ofRun(stream.discovery) ?? 'yours'
@@ -107,9 +97,9 @@ export const chainLight = (stream: Stream, step: ChainStep, folders: Folders): L
   }
   if (step === 'options' && stream.scope) return stream.choices ? 'done' : ofRun(stream.proposals) ?? 'yours'
   if (step === 'decisions' && stream.choices) return stream.decisions ? 'done' : ofRun(stream.analysis) ?? 'yours'
-  if (step === 'outcomes' && stream.decisions) return stream.issues ? 'done' : ofRun(stream.outcomes) ?? 'yours'
+  if (step === 'outcomes' && stream.decisions) return stream.outcomes?.approved ? 'done' : ofRun(stream.outcomes) ?? 'yours'
   if (step === 'issues' && stream.issues) return issuesLight(stream.issues, stream)
-  if (step === 'notes' && stream.issues?.state === 'done') {
+  if (step === 'notes' && stream.outcomes?.approved) {
     // Черновик новее выгрузки — его ход важнее прежней выгрузки: переводится, упал или ждёт записи.
     const draft = stream.notes_draft
     if (draft && draft.run !== stream.notes?.run) return ofRun(draft) ?? 'yours'
