@@ -54,8 +54,6 @@ from ..models import (
     Group,
     GroupsEdit,
     IdeaDiscovery,
-    Issue,
-    IssueDiscovery,
     LabeledFragment,
     NotesDraft,
     OpenQuestion,
@@ -68,12 +66,13 @@ from ..models import (
     QuestionDiscovery,
     RepositoryScan,
     RepositoryStep,
-    ScannedRepository,
     SelectDecisions,
     SettleTouch,
     StartStream,
     Stream,
     StreamIdea,
+    TaskPlan,
+    TasksDraft,
 )
 from ..notes import Catalog, NotesError
 from ..pipeline import (
@@ -81,7 +80,6 @@ from ..pipeline import (
     DecisionRun,
     DecisionsRun,
     IdeaRun,
-    IssueRun,
     OutcomeRun,
     ProposalRun,
     QuestionRun,
@@ -92,7 +90,6 @@ from ..pipeline import (
     start_analysis,
     start_decisions,
     start_idea,
-    start_issues,
     start_outcomes,
     start_proposals,
     start_questions,
@@ -101,17 +98,11 @@ from ..project import catalog_print, fingerprint, records
 from ..proposals import PROPOSAL_MAX, found_by_question, last_number
 from ..questions import QUESTION_MAX, same_question
 from ..repository import (
-    Inventory,
-    RepositoryError,
-    Source,
     context_prompt,
-    same_copy,
-    working_copy,
 )
 from ..work import (
     carried_analyses,
     carried_options,
-    cutting_plan,
     earlier_choices,
     kept_outcomes,
     kept_work,
@@ -146,8 +137,8 @@ NO_RESEARCH = "Сначала пройдите исследование: шаг�
 RESLICED = "Типы фрагментов поменялись после раскладки — сначала разложите заново"
 # Всё, что ниже отбора решений проекта: другой отбор это сбрасывает.
 BELOW_DECISIONS = {"questions": None, "scope": None, "proposals": None, "choices": None,
-                   "analysis": None, "decisions": None, "outcomes": None, "issues": None,
-                   "earlier": [], "asked": 0, "earlier_outcomes": None, "earlier_issues": None}
+                   "analysis": None, "decisions": None, "outcomes": None,
+                   "earlier": [], "asked": 0, "earlier_outcomes": None}
 # Всё, что ниже шагов «Репозиторий» и «Дизайн»: другой скан, другой выбор на шаге или другая
 # идея это сбрасывает — и отбор решений проекта тоже.
 BELOW_DESIGN = {"decisions_search": None, "project_decisions": None, **BELOW_DECISIONS}
@@ -769,7 +760,7 @@ def approve_scope(council_id: str, group: str, edit: ApproveScope, store: StoreD
                 runs = [proposal_run(council, group, stream, scope, agents, store)]
                 proposals = runs[0].state.model_copy(deep=True)
             changes |= {"proposals": proposals, "choices": None, "analysis": None,
-                        "decisions": None, "outcomes": None, "issues": None,
+                        "decisions": None, "outcomes": None,
                         "earlier": kept_work(stream), **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
@@ -884,7 +875,7 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
                     update={"choices": choices}), agents, store, carried)]
                 analysis = runs[0].state.model_copy(deep=True)
             changes |= {"analysis": analysis, "decisions": None, "outcomes": None,
-                        "issues": None, "earlier": kept_work(stream), **remembered(stream)}
+                        "earlier": kept_work(stream), **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1096,7 +1087,7 @@ def approve_decisions(council_id: str, group: str, edit: ApproveDecisions, store
                 runs = [outcome_run(council, group, stream.model_copy(
                     update={"decisions": decisions}), agents, store, kept)]
                 outcomes = runs[0].state.model_copy(deep=True)
-            changes |= {"outcomes": outcomes, "issues": None, **remembered(stream)}
+            changes |= {"outcomes": outcomes, **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1159,118 +1150,37 @@ def start_outcome_discovery(council_id: str, group: str, store: StoreDep, config
 
 
 @router.post("/{council_id}/streams/{group}/outcomes",
-             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM, **CHANGING,
-                        409: {"description": "Групп уже других, итоги собрали заново или их "
-                                             "ещё нет"},
-                        422: {"description": "Рабочую копию утверждённого скана не прочитать"},
-                        423: {"description": "Совет ещё нарезает прежние итоги на задачи"}})
+             responses={**NOT_FOUND, **NOT_THESE_GROUPS, **NO_STREAM,
+                        409: {"description": "Групп уже других, итоги собрали заново, их ещё нет "
+                                             "или какой-то итог держит открытый вопрос или "
+                                             "пробел"}})
 def approve_outcomes(council_id: str, group: str, edit: ApproveOutcomes, store: StoreDep,
-                     config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                     repositories: RepositoriesDep, notes_of: NotesOfDep) -> Council:
-    """Человек утверждает итоги потока — и совет нарезает их на задачи для coding agents.
-    Итоги с блокировками утвердить тоже можно: задачи, которым не хватает решения, нарезка так
-    и пометит. Если шаг «Репозиторий» пройден сканом, модели читают снимок той же рабочей
-    копии заново: её читают сейчас, и если её не прочитать — 422. Утвердить те же итоги ещё
-    раз — ничего не меняется; итоги — те, что были на экране: собрали заново — 409. Решения
-    проекта с тех пор поменялись или проект сменили — 409, поток снова у отбора, как и на шагах
-    выше: задачи по решениям, принятым без них, не нарезают."""
-    def plan() -> tuple[Council, bool]:
+                     notes_of: NotesOfDep) -> Council:
+    """Человек утверждает итоги потока — и поток можно выгружать в заметки; задачи по ним режет
+    этап «Задачи», на весь совет. Утвердить можно, только если ни один итог не держит открытый
+    вопрос или пробел: задачи режут по готовым итогам. Утвердить те же итоги ещё раз — ничего
+    не меняется; итоги — те, что были на экране: собрали заново — 409. Решения проекта с тех
+    пор поменялись или проект сменили — 409, поток снова у отбора, как и на шагах выше."""
+    with council_lock:
         council = current(council_id, store, edit)
         stream = stream_in(council, group)
         approvable(stream, edit.outcomes_run)
+        if stream.outcomes.approved:
+            return council
         if stream.outcomes.touched:
             raise HTTPException(409, "Новые решения задевают закреплённые итоги — сначала решите "
                                      "по каждому: оставить как есть или пересобрать")
-        anew = cuts_anew(stream, edit.outcomes_run)
-        if anew and running(stream.issues):
-            raise HTTPException(423, "Совет ещё нарезает прежние итоги — дождитесь его")
-        if anew and outdated(council.slicing, council.structure):
-            raise HTTPException(409, RESLICED)
-        if anew:
-            expired(store, council, stream, changed_choice(notes_of(council), stream))
-        return council, anew
-
-    # Сначала дешёвое: лишний запрос не должен ждать git на большой рабочей копии ради 409.
-    with council_lock:
-        council, anew = plan()
-    if not anew:
-        # Те же итоги (повтор, ответ потерялся): ничего не меняется, и код не читаем — его
-        # может уже и не быть.
-        return council
-    # Нарезать нечего (все итоги покрыты перенесёнными задачами) — и код не нужен.
-    sources = (code_of(stream_in(council, group), repositories)
-               if cutting_plan(stream_in(council, group))[1] else [])
-
-    def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
-        stream = stream_in(council, group)
-        runs: list[CouncilRun] = []
-        if not cuts_anew(stream, edit.outcomes_run):
-            return council, runs
-        carried, cut = cutting_plan(stream)
-        if missing and cut:
-            issues = unconnected(start_issues(council.participants, council.judge,
-                                              edit.outcomes_run, stream.decisions or [], carried),
-                                 missing)
-        else:
-            run = issue_run(council, group, stream, sources, agents, store,
-                            carried=carried, cut=cut)
-            if cut:
-                runs = [run]
-                issues = run.state.model_copy(deep=True)
-            else:
-                # Без моделей: только перенесённые задачи. Не run(): его отчёт ждал бы замок
-                # совета, под которым мы уже стоим.
-                issues = run.carried_only()
-        return store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
-            update={"outcomes": stream.outcomes.model_copy(update={"approved": True}),
-                    "issues": issues,
-                    "earlier_issues": remembered(stream)["earlier_issues"]}))}), runs
-
-    return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
-
-
-@router.post("/{council_id}/streams/{group}/issues/discovery", status_code=202,
-             responses={**NOT_FOUND, **CANNOT_START, **NO_STREAM,
-                        422: {"description": "Рабочую копию утверждённого скана не прочитать"}})
-def start_issue_discovery(council_id: str, group: str, store: StoreDep, config: ConfigDep,
-                          agents: AgentsDep, launch: LauncherDep,
-                          repositories: RepositoriesDep, notes_of: NotesOfDep) -> Council:
-    """Нарезает утверждённые итоги на задачи заново: после сбоя или если при утверждении не
-    было подключения к моделям. Код читается заново; тот же код — повтор не платит второй раз
-    за уже данные ответы. Нарезанные задачи он не трогает: заново их нарежут по другим итогам.
-    Решения проекта с тех пор поменялись или проект сменили — 409, как и при утверждении итогов."""
-    def checked(council: Council) -> Stream:
-        stream = stream_in(council, group)
-        if stream.issues is None:
-            raise HTTPException(409, "Сначала утвердите итоги")
-        if running(stream.issues):
-            raise HTTPException(409, "Этот ход уже идёт")
-        if stream.issues.state == "done":
-            raise HTTPException(409, "Задачи уже нарезаны — заново их нарежут по другим итогам")
-        if outdated(council.slicing, council.structure):
-            raise HTTPException(409, RESLICED)
-        return stream
-
-    def ready(council: Council) -> None:
-        refused(changed_choice(notes_of(council), checked(council)))
-
-    expired_before(store, council_id, group, cutting(group),
-                   lambda council: changed_choice(notes_of(council), checked(council)))
-    # Сначала дешёвое, потом git: запрос, которому всё равно откажут, рабочую копию не читает.
-    council = store.get_council(council_id)
+        held = [outcome.id for outcome in stream.outcomes.outcomes
+                if outcome.blocked_by or outcome.gaps]
+        if held:
+            raise HTTPException(409, f"Итоги {', '.join(held)} держит открытый вопрос или пробел "
+                                     "— сначала решите их")
+        expired(store, council, stream, changed_choice(notes_of(council), stream))
+        council = store.update_council(council_id, {"streams": replaced(council, stream.model_copy(
+            update={"outcomes": stream.outcomes.model_copy(update={"approved": True})}))})
     if council is None:
         raise HTTPException(404, MISSING)
-    ready(council)
-    sources = code_of(stream_in(council, group), repositories)
-
-    def build(council: Council, report: Callable) -> IssueRun:
-        stream = stream_in(council, group)
-        carried, cut = cutting_plan(stream)
-        return issue_run(council, group, stream, sources, agents, store, report=report,
-                         carried=carried, cut=cut)
-
-    return start_run(council_id, store, config, agents, launch, cutting(group), ready, None,
-                     build)
+    return council
 
 
 @router.post("/{council_id}/streams/{group}/outcomes/touched", status_code=200,
@@ -1310,7 +1220,7 @@ def settle_touch(council_id: str, group: str, edit: SettleTouch, store: StoreDep
             else:
                 runs = [outcome_run(council, group, stream, agents, store, kept)]
                 outcomes = runs[0].state.model_copy(deep=True)
-            changes = {"outcomes": outcomes, "issues": None, **remembered(stream)}
+            changes = {"outcomes": outcomes, **remembered(stream)}
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -1318,7 +1228,7 @@ def settle_touch(council_id: str, group: str, edit: SettleTouch, store: StoreDep
 
 
 def approvable(stream: Stream, outcomes_run: str) -> None:
-    """Итоги, которые утверждают: собранные, к нынешней сборке, и есть что нарезать."""
+    """Итоги, которые утверждают: собранные, к нынешней сборке, и они есть."""
     run = stream.outcomes
     if stream.decisions is None or run is None:
         raise HTTPException(409, "Итогов ещё нет: сначала зафиксируйте решения")
@@ -1329,54 +1239,7 @@ def approvable(stream: Stream, outcomes_run: str) -> None:
     if run.state != "done":
         raise HTTPException(409, "Итоги не собрались — соберите их заново")
     if not run.outcomes:
-        raise HTTPException(409, "Итогов нет — нарезать на задачи нечего")
-
-
-def cuts_anew(stream: Stream, outcomes_run: str) -> bool:
-    """Нарезают заново, если ещё не нарезали или нарезали другие итоги."""
-    return stream.issues is None or stream.issues.outcomes != outcomes_run
-
-
-def code_of(stream: Stream, repositories: Path | None) -> list[Source]:
-    """Код для нарезки: рабочие копии утверждённого скана — заново, какие они сейчас, под теми
-    же папками снимка, что и в карте. Шаг пройден без скана — кода нет. Какую-то не прочитать —
-    422: нарезка без кода, которого ждали, молча разошлась бы с картой."""
-    step, scan = stream.repository, stream.scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return []
-    # Скан, что корня не помнит (сделан раньше), не проверит, та ли это рабочая копия.
-    if not scan.repositories or not all(source.root for source in scan.repositories):
-        raise HTTPException(422, "Скан сделан, когда совет ещё не запоминал, какую рабочую копию "
-                                 "читал, — просканируйте репозиторий заново")
-    return [Source(source.name, source.path, again(source, repositories))
-            for source in scan.repositories]
-
-
-def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
-    """Рабочая копия скана, какая она сейчас. Тот же путь от другого каталога репозиториев —
-    уже другая рабочая копия: читать её под картой прежней нельзя. Но тот же каталог, видный
-    по-другому (снаружи докера и в нём), — та же копия (same_copy)."""
-    try:
-        found = working_copy(source.within if source.within and repositories is not None
-                             else source.path, repositories)
-    except RepositoryError as exc:
-        raise HTTPException(422, f"Рабочую копию {source.path} не прочитать: {exc}") from None
-    if not same_copy(source, found.root):
-        raise HTTPException(422, f"По пути {source.path} теперь другая рабочая копия: "
-                                 f"сканировали {source.root}, а сейчас это {found.root} — "
-                                 "просканируйте заново")
-    return found
-
-
-def issue_run(council: Council, group: str, stream: Stream, sources: list[Source],
-              runner: Runner, store: Store, report: Callable | None = None, *,
-              carried: list[Issue] | None = None, cut: list[str] | None = None) -> IssueRun:
-    """carried — задачи закреплённых итогов, которые переносятся; cut — что ещё нарезать."""
-    return IssueRun(council.id, stream, fragments_of(council, group_of(council, group)),
-                    council.participants, council.judge, runner,
-                    report or reporter(store, council.id, cutting(group)), sources=sources,
-                    repository=repository_map(stream), design=design_map(stream),
-                    carried=carried or [], cut=cut)
+        raise HTTPException(409, "Итогов нет — утверждать нечего")
 
 
 def decided(scope: list[OpenQuestion], found: dict[str, list[Proposal]],
@@ -1488,7 +1351,7 @@ def launched_all(store: Store, council_id: str, launch: Launcher, council: Counc
 
 def unconnected[S: (IdeaDiscovery, RepositoryScan, DesignScan, DecisionsSearch,
                     QuestionDiscovery, ProposalDiscovery, DecisionAnalysis, OutcomeDiscovery,
-                    IssueDiscovery, NotesDraft)](state: S, missing: list[str]) -> S:
+                    NotesDraft, TaskPlan, TasksDraft)](state: S, missing: list[str]) -> S:
     """Ход, который не запустить: к моделям нет подключения. Записан упавшим с причиной."""
     return state.model_copy(update={
         "state": "failed", "error": f"Нет подключения к моделям: {', '.join(missing)}"})
@@ -1522,11 +1385,6 @@ def checking(group: str) -> Slot:
 def assembling(group: str) -> Slot:
     """Сборка итогов потока как место хода."""
     return stream_slot(group, "outcomes")
-
-
-def cutting(group: str) -> Slot:
-    """Нарезка итогов потока на задачи как место хода."""
-    return stream_slot(group, "issues")
 
 
 def below_running(stream: Stream, field: str) -> bool:

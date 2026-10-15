@@ -9,9 +9,8 @@
 Соседи у перенесённого вопроса поменялись, а его варианты и проверку искали без них: это
 осознанно — новый вопрос, в свою очередь, видит все остальные.
 
-То же с итогами и задачами: итог, который был готов и чьи решения те же, закрепляется — его не
-пересобирают, а модели видят его данностью; задачи такого итога (тот же итог — те же задачи,
-ничто их не держит) переносятся, а не нарезаются заново: они уже в разработке.
+То же с итогами: итог, который был готов и чьи решения те же, закрепляется — его не
+пересобирают, а модели видят его данностью.
 """
 
 from collections.abc import Collection, Iterable, Mapping
@@ -20,8 +19,6 @@ from .models import (
     Choice,
     Decision,
     DecisionAnalysis,
-    Issue,
-    IssueDiscovery,
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
@@ -34,7 +31,6 @@ from .models import (
 from .pipeline import (
     choice_entry,
     decisions_key,
-    outcome_print,
     project_prints,
     question_key,
     rests_on,
@@ -155,13 +151,11 @@ def outcome_ready(outcome: Outcome) -> bool:
     return not outcome.blocked_by and not outcome.gaps and bool(outcome.acceptance_criteria)
 
 
-def remembered(stream: Stream) -> dict[str, OutcomeDiscovery | IssueDiscovery | None]:
-    """Что запомнить, когда правка снимает итоги и задачи: последние собранные и нарезанные — из
-    них закрепят готовое, а не соберут и не нарежут заново."""
+def remembered(stream: Stream) -> dict[str, OutcomeDiscovery | None]:
+    """Что запомнить, когда правка снимает итоги: последние собранные — из них закрепят готовое,
+    а не соберут заново."""
     outcomes = stream.outcomes if stream.outcomes and stream.outcomes.state == "done" else None
-    issues = stream.issues if stream.issues and stream.issues.state == "done" else None
-    return {"earlier_outcomes": outcomes or stream.earlier_outcomes,
-            "earlier_issues": issues or stream.earlier_issues}
+    return {"earlier_outcomes": outcomes or stream.earlier_outcomes}
 
 
 def kept_outcomes(stream: Stream, scope: list[OpenQuestion], decisions: list[Decision],
@@ -223,65 +217,6 @@ def active_decisions(stream: Stream) -> set[str]:
             if decision.status == "active"}
 
 
-def carried_issues(stream: Stream, outcomes: list[Outcome]) -> list[Issue]:
-    """Задачи прежней нарезки, которые остаются: каждый их итог — тот же, что тогда нарезали, и
-    по-прежнему готов (решение не пропало — иначе задачу бы заблокировали), задача ничем не
-    заблокирована, каждое её решение — то же (номер ADR — к новому отбору), и всё, от чего она
-    зависит, тоже остаётся. Они уже в разработке — их не нарезают заново."""
-    before = remembered(stream)["earlier_issues"]
-    if not isinstance(before, IssueDiscovery):
-        return []
-    projects = project_prints(stream.project_decisions or [])
-    prints = {outcome.id: outcome_print(outcome, stream.scope or [], projects)
-              for outcome in outcomes if outcome_ready(outcome)}
-    # Решения итога — и реализуемые, и те, на которые он опирается: задача стоит на всех (их
-    # наследует при нарезке). Отпечаток итога номеров не держит — они сдвигаются с отбором, —
-    # поэтому какие именно это решения, сверяется здесь, по номерам к нынешнему отбору.
-    rests = {outcome.id: {*outcome.adr_ids, *outcome.relies_on_adr_ids} for outcome in outcomes}
-    fit = {issue.id: renumbered for issue in before.issues
-           if not issue.blocked_by and issue.outcome_ids
-           and all(name in prints and before.cut.get(name) == prints[name]
-                   for name in issue.outcome_ids)
-           and (renumbered := with_new_adrs(issue, before.decisions, stream)) is not None
-           and all(rests[name] <= set(renumbered.adr_ids) for name in issue.outcome_ids)}
-    while dropped := [name for name, issue in fit.items()
-                      if any(other not in fit for other in issue.depends_on)]:
-        for name in dropped:
-            del fit[name]
-    return [fit[issue.id] for issue in before.issues if issue.id in fit]
-
-
-def with_new_adrs(issue: Issue, decided: list[str], stream: Stream) -> Issue | None:
-    """Задача с номерами ADR по нынешнему отбору: ADR-n прежней нарезки — n-е из решений, к
-    которым резали (decided). Решение уже не то — задача не та: None."""
-    position = {question.id: n for n, question in enumerate(stream.scope or [], 1)}
-    now = {decision.question_id: decision for decision in stream.decisions or []}
-    adrs = []
-    for name in issue.adr_ids:
-        n = int(name.split("-")[1])
-        entry = decided[n - 1] if 0 < n <= len(decided) else ""
-        question = entry.split(": ", 1)[0]
-        decision = now.get(question)
-        if (decision is None or decision.proposal is None or question not in position
-                or decisions_key([decision])[0] != entry):
-            return None
-        adrs.append(f"ADR-{position[question]}")
-    return issue.model_copy(update={
-        "adr_ids": sorted(adrs, key=lambda name: int(name.split("-")[1]))})
-
-
-def uncut(stream: Stream, outcomes: list[Outcome], carried: list[Issue]) -> list[str]:
-    """Итоги, которые ещё надо нарезать: все, кроме целиком покрытых перенесёнными задачами —
-    у такого итога есть перенесённая задача, и ни одной его прежней задачи не потеряли."""
-    before = remembered(stream)["earlier_issues"]
-    previous = before.issues if isinstance(before, IssueDiscovery) else []
-    kept = {issue.id for issue in carried}
-    covered = {name for issue in carried for name in issue.outcome_ids}
-    lost = {name for issue in previous if issue.id not in kept for name in issue.outcome_ids}
-    return [outcome.id for outcome in outcomes
-            if outcome.id not in covered or outcome.id in lost]
-
-
 def known_decisions(stream: Stream) -> list[Decision]:
     """Решения, какие известны сейчас: зафиксированные, а пока их нет (после правки отбора или
     выбора) — прежние по тем же вопросам к тому же выбору; выбор ещё не утверждали — к прежнему."""
@@ -311,49 +246,15 @@ def saved_outcomes_of(stream: Stream) -> list[Outcome]:
     return kept_outcomes(stream, stream.scope, known_decisions(stream))
 
 
-def saved_issues_of(stream: Stream) -> list[Issue]:
-    """Прежние задачи, которые перенесутся, пока поток до нарезки не дошёл: к итогам, какие есть
-    (собранные, в идущей сборке — закреплённые, а пока сборки нет — те, что закрепятся), и
-    решениям, какие известны."""
-    if stream.issues is not None or stream.scope is None:
-        return []
-    if stream.outcomes is None:
-        outcomes = saved_outcomes_of(stream)
-    elif stream.outcomes.state == "done":
-        # Итог, который задевают новые решения, ещё могут пересобрать: его задачи не сохранены,
-        # пока человек не оставил его как есть.
-        touched = {touch.outcome_id for touch in stream.outcomes.touched}
-        outcomes = [o for o in stream.outcomes.outcomes if o.id not in touched]
-    else:
-        outcomes = [o for o in stream.outcomes.outcomes if o.id in stream.outcomes.kept]
-    return carried_issues(stream.model_copy(update={"decisions": known_decisions(stream)}),
-                          outcomes)
-
-
 def with_kept(stream: Stream) -> Stream:
-    """Поток, сохранённый, пока сборка и нарезка начинались пустыми (у сборки — только номера
-    закреплённых): незаконченная получает закреплённые итоги и перенесённые задачи, как теперь
-    начинается любая, — иначе их не видно, пока её не запустят снова. Менять нечего — тот же."""
-    changes: dict[str, OutcomeDiscovery | IssueDiscovery] = {}
+    """Поток, сохранённый, пока сборка начиналась пустой (только номера закреплённых):
+    незаконченная получает закреплённые итоги, как теперь начинается любая, — иначе их не видно,
+    пока её не запустят снова. Менять нечего — тот же."""
+    changes: dict[str, OutcomeDiscovery] = {}
     run = stream.outcomes
     if (run is not None and run.state != "done" and run.kept and not run.outcomes
             and stream.scope is not None and stream.decisions is not None):
         changes["outcomes"] = run.model_copy(update={"outcomes": [
             outcome for outcome in kept_outcomes(stream, stream.scope, stream.decisions)
             if outcome.id in run.kept]})
-    cut = stream.issues
-    if (cut is not None and cut.state != "done" and not cut.issues
-            and stream.outcomes is not None and stream.outcomes.state == "done"):
-        carried = carried_issues(stream, stream.outcomes.outcomes)
-        if carried:
-            changes["issues"] = cut.model_copy(update={
-                "issues": carried, "kept": [issue.id for issue in carried]})
     return stream.model_copy(update=changes) if changes else stream
-
-
-def cutting_plan(stream: Stream) -> tuple[list[Issue], list[str]]:
-    """Что перенести и что нарезать: задачи прежней нарезки тех же итогов и итоги, которые
-    ими не покрыты."""
-    outcomes = stream.outcomes.outcomes if stream.outcomes else []
-    carried = carried_issues(stream, outcomes)
-    return carried, uncut(stream, outcomes, carried)

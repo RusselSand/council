@@ -1,4 +1,4 @@
-"""Работа, которая переносится через правку отбора: задачи — с номерами ADR по новому отбору."""
+"""Работа, которая переносится через правку отбора: проверки и итоги."""
 
 from spec_council.decisions import Analysis, Fix
 from spec_council.models import (
@@ -6,8 +6,6 @@ from spec_council.models import (
     Decision,
     DecisionAnalysis,
     DecisionFix,
-    Issue,
-    IssueDiscovery,
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
@@ -21,23 +19,11 @@ from spec_council.pipeline import (
     outcome_print,
     project_prints,
 )
-from spec_council.work import carried_analyses, carried_issues, kept_outcomes, with_new_adrs
+from spec_council.work import carried_analyses, kept_outcomes
 
 
 def question(n):
     return OpenQuestion(id=f"Q{n}", text=f"Вопрос {n}?", source="added")
-
-
-def test_a_carried_issue_gets_the_adr_numbers_of_the_new_scope():
-    # Q1 убрали: решение по Q2 было ADR-2, теперь оно первое — ADR-1.
-    stream = Stream(group="C", scope=[question(2), question(3)], decisions=[
-        Decision(question_id="Q2", proposal="P2", rationale="Так.", rationale_by="human"),
-        Decision(question_id="Q3", proposal="P3", rationale="Иначе.", rationale_by="human")])
-    issue = Issue(id="I1", title="Задача", user_story="As a team, I want it.", adr_ids=["ADR-2"])
-    moved = with_new_adrs(issue, ["Q1: P1: Было.", "Q2: P2: Так."], stream)
-    assert moved is not None and moved.adr_ids == ["ADR-1"]
-    # Решение по Q2 с тех пор другое — задача уже не та.
-    assert with_new_adrs(issue, ["Q1: P1: Было.", "Q2: P2: Раньше иначе."], stream) is None
 
 
 def test_a_check_is_carried_while_the_choice_it_rests_on_is_the_same():
@@ -126,20 +112,6 @@ def test_an_outcome_that_only_relies_on_decisions_is_kept_while_they_are_the_sam
     assert [o.id for o in kept_outcomes(stream, stream.scope, DECIDED3)] == ["O1"]
     changed = [*DECIDED3[:1], DECIDED3[1].model_copy(update={"rationale": "Иначе."}), DECIDED3[2]]
     assert kept_outcomes(stream, stream.scope, changed) == []
-
-
-def test_an_issue_is_not_carried_when_its_outcome_relies_on_another_decision_now():
-    """Отпечаток итога номеров решений не держит; итог стал опираться на другое решение — та же
-    по тексту задача на прежнем решении не переносится."""
-    issue = Issue(id="I1", title="Таблица", user_story="As a user, I want a table.",
-                  outcome_ids=["O1"], adr_ids=["ADR-1", "ADR-2"])
-    scope = [question(n) for n in (1, 2, 3)]
-    earlier = IssueDiscovery(state="done", steps=[], issues=[issue],
-                             cut={"O1": outcome_print(ready(), scope)},
-                             decisions=decisions_key(DECIDED3))
-    stream = Stream(group="C", scope=scope, decisions=DECIDED3, earlier_issues=earlier)
-    assert [i.id for i in carried_issues(stream, [ready()])] == ["I1"]
-    assert carried_issues(stream, [ready(relies_on_adr_ids=["ADR-3"])]) == []
 
 
 def test_the_print_of_an_outcome_names_decisions_by_their_questions():

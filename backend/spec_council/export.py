@@ -46,12 +46,12 @@ WORDS = {
     "russian": {"because": "потому что", "criteria": "Критерии готовности", "issues": "Задачи",
                 "entry": "Где менять", "now": "Что там сейчас", "scope": "Что сделать",
                 "outcomes": "Итоги", "decisions": "Решения", "keep": "Соблюдать",
-                "risks": "Риски", "after": "После задач",
+                "risks": "Риски", "after": "После задач", "open": "Открытые вопросы",
                 "commit": "В финальном коммите укажите номер задачи — {id}."},
     "english": {"because": "because", "criteria": "Acceptance criteria", "issues": "Issues",
                 "entry": "Where to change", "now": "What is there now", "scope": "To do",
                 "outcomes": "Outcomes", "decisions": "Decisions", "keep": "Keep",
-                "risks": "Risks", "after": "After the issues",
+                "risks": "Risks", "after": "After the issues", "open": "Open questions",
                 "commit": "Put the issue number {id} into the final commit."},
 }
 ALIASES = {"русский": "russian", "ru": "russian", "en": "english", "английский": "english"}
@@ -207,9 +207,10 @@ def criterion(item: str) -> str:
 
 
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-             words: Mapping[str, str]) -> tuple[list[Part], list[str]]:
+             words: Mapping[str, str]) -> tuple[list[Part], list[str], dict[str, str]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
-    выгружается — с причиной."""
+    выгружается — с причиной, и какой частью ложится каждое решение потока (ADR-n) и каждый
+    итог (O1): по ним план задач называет их номерами заметок."""
     found = found_by_question(stream.proposals, stream.choices)
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
     questions: list[Part] = []
@@ -228,9 +229,9 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
             adr_of[f"ADR-{n}"] = adr.key
             if asked.links != ("idea",):
                 external.add(adr.key)
-    outcomes, skipped = outcome_parts(stream, adr_of, external, words, taken)
+    outcomes, skipped, outcome_of = outcome_parts(stream, adr_of, external, words, taken)
     return ([Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-             *outcomes], skipped)
+             *outcomes], skipped, adr_of | outcome_of)
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -259,11 +260,13 @@ def question_parts(question: OpenQuestion, options: list[dict[str, str]],
 
 
 def outcome_parts(stream: Stream, adr_of: Mapping[str, str], external: set[str],
-                  words: Mapping[str, str], taken: set[str]) -> tuple[list[Part], list[str]]:
-    """Итоги, что лягут. Итог ссылается только на решения своей идеи: без них он не
-    выгружается."""
+                  words: Mapping[str, str], taken: set[str]
+                  ) -> tuple[list[Part], list[str], dict[str, str]]:
+    """Итоги, что лягут, — и ключ части каждого. Итог ссылается только на решения своей идеи:
+    без них он не выгружается."""
     parts: list[Part] = []
     skipped: list[str] = []
+    outcome_of: dict[str, str] = {}
     outcomes = stream.outcomes.outcomes if stream.outcomes else []
     keys = keyed([f"o:{same_question(outcome.title)}" for outcome in outcomes],
                  [same_question(outcome.behavior) for outcome in outcomes], taken)
@@ -279,7 +282,8 @@ def outcome_parts(stream: Stream, adr_of: Mapping[str, str], external: set[str],
             continue
         text = outcome_text(outcome.title, outcome.behavior, outcome.acceptance_criteria, words)
         parts.append(Part(key, "outcome", text, tuple(dict.fromkeys(own))))
-    return parts, skipped
+        outcome_of[outcome.id] = key
+    return parts, skipped, outcome_of
 
 
 def digest_of(path: Path) -> str:
@@ -292,15 +296,16 @@ def digest_of(path: Path) -> str:
 def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: Shelf,
             previous: NotesExport | None, words: Mapping[str, str],
             language: str, reserved: Collection[str] = ()
-            ) -> tuple[list[NotePlan], list[VanishedNote], list[str]]:
+            ) -> tuple[list[NotePlan], list[VanishedNote], list[str], dict[str, str]]:
     """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие; что
-    не выгружается. language — язык заметок: не тот, что у прошлой выгрузки, — прежние тексты не
-    берутся, их напишет перевод заново (файлы, правленные руками, — нет). reserved — номера
+    не выгружается; номер заметки у каждого решения (ADR-n) и итога (O1) потока, что ляжет.
+    language — язык заметок: не тот, что у прошлой выгрузки, — прежние тексты не берутся, их
+    напишет перевод заново (файлы, правленные руками, — нет). reserved — номера
     заметок из выгрузок других потоков: их заметку могли удалить руками, но номер всё ещё их —
     новой заметке его не дают, а прежний номер потока, который записан и за другим, — уже не
     его."""
     catalog = shelf.catalog
-    parts, skipped = parts_of(stream, fragments, catalog, words)
+    parts, skipped, refs = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
@@ -327,7 +332,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
                 if key not in claimed and old.id in catalog.notes and old.id not in reserved]
-    return notes, vanished, skipped
+    return notes, vanished, skipped, {name: ids[key] for name, key in refs.items()}
 
 
 def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: str | None,

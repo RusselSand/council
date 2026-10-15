@@ -25,7 +25,6 @@ from .models import (
     DesignScan,
     DesignStep,
     IdeaDiscovery,
-    IssueDiscovery,
     NotesDraft,
     OutcomeDiscovery,
     ProposalDiscovery,
@@ -35,6 +34,8 @@ from .models import (
     Slicing,
     Stream,
     Structure,
+    TaskPlan,
+    TasksDraft,
 )
 from .work import with_kept
 
@@ -219,10 +220,15 @@ def interrupted(council: Council) -> Council:
     остановлен. Записываем их упавшими — тогда их можно запустить снова, а ответы, за которые
     уже заплачено, повтор возьмёт из лотка даром. Ничего не шло — тот же совет."""
     changes: dict[str, Any] = {}
-    for field in ("slicing", "structure"):
+    for field in ("slicing", "structure", "tasks", "tasks_draft"):
         state = getattr(council, field)
         if running(state):
             changes[field] = halted(state)
+    research = council.research
+    if research is not None and (running(research.scan) or running(research.design_scan)):
+        changes["research"] = research.model_copy(update={
+            field: halted(getattr(research, field)) for field in ("scan", "design_scan")
+            if running(getattr(research, field))})
     streams = [stream.model_copy(update={
         field: halted(getattr(stream, field))
         for field in STREAM_RUNS if running(getattr(stream, field))
@@ -234,13 +240,13 @@ def interrupted(council: Council) -> Council:
 
 def running(state: Slicing | Structure | IdeaDiscovery | RepositoryScan | DesignScan
             | DecisionsSearch | QuestionDiscovery | ProposalDiscovery | DecisionAnalysis
-            | OutcomeDiscovery | IssueDiscovery | NotesDraft | None) -> bool:
+            | OutcomeDiscovery | TaskPlan | NotesDraft | TasksDraft | None) -> bool:
     return state is not None and state.state == "running"
 
 
 def halted[S: (Slicing, Structure, IdeaDiscovery, RepositoryScan, DesignScan,
                DecisionsSearch, QuestionDiscovery, ProposalDiscovery, DecisionAnalysis,
-               OutcomeDiscovery, IssueDiscovery, NotesDraft)](state: S) -> S:
+               OutcomeDiscovery, TaskPlan, NotesDraft, TasksDraft)](state: S) -> S:
     """Ход, прерванный остановкой: упал, и шаги с моделями, что работали, — тоже."""
     steps = [step.model_copy(update={
         "state": "failed" if step.state == "running" else step.state,

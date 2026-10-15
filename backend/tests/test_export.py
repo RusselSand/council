@@ -97,7 +97,12 @@ def shelf(root):
 
 
 def draft(root, stream=STREAM, previous=None, language="Russian"):
-    return drafted(stream, FRAGMENTS, shelf(root), previous, WORDS, language)
+    """Черновик без номеров по именам совета: их проверяет refs_of."""
+    return drafted(stream, FRAGMENTS, shelf(root), previous, WORDS, language)[:3]
+
+
+def refs_of(root, stream=STREAM, previous=None):
+    return drafted(stream, FRAGMENTS, shelf(root), previous, WORDS, "Russian")[3]
 
 
 def export(root, stream=STREAM, previous=None, edits=None, delete=()):
@@ -124,6 +129,10 @@ def test_a_stream_becomes_linked_notes_with_numbers_after_the_catalog(root):
         ("ADR-0002", "adr", "create"), ("ADR-0003", "adr", "create"),
         ("OUT-0002", "outcome", "create")]
     note = by_id(notes)
+    # Имена совета — номерами заметок: так план задач называет итоги и решения.
+    assert {name: ref for name, ref in refs_of(root).items()
+            if name.startswith(("O", "ADR-"))} == {
+        "ADR-1": "ADR-0002", "ADR-3": "ADR-0003", "O1": "OUT-0002"}
     assert note["OQ-0002"].text == "Что запускает деплой?"            # формулировка заметки
     assert note["OQ-0002"].links == ["IDEA-0002"]
     assert note["OQ-0004"].links == ["ADR-0001"]                       # пересматривает прошлое

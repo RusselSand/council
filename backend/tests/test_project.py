@@ -49,6 +49,7 @@ from tests.test_streams import (
     client,
     confirm,
     decide,
+    free_c,
     grouped,
     passes,
     scans,
@@ -453,7 +454,7 @@ def test_only_an_export_to_this_catalog_makes_its_decisions_the_streams_own(
     skip(council_id, "C")
     # Поток выгружал ADR-0001 и ADR-0002. В этот каталог — они его, прошлых решений нет; в
     # другой (папку документации сменили) — здесь под теми номерами чужие решения, и их отбирают.
-    record = NotesExport(run="n1", issues="i1", language="Russian", root=str(tmp_path / where),
+    record = NotesExport(run="n1", outcomes="o1", language="Russian", root=str(tmp_path / where),
                          notes=[ExportedNote(key=f"a:{n}", id=f"ADR-000{n}", type="adr",
                                              generated="…", written="…", digest="")
                                 for n in (1, 2)])
@@ -570,26 +571,19 @@ def test_another_folder_without_past_decisions_leaves_the_questions_alone(agents
     assert streams_of(council_id)["C"].scope is not None
 
 
-@pytest.mark.parametrize("retry", [False, True])
-def test_outcomes_are_not_cut_past_a_project_with_unselected_decisions(agents, tmp_path, retry):
+def test_outcomes_are_not_approved_past_a_project_with_unselected_decisions(agents, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     app.dependency_overrides[get_notes_of] = lambda: lambda council: empty
     council_id = grouped()
     confirm(council_id)
-    chosen_c(council_id)
-    assert decide(council_id, "C", DECIDED).status_code == 200              # итоги собраны
-    if retry:
-        agents.online = set()
-        assert approves(council_id, "C").status_code == 200             # нарезка — упала
-        agents.online = {"sol", "fable"}
+    free_c(council_id)                                                     # итоги собраны
     app.dependency_overrides[get_notes_of] = lambda: lambda council: put(tmp_path / "other")
-    res = (client.post(f"/api/councils/{council_id}/streams/C/issues/discovery") if retry
-           else approves(council_id, "C"))
+    res = approves(council_id, "C")
     assert res.status_code == 409 and "сменили" in res.json()["detail"]
     stream = streams_of(council_id)["C"]
-    assert (stream.decisions_search.state, stream.questions, stream.outcomes,
-            stream.issues) == ("failed", None, None, None)
+    assert (stream.decisions_search.state, stream.questions, stream.outcomes) == (
+        "failed", None, None)
 
 
 @pytest.mark.parametrize("retry", [False, True])

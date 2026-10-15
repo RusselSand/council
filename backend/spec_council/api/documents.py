@@ -92,8 +92,8 @@ def approved(stream: Stream) -> str:
     return stream.outcomes.run
 
 
-def drafted_for(council: Council, group: str, stream: Stream, shelf: Shelf,
-                store: Store) -> tuple[list[NotePlan], list[VanishedNote], list[str]]:
+def drafted_for(council: Council, group: str, stream: Stream, shelf: Shelf, store: Store
+                ) -> tuple[list[NotePlan], list[VanishedNote], list[str], dict[str, str]]:
     """Что выгрузил бы совет сейчас. Не выгрузить (пересматриваемое решение пропало из
     каталога) — 422 с причиной."""
     fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
@@ -116,11 +116,11 @@ def reserved_by_others(store: Store, council_id: str, group: str, root: Path) ->
 
 def draft_of(council: Council, group: str, stream: Stream, shelf: Shelf,
              store: Store) -> NotesDraft:
-    notes, vanished, skipped = drafted_for(council, group, stream, shelf, store)
+    notes, vanished, skipped, refs = drafted_for(council, group, stream, shelf, store)
     return NotesDraft(state="running", run=uuid4().hex[:8], outcomes=approved(stream),
                       language=notes_language(), root=str(shelf.root),
                       steps=translating(council.judge), notes=notes, vanished=vanished,
-                      skipped=skipped)
+                      skipped=skipped, refs=refs)
 
 
 def drafting(group: str):
@@ -196,7 +196,7 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         stream = stream_in(council, group)
         draft = checked_draft(stream, edit, root)
         shelf = shelf_of(root)
-        fresh, vanished, _ = drafted_for(council, group, stream, shelf, store)
+        fresh, vanished, _, _ = drafted_for(council, group, stream, shelf, store)
         if shape(fresh) != shape(draft.notes) or vanished != draft.vanished:
             # и текст: удаляют то, что видели
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
@@ -215,7 +215,8 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
         def keep(exported: list[ExportedNote]) -> None:
             # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.
             record = NotesExport(run=draft.run, outcomes=draft.outcomes,
-                                 language=draft.language, root=str(root), notes=exported)
+                                 language=draft.language, root=str(root), notes=exported,
+                                 refs=draft.refs)
             saved.append(store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"notes": record}))}))
 
