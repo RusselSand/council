@@ -56,7 +56,8 @@ Check the plan as one piece of work:
   the boundary;
 - every OUTCOME that still needs work has at least one ISSUE;
 - an OUTCOME is split only where one change does not fit or one part must come first;
-- the order and `depends_on` follow what each ISSUE needs, without cycles.
+- the order and `depends_on` follow what each ISSUE needs, and `depends_on` names only earlier
+  ISSUES.
 
 Do not split the work mechanically by files or layers, and do not prefer a larger or smaller
 number of ISSUES for its own sake. Do not use majority voting: the number of plans that agree does
@@ -117,7 +118,7 @@ Before answering, check that:
 
 - every ISSUE belongs to exactly one OUTCOME, and every OUTCOME that still needs work has an ISSUE;
 - no work is in two ISSUES, and no boundary contradicts another ISSUE;
-- the order and `depends_on` are without cycles;
+- `depends_on` names only earlier ISSUES;
 - `scope` describes behavior and contract, with explicit boundaries, and no tests;
 - no implementation is decided that the human has not set and the code does not already have;
 - the free text names only note IDs and ISSUE IDs;

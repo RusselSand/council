@@ -142,7 +142,8 @@ def test_the_council_plans_tasks_by_note_numbers_and_writes_them_as_issue_files(
     assert issue.open_questions == ["Где хранить долю?"]
     assert (plan.uncovered, plan.skipped, plan.code) == ([], [], False)
     stream = streams_of(council_id)["C"]
-    assert plan.basis == {"C": f"{stream.outcomes.run}:{stream.notes.run}"}
+    assert plan.basis == {"C": f"{stream.outcomes.run}:{stream.notes.run}",
+                          "research": "skipped:|skipped:"}
     # Модели видят итоги и решения номерами заметок, а решения — с их текстом.
     prompt = agents.prompts["task_plan"]
     [outcome] = json.loads(section(prompt, "OUTCOMES"))
@@ -216,6 +217,18 @@ def test_a_changed_stream_leaves_the_plan_to_the_human_who_resets_it(agents, fol
     assert plans(council_id).status_code == 409                       # итоги не утверждены
     exported(council_id)
     assert plans(council_id).status_code == 202
+
+
+def test_research_passed_again_after_the_plan_makes_it_stale(agents, folders):
+    """План читал карту кода и описание макета исследования: прошли его заново — план к прежнему,
+    и его не выгрузить, пока не сбросят."""
+    council_id = ready()
+    plans(council_id)
+    body = {"run": "g1", "revision": 0}
+    assert client.post(f"/api/councils/{council_id}/research/reset", json=body).status_code == 200
+    res = drafts(council_id)
+    assert res.status_code == 409 and "План устарел" in res.json()["detail"]
+    assert council(council_id).tasks is not None                       # сам план не сброшен
 
 
 def test_a_running_plan_is_not_reset_or_started_twice(agents, folders):

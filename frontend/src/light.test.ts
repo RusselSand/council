@@ -233,7 +233,7 @@ describe('светофор', () => {
     const ready = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                          assembled('done', [result()]), true)
     const written = { ...ready, notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: { O1: 'OUT-0001' } } }
-    const plan = (state: TaskPlan['state'], basis = { A: 'o1:n1' }): TaskPlan => ({
+    const plan = (state: TaskPlan['state'], basis: Record<string, string> = { A: 'o1:n1', research: 'skipped:|skipped:' }): TaskPlan => ({
       state, run: 't1', basis, code: false, sources: [], steps: [], issues: [], uncovered: [], skipped: [], error: null })
     const on = (more: Partial<Council>, s: Stream = written) =>
       at({ slicing: slicing('done'), structure: structure('done'), streams: [s], ...more })
@@ -251,9 +251,12 @@ describe('светофор', () => {
     expect(attention(done, NOTES)).toEqual([])
     expect(stageLight(done, 'tasks', { ...NOTES, issues: '/other' })).toBe('yours')   // папку задач сменили
     // Поток выгрузили заново после плана: план устарел — видно, сбросить решает человек.
-    const stale = on({ tasks: plan('done', { A: 'o1:n0' }), tasks_export: exported })
+    const stale = on({ tasks: plan('done', { A: 'o1:n0', research: 'skipped:|skipped:' }), tasks_export: exported })
     expect(stageLight(stale, 'tasks', NOTES)).toBe('yours')
     expect(attention(stale, NOTES).map(a => a.what)).toEqual(['tasksStale'])
+    // Исследование прошли иначе после плана: план читал прежнюю карту — тоже устарел.
+    const rescanned = on({ tasks: plan('done', { A: 'o1:n1', research: 'scan:s1|skipped:' }), tasks_export: exported })
+    expect(attention(rescanned, NOTES).map(a => a.what)).toEqual(['tasksStale'])
   })
 
   it('совет — самое важное из его этапов: ошибка, потом ваш ход, потом работа ИИ', () => {

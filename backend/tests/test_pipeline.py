@@ -33,7 +33,7 @@ from spec_council.pipeline import (
 )
 from spec_council.repository import Inventory, RepositoryError, Source
 from spec_council.slicing import BadAnswer
-from spec_council.tasks import Context, Inputs, plan_of
+from spec_council.tasks import Allowed, Context, Inputs, plan_of
 from tests.figma_fake import LINK, FakeFigma
 
 TEXT = ("Хочу воркер для Codex CLI. Состояние держать в файлах, без базы. "
@@ -1116,9 +1116,10 @@ def test_a_figma_refusal_fails_the_scan_before_any_model_is_asked():
 
 # --- план задач совета
 
-PLAN_CONTEXT = Context(outcomes=frozenset({"OUT-0001", "OUT-0002"}),
-                       adrs=frozenset({"ADR-0003"}), constraints=frozenset({5}),
-                       risks=frozenset({7}))
+PLAN_CONTEXT = Context(outcomes={
+    "OUT-0001": Allowed(adrs=frozenset({"ADR-0003"}), constraints=frozenset({5}),
+                        risks=frozenset({7})),
+    "OUT-0002": Allowed(adrs=frozenset(), constraints=frozenset(), risks=frozenset())})
 PLAN_INPUTS = Inputs(values={"ideas": "A. Поиск: " + FIND, "outcomes": "[ИТОГИ]",
                              "decisions": "[РЕШЕНИЯ]", "constraints_and_risks": "[]"},
                      context=PLAN_CONTEXT, outcomes=["OUT-0001", "OUT-0002"],
@@ -1220,8 +1221,15 @@ def test_a_plan_keeps_only_what_the_data_has():
     assert found[1].open_questions == ["Ждать ли I1?"]
 
 
-def test_a_plan_with_a_cycle_or_without_a_title_is_a_bad_answer():
-    with pytest.raises(BadAnswer, match="по кругу"):
+def test_a_task_refers_only_to_what_its_own_outcome_has():
+    """ADR-0003, F5 и F7 — у OUT-0001; задача OUT-0002 сослаться на них не может."""
+    [other] = plan_of({"issues": [task("A1", "Хранение", outcome="OUT-0002", constraint_ids=[5],
+                                       risk_ids=[7])]}, PLAN_CONTEXT)
+    assert (other.adr_ids, other.constraint_ids, other.risk_ids) == ([], [], [])
+
+
+def test_a_plan_with_a_later_dependency_or_without_a_title_is_a_bad_answer():
+    with pytest.raises(BadAnswer, match="после себя"):
         plan_of({"issues": [task("A", "Один", depends_on=["B"]),
                             task("B", "Два", depends_on=["A"])]}, PLAN_CONTEXT)
     with pytest.raises(BadAnswer, match="названия"):

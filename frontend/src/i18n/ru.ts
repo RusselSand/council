@@ -744,6 +744,7 @@ export const ru = {
   'tasks.streams': 'Потоки',
   'tasks.stream.ready': 'утверждён и выгружен',
   'tasks.stream.outcomes': 'итоги не утверждены',
+  'tasks.research': 'исследование',
   'tasks.stream.notes': 'не выгружен в заметки',
   'tasks.plan': 'Спланировать задачи',
   'tasks.planning': 'ИИ строит план задач.',

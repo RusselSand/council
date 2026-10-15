@@ -1895,7 +1895,7 @@ describe('Задачи', () => {
   const throughB: Partial<Stream> = { outcomes: OUTCOMES, notes: { ...EXPORTED, refs: { O1: 'OUT-0002', 'ADR-1': 'ADR-0006' },
                                                                      notes: [{ ...EXPORTED.notes[0], id: 'ADR-0006' }] } }
   const PLAN: TaskPlan = {
-    state: 'done', run: 't1', basis: { A: 'o1:n1', B: 'o1:n1' }, code: false, sources: [], steps: [], uncovered: [],
+    state: 'done', run: 't1', basis: { A: 'o1:n1', B: 'o1:n1', research: '|' }, code: false, sources: [], steps: [], uncovered: [],
     skipped: [], error: null,
     issues: [
       { id: 'I1', title: 'Сохранять состояние в файлы', user_story: 'As an operator, I want the state in files.',
@@ -1965,9 +1965,9 @@ describe('Задачи', () => {
   })
 
   it('потоки поменяли после плана — видно, какие; сбрасывает человек', async () => {
-    const stale = { ...PLAN, basis: { A: 'o0:n1', B: 'o1:n1' } }
+    const stale = { ...PLAN, basis: { A: 'o0:n1', B: 'o1:n1', research: 'scan:s0|skipped:' } }
     open(() => council({ tasks: stale }), () => json(council()))
-    expect(await screen.findByText(ru['tasks.stale'].replace('{{groups}}', 'A'))).toBeTruthy()
+    expect(await screen.findByText(ru['tasks.stale'].replace('{{groups}}', `A, ${ru['tasks.research']}`))).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: ru['tasks.reset'] }))
     expect((await planButton()).disabled).toBe(false)
     expect(streamCalls).toEqual([{ group: 'tasks', action: 'reset', body: { run: 'g1', revision: 0 } }])

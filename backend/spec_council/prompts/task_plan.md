@@ -38,7 +38,7 @@ You see all OUTCOMES at once: plan them as one piece of work.
   be reviewed on its own, or when one part must be merged before another can start — for example,
   the backend before the frontend that calls it.
 - Order the plan: an ISSUE comes after the ISSUES it needs. `depends_on` names the ISSUES of this
-  plan whose result it needs — no cycles.
+  plan whose result it needs — only ISSUES earlier in the plan.
 - Every OUTCOME needs at least one ISSUE, unless the repository shows that its behavior is already
   implemented correctly.
 
@@ -104,7 +104,9 @@ The accepted decisions are the decisions of the OUTCOMES. An ADR an OUTCOME impl
 the ISSUES of that OUTCOME; an ADR it only relies on is done by the ISSUES of another OUTCOME — use
 it as given and, when the work is needed first, depend on that ISSUE. An `active` project decision
 binds the ISSUES as it is; a `superseded` or `under_review` one does not. List in `adr_ids` the
-note IDs of the decisions the ISSUE relies on.
+note IDs of the decisions the ISSUE relies on — only decisions of its own OUTCOME (`implements`,
+`relies_on`, `project_decisions`); likewise `constraint_ids` and `risk_ids` come only from its own
+OUTCOME.
 
 Every requirement in `scope` must follow from the OUTCOME, its accepted decisions, its CONSTRAINTS
 or a verified need to change the existing code.
@@ -159,7 +161,8 @@ Before answering, check that:
 - every ISSUE belongs to exactly one OUTCOME, and every OUTCOME that still needs work has an ISSUE;
 - no work is in two ISSUES, and no ISSUE says that something stays as it is while another ISSUE
   changes it;
-- the order and `depends_on` follow what each ISSUE needs, without cycles;
+- the order and `depends_on` follow what each ISSUE needs, and `depends_on` names only earlier
+  ISSUES;
 - `scope` describes behavior and contract, with explicit boundaries, and no tests;
 - no implementation is decided that the human has not set and the code does not already have —
   such choices are in `open_questions`;

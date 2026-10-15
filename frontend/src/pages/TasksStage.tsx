@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import {
-  api, ApiError, councilPath, groupsConfirmed, issuesOf, notesOf, startOrFollow, structureIsStale, tasksBasis,
+  api, ApiError, councilPath, groupsConfirmed, issuesOf, notesOf, RESEARCH_BASIS, startOrFollow, structureIsStale, tasksBasis,
   tasksExported, tasksStale, tasksWaitFor,
   type Council, type GroupsVersion, type Issue, type LabeledFragment, type NotePlan, type Settings, type TaskPlan,
 } from '../api'
@@ -37,7 +37,10 @@ export function TasksStage({ council, settings, onChange }: Readonly<{
   const waits = new Map(tasksWaitFor(council, notes).map(wait => [wait.group, wait.why]))
   const stale = tasksStale(council)
   const now = tasksBasis(council)
-  const changed = streams.filter(stream => plan && plan.basis[stream.group] !== now[stream.group]).map(s => s.group)
+  // Что поменялось после плана: потоки — буквами, исследование — словом.
+  const changed = [...streams.map(stream => stream.group), RESEARCH_BASIS]
+    .filter(key => plan && plan.basis[key] !== now[key])
+    .map(key => (key === RESEARCH_BASIS ? t('tasks.research') : key))
   const running = plan?.state === 'running' || draft?.state === 'running'
   const locked = planning.busy || reset.busy || running || structureIsStale(council)
   const canPlan = waits.size === 0 && (!plan || plan.state === 'failed') && !locked

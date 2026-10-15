@@ -6,8 +6,9 @@
 решений своей идеи), в план не входит — это видно.
 
 Ответ модели проверяет код: у задачи ровно один итог — из плана; решения, ограничения и риски —
-только из данных; зависимости — только на задачи того же плана, без себя и без кругов (круг —
-негодный ответ). Номера задач код раздаёт заново по порядку плана: I1, I2…
+только те, что есть у её итога; зависимости — только на задачи раньше неё по плану (на задачу
+дальше — негодный ответ: порядок плана и есть порядок работы). Номера задач код раздаёт заново по
+порядку плана: I1, I2…
 """
 
 import json
@@ -23,13 +24,20 @@ ITEMS_MAX = 20
 
 
 @dataclass(frozen=True)
-class Context:
-    """На что задача может сослаться: итоги плана, решения, ограничения и риски итогов."""
+class Allowed:
+    """На что может сослаться задача одного итога: его решения (которые он реализует, на которые
+    опирается, и прошлые решения проекта), его ограничения и риски."""
 
-    outcomes: frozenset[str]
     adrs: frozenset[str]
     constraints: frozenset[int]
     risks: frozenset[int]
+
+
+@dataclass(frozen=True)
+class Context:
+    """Итоги плана — номерами заметок — и на что может сослаться задача каждого из них."""
+
+    outcomes: Mapping[str, Allowed]
 
 
 @dataclass(frozen=True)
@@ -48,11 +56,18 @@ def as_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+RESEARCH = "research"
+
+
 def basis_of(council: Council) -> dict[str, str]:
-    """К чему план: у каждого потока — его утверждённые итоги и выгрузка."""
-    return {stream.group: f"{stream.outcomes.run if stream.outcomes else ''}:"
-                          f"{stream.notes.run if stream.notes else ''}"
-            for stream in council.streams or []}
+    """К чему план: у каждого потока — его утверждённые итоги и выгрузка, а у исследования
+    (RESEARCH) — как пройдены его шаги: план читает его карту кода и описание макета."""
+    research = council.research
+    steps = [research.repository, research.design] if research else [None, None]
+    return {**{stream.group: f"{stream.outcomes.run if stream.outcomes else ''}:"
+                             f"{stream.notes.run if stream.notes else ''}"
+               for stream in council.streams or []},
+            RESEARCH: "|".join(f"{step.by}:{step.scan_run}" if step else "" for step in steps)}
 
 
 def not_ready(council: Council, notes: str | None) -> list[str]:
@@ -86,6 +101,7 @@ def inputs_of(council: Council) -> Inputs:
     опираются, ограничения и риски."""
     fragments = {f.id: f for f in council.slicing.fragments} if council.slicing else {}
     outcomes: list[dict] = []
+    allowed: dict[str, Allowed] = {}
     decisions: dict[str, dict] = {}
     constraints: set[int] = set()
     risks: set[int] = set()
@@ -99,7 +115,12 @@ def inputs_of(council: Council) -> Inputs:
                 skipped.append(f"Поток {stream.group}: {outcome.id} «{outcome.title}» не лёг в "
                                "заметки — в план не входит")
                 continue
-            outcomes.append(outcome_entry(outcome, note, stream.group, refs))
+            entry = outcome_entry(outcome, note, stream.group, refs)
+            outcomes.append(entry)
+            allowed[note] = Allowed(
+                frozenset([*entry["implements"], *entry["relies_on"],
+                           *entry["project_decisions"]]),
+                frozenset(outcome.constraint_ids), frozenset(outcome.risk_ids))
             constraints |= set(outcome.constraint_ids)
             risks |= set(outcome.risk_ids)
             for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids):
@@ -116,8 +137,7 @@ def inputs_of(council: Council) -> Inputs:
     values = {"ideas": ideas_text(council), "outcomes": as_json(outcomes),
               "decisions": as_json(list(decisions.values())),
               "constraints_and_risks": as_json(limits_prompt(fragments, constraints | risks))}
-    context = Context(frozenset(o["id"] for o in outcomes), frozenset(decisions),
-                      frozenset(constraints), frozenset(risks))
+    context = Context(allowed)
     return Inputs(values, context, [o["id"] for o in outcomes], skipped, basis_of(council))
 
 
@@ -176,14 +196,17 @@ def relabeled(text: str, names: Mapping[str, str]) -> str:
 
 def plan_of(data: dict, context: Context) -> list[Issue]:
     """План из ответа модели: задачи по порядку, с номерами I1, I2… — и в тексте задач тоже.
-    Задача, чей итог не из плана, отбрасывается — как и ссылки, которых нет в данных."""
+    Задача, чей итог не из плана, отбрасывается — как и ссылки на решения, ограничения и риски,
+    которых у её итога нет. Задача ждёт только задачи раньше себя: зависимость от задачи дальше
+    по плану — негодный ответ, порядок плана и есть порядок работы."""
     items = data.get("issues")
     if not isinstance(items, list):
         raise BadAnswer("нет списка issues")
     kept: list[tuple[str, dict]] = []
     seen: set[str] = set()
     for item in items:
-        if not isinstance(item, dict) or item.get("outcome_id") not in context.outcomes:
+        if not isinstance(item, dict) or not isinstance(item.get("outcome_id"), str) \
+                or item["outcome_id"] not in context.outcomes:
             continue
         name = item.get("id") if isinstance(item.get("id"), str) else ""
         if name in seen:
@@ -196,6 +219,11 @@ def plan_of(data: dict, context: Context) -> list[Issue]:
         issue_id = f"I{n}"
         after = [renamed[d] for d in texts_of(item.get("depends_on"))
                  if d in renamed and renamed[d] != issue_id]
+        later = [name for name in after if int(name[1:]) > n]
+        if later:
+            raise BadAnswer(f"{issue_id} ждёт задачи после себя: {', '.join(later)} — порядок "
+                            "плана и есть порядок работы")
+        own = context.outcomes[item["outcome_id"]]
         def text(value: str) -> str:
             return relabeled(value, renamed)
 
@@ -206,14 +234,11 @@ def plan_of(data: dict, context: Context) -> list[Issue]:
             current_state=text(text_of(item.get("current_state"), "нынешнего состояния", False)),
             scope=[text(line) for line in texts_of(item.get("scope"))],
             outcome_id=item["outcome_id"],
-            adr_ids=[a for a in texts_of(item.get("adr_ids")) if a in context.adrs],
-            constraint_ids=ints_in(item.get("constraint_ids"), context.constraints),
-            risk_ids=ints_in(item.get("risk_ids"), context.risks),
+            adr_ids=[a for a in texts_of(item.get("adr_ids")) if a in own.adrs],
+            constraint_ids=ints_in(item.get("constraint_ids"), own.constraints),
+            risk_ids=ints_in(item.get("risk_ids"), own.risks),
             depends_on=list(dict.fromkeys(after)),
             open_questions=[text(line) for line in texts_of(item.get("open_questions"))]))
-    cycle = cycle_of(issues)
-    if cycle:
-        raise BadAnswer(f"зависимости по кругу: {' → '.join(cycle)}")
     return issues
 
 
@@ -222,31 +247,6 @@ def ints_in(value: object, allowed: frozenset[int]) -> list[int]:
         return []
     found = [item for item in value if isinstance(item, int) and not isinstance(item, bool)]
     return sorted({item for item in found if item in allowed})
-
-
-def cycle_of(issues: Sequence[Issue]) -> list[str]:
-    """Круг в зависимостях плана, если он есть: номера по кругу. Нет — пусто."""
-    after = {issue.id: issue.depends_on for issue in issues}
-    state: dict[str, str] = {}
-
-    def visit(name: str, path: list[str]) -> list[str]:
-        state[name] = "open"
-        for other in after.get(name, []):
-            if state.get(other) == "open":
-                return [*path[path.index(other):], other] if other in path else [name, other]
-            if other not in state:
-                found = visit(other, [*path, other])
-                if found:
-                    return found
-        state[name] = "done"
-        return []
-
-    for issue in issues:
-        if issue.id not in state:
-            found = visit(issue.id, [issue.id])
-            if found:
-                return found
-    return []
 
 
 def same_plan(plans: Sequence[Sequence[Issue]]) -> bool:

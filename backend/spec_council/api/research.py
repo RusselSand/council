@@ -163,14 +163,16 @@ def approve_repository(council_id: str, edit: ApproveRepository, store: StoreDep
 
 
 def repository_step(research: Research, edit: ApproveRepository) -> RepositoryStep:
-    """Как проходят шаг: без скана или с картой того скана, что на экране, — готового."""
-    if edit.scan_run is None:
-        return RepositoryStep(by="skipped")
+    """Как проходят шаг: без скана или с картой того скана, что на экране, — готового. Пока скан
+    идёт, шаг не пройти и пропуском: вкладка, не видевшая запуска, оставила бы его работать
+    впустую."""
     scan = research.scan
-    if scan is None or scan.run != edit.scan_run:
-        raise HTTPException(409, "Репозиторий уже сканировали заново — карта была к прежнему")
     if running(scan):
         raise HTTPException(409, "Совет ещё сканирует — дождитесь его")
+    if edit.scan_run is None:
+        return RepositoryStep(by="skipped")
+    if scan is None or scan.run != edit.scan_run:
+        raise HTTPException(409, "Репозиторий уже сканировали заново — карта была к прежнему")
     if scan.state != "done" or scan.result is None:
         raise HTTPException(409, "Скан не удался — запустите его снова или пропустите шаг")
     return RepositoryStep(by="scan", scan_run=scan.run)
@@ -249,13 +251,13 @@ def design_step(research: Research, edit: ApproveDesign) -> DesignStep:
     готового. Сначала — шаг «Репозиторий»."""
     if research.repository is None:
         raise HTTPException(409, NO_REPOSITORY)
-    if edit.scan_run is None:
-        return DesignStep(by="skipped")
     scan = research.design_scan
-    if scan is None or scan.run != edit.scan_run:
-        raise HTTPException(409, "Макет уже сканировали заново — описание было к прежнему")
     if running(scan):
         raise HTTPException(409, "Совет ещё сканирует макет — дождитесь его")
+    if edit.scan_run is None:
+        return DesignStep(by="skipped")
+    if scan is None or scan.run != edit.scan_run:
+        raise HTTPException(409, "Макет уже сканировали заново — описание было к прежнему")
     if scan.state != "done" or scan.result is None:
         raise HTTPException(409, "Скан макета не удался — запустите его снова или пропустите "
                                  "шаг")

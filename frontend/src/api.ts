@@ -780,9 +780,22 @@ export const outcomeReady = (outcome: Outcome): boolean =>
 export const outcomesFree = (outcomes: Outcome[]): boolean =>
   outcomes.every(outcome => outcome.blocked_by.length === 0 && outcome.gaps.length === 0)
 
-/** К чему был бы план сейчас — как basis_of на сервере: у каждого потока «сборка итогов:выгрузка». */
-export const tasksBasis = (council: Council): Record<string, string> => Object.fromEntries((council.streams ?? []).map(
-  stream => [stream.group, `${stream.outcomes?.run ?? ''}:${stream.notes?.run ?? ''}`]))
+/** Ключ исследования в basis плана: рядом с буквами потоков. */
+export const RESEARCH_BASIS = 'research'
+
+/**
+ * К чему был бы план сейчас — как basis_of на сервере: у каждого потока «сборка итогов:выгрузка», у исследования —
+ * как пройдены его шаги: план читает его карту кода и описание макета.
+ */
+export const tasksBasis = (council: Council): Record<string, string> => {
+  const research = council.research
+  const steps = [research?.repository ?? null, research?.design ?? null]
+  return {
+    ...Object.fromEntries((council.streams ?? []).map(
+      stream => [stream.group, `${stream.outcomes?.run ?? ''}:${stream.notes?.run ?? ''}`])),
+    [RESEARCH_BASIS]: steps.map(step => (step ? `${step.by}:${step.scan_run}` : '')).join('|'),
+  }
+}
 
 /** План к другим итогам или выгрузкам, чем сейчас: поток поменяли после него — сбросить и спланировать заново. */
 export const tasksStale = (council: Council): boolean => {

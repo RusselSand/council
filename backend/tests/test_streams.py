@@ -1615,6 +1615,7 @@ def test_a_running_scan_is_not_started_twice_and_holds_the_groups(agents, repos)
     get_store().update_council(council_id, {"research": Research(scan=scanning)})
     assert scans(council_id, "C").status_code == 409                   # уже идёт
     assert takes(council_id, "C").status_code == 409                   # карты ещё нет
+    assert skip(council_id).status_code == 409                         # и пропустить нельзя
     assert client.post(f"/api/councils/{council_id}/structure").status_code == 423
     assert client.post(f"/api/councils/{council_id}/research/reset",
                        json={"run": "g1", "revision": 0}).status_code == 423
@@ -1960,6 +1961,8 @@ def test_a_running_design_scan_is_not_started_twice(agents, figma):
     get_store().update_council(council_id, {"research": research})
     assert designs(council_id, "C").status_code == 409                 # уже идёт
     assert takes_design(council_id, "C").status_code == 409            # описания ещё нет
+    assert client.post(f"/api/councils/{council_id}/research/design",
+                       json={"run": "g1", "revision": 0, "scan_run": None}).status_code == 409
     assert client.post(f"/api/councils/{council_id}/research/reset",
                        json={"run": "g1", "revision": 0}).status_code == 423
     assert client.post(f"/api/councils/{council_id}/structure").status_code == 423

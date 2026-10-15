@@ -748,6 +748,7 @@ export const en: Dict = {
   'tasks.streams': 'Streams',
   'tasks.stream.ready': 'approved and exported',
   'tasks.stream.outcomes': 'outcomes not approved',
+  'tasks.research': 'research',
   'tasks.stream.notes': 'not exported to the notes',
   'tasks.plan': 'Plan the tasks',
   'tasks.planning': 'The AI is planning the tasks.',
