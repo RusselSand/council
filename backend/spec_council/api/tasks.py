@@ -60,7 +60,7 @@ from ..repository import (
     same_copy,
     working_copy,
 )
-from ..tasks import inputs_of, not_ready
+from ..tasks import basis_of, inputs_of, not_ready
 from ..tasks_export import drafted_tasks
 from .councils import MISSING, NOT_FOUND, RunState, Slot, council_lock, reporter, running
 from .documents import NO_NOTES, WriteNotes
@@ -163,15 +163,23 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
     Если исследование пройдено сканом, модели читают снимок тех же рабочих копий заново — их
     читают сейчас, и если какую-то не прочитать — 422. Нет подключения к моделям — план записан
     упавшим: его можно запустить снова."""
+    # Исследование, чьи рабочие копии прочитаны: пока их читали или проверяли модели, его могли
+    # сбросить или пройти заново в другой вкладке — тогда код и карта разошлись бы.
+    read: list[Research] = []
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         plannable(council, notes_of(council))
+        if read and research_of(council) != read[0]:
+            raise HTTPException(409, "Исследование поменялось, пока совет читал рабочие копии, — "
+                                     "спланируйте снова")
         return council, True
 
     # Сначала дешёвое: запрос, которому всё равно откажут, рабочую копию не читает.
     with council_lock:
         council, _ = plan()
-    sources = code_of(research_of(council), repositories)
+    read.append(research_of(council))
+    sources = code_of(read[0], repositories)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         inputs = inputs_of(council)
@@ -252,10 +260,23 @@ def planned_tasks(council: Council) -> TaskPlan:
     return plan
 
 
+def current_plan(council: Council, notes: Path) -> TaskPlan:
+    """План, который можно выгружать: построен и всё ещё к тому, к чему его строили, — каждый
+    поток выгружен в нынешний каталог заметок, и к тем же итогам и выгрузке. Иначе номера заметок
+    в плане (OUT-…, ADR-…) — из другого каталога или прежней выгрузки, и файлы задач ссылались
+    бы мимо: 409, сбросить план и спланировать заново."""
+    plan = planned_tasks(council)
+    problems = not_ready(council, str(notes))
+    if problems or basis_of(council) != plan.basis:
+        why = "; ".join(problems) or "потоки поменяли после плана"
+        raise HTTPException(409, f"План устарел: {why} — сбросьте его и спланируйте заново")
+    return plan
+
+
 def drafted_for(council: Council, shelf: Shelf, store: Store
                 ) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber]]:
     fragments = {f.id: f for f in council.slicing.fragments} if council.slicing else {}
-    return drafted_tasks(planned_tasks(council), fragments, shelf,
+    return drafted_tasks(current_plan(council, shelf.root), fragments, shelf,
                          export_in(council.tasks_export, shelf.issues), words_for(language()),
                          notes_language(), reserved_by_others(store, council.id, shelf.issues))
 
@@ -276,9 +297,8 @@ def draft_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Conf
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
-        notes_root(notes_of(council))
+        current_plan(council, notes_root(notes_of(council)))
         issues_root(issues_of(council))
-        planned_tasks(council)
         if running(council.tasks_draft):
             raise HTTPException(409, "Черновик уже собирается")
         return council, translate

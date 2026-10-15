@@ -7,6 +7,7 @@ import shutil
 
 import pytest
 
+from spec_council.api import tasks as tasks_api
 from spec_council.app import app
 from spec_council.deps import get_agents, get_issues_of, get_launcher, get_notes_of
 from spec_council.export import words_for
@@ -270,6 +271,51 @@ def test_writing_again_keeps_the_numbers_and_human_edits(agents, folders):
     drafts(council_id)
     [again] = council(council_id).tasks_draft.notes
     assert again.id == "ISS-0001" and again.text.startswith("# Своя задача")
+
+
+def test_a_plan_whose_notes_folder_changed_is_not_exported(agents, folders, tmp_path):
+    """Папку документации сменили после плана: номера OUT/ADR в плане — из прежнего каталога, и
+    файлы задач ссылались бы мимо."""
+    council_id = ready()
+    plans(council_id)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: tmp_path / "other"
+    res = drafts(council_id)
+    assert res.status_code == 409 and "План устарел" in res.json()["detail"]
+    assert council(council_id).tasks_draft is None
+
+
+def test_a_plan_whose_stream_was_exported_again_is_not_exported(agents, folders):
+    council_id = ready()
+    plans(council_id)
+    drafts(council_id)
+    run = council(council_id).tasks_draft.run
+    exported(council_id)                                  # поток выгрузили заново после плана
+    assert drafts(council_id).status_code == 409
+    res = writes(council_id, draft=run)
+    assert res.status_code == 409 and "План устарел" in res.json()["detail"]
+    assert not folders[1].exists()
+
+
+def test_research_changed_while_the_code_was_read_refuses_the_plan(agents, folders, repos,  # noqa: F811
+                                                                    monkeypatch):
+    council_id = single()
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    all_decided(council_id)
+    exported(council_id)
+    reading = tasks_api.code_of
+
+    def meanwhile(*args):
+        found = reading(*args)
+        assert client.post(f"/api/councils/{council_id}/research/reset",
+                           json={"run": "g1", "revision": 0}).status_code == 200
+        return found
+
+    monkeypatch.setattr(tasks_api, "code_of", meanwhile)
+    res = plans(council_id)
+    assert res.status_code == 409 and "Исследование поменялось" in res.json()["detail"]
+    assert council(council_id).tasks is None
 
 
 def test_with_an_approved_scan_the_plan_reads_the_code_anew(agents, folders, repos):  # noqa: F811
