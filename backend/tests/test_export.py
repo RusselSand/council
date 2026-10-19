@@ -324,6 +324,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     nested = "> [вопрос][Q1]\n>\n> [Q1]: /questions/Q1\n\n- [Q2]: /q/Q2\n\nпо Q1"
     assert renumbered(nested, {"Q1": "OQ-0002", "Q2": "OQ-0003"}, {}) == nested.replace(
         "по Q1", "по OQ-0002")
+    # Адрес сноски — и на следующей строке; инструкция, CDATA и объявление HTML — не текст.
+    wrapped = "[q]:\n  /questions/Q1\n\nтекст <?check Q1?> <![CDATA[Q1]]> <!DOCTYPE Q1>"
+    assert renumbered(f"{wrapped} и Q1", {"Q1": "OQ-0002"}, {}) == f"{wrapped} и OQ-0002"
     # Определение в блоке кода — пример, а не определение: [Q1] в тексте — номер.
     assert renumbered("```\n[Q1]: /x\n```\n\nсм. [Q1]", {"Q1": "OQ-0002"}, {}) == (
         "```\n[Q1]: /x\n```\n\nсм. [OQ-0002]")
