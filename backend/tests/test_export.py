@@ -314,6 +314,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Адрес в определении ссылки-сноски — тоже адрес.
     assert renumbered("[вопрос Q1][q]\n\n[q]: /questions/Q1 \"Q1\"", {"Q1": "OQ-0002"}, {}) == (
         "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"OQ-0002\"")
+    # Метка сноски — не текст ни в определении, ни там, где ссылкой пользуются.
+    assert renumbered("[вопрос][Q1], [q1] и Q1\n\n[Q1]: /questions/1", {"Q1": "OQ-0002"},
+                      {}) == "[вопрос][Q1], [q1] и OQ-0002\n\n[Q1]: /questions/1"
     # Адрес — целиком, и со скобками внутри.
     assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
                       {"Q1": "OQ-0002"}, {}) == (

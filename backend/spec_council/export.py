@@ -83,6 +83,8 @@ BLOCKS = ("fence", "code_block", "html_block")
 # через перенос строки, но не через пустую; адрес ссылки [..](адрес), <адрес> и адрес сам по
 # себе — со скобками внутри, и адрес в определении ссылки-сноски «[метка]: адрес»: подпись
 # ссылки — текст; тег HTML с его атрибутами и комментарий — текст между тегами остаётся текстом.
+# Определение ссылки-сноски: «[метка]: адрес».
+DEFINED = re.compile(r"^[ ]{0,3}\[([^\]\n]+)\]:", re.MULTILINE)
 UNTOUCHED = re.compile(r"""
     (?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)
     |\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)
@@ -377,10 +379,16 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
+    # Метка ссылки-сноски, определённой в тексте, — и там, где ссылкой пользуются: [..][Q1], [Q1].
+    labels = DEFINED.findall(text)
+    untouched = UNTOUCHED if not labels else re.compile(
+        UNTOUCHED.pattern + r"|(?i:\[(?:" + "|".join(map(re.escape, labels)) + r")\])",
+        UNTOUCHED.flags)
+
     def inline(text: str) -> str:
         out: list[str] = []
         last = 0
-        for kept in UNTOUCHED.finditer(text):
+        for kept in untouched.finditer(text):
             out += [prose(text[last:kept.start()]), kept.group(0)]
             last = kept.end()
         out.append(prose(text[last:]))
