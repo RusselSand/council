@@ -83,14 +83,6 @@ MARKDOWN = MarkdownIt("commonmark")
 BLOCKS = ("fence", "code_block", "html_block")
 
 
-def balanced(plain: str, depth: int = 5) -> str:
-    """Знак адреса или (…) с парными скобками внутри — до depth уровней."""
-    inner = plain
-    for _ in range(depth):
-        inner = rf"(?:{plain}|\({inner}*\))"
-    return inner
-
-
 # Атрибуты тега HTML по CommonMark: значение в "…", '…' или без кавычек — «>» в кавычках тег не
 # обрывает. И элементы, чьё содержимое — код или сырой текст.
 ATTRIBUTES = (r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*"""
@@ -112,9 +104,9 @@ UNTOUCHED = re.compile("|".join((
     rf"(?i:<(?P<raw>{RAW})\b{ATTRIBUTES}\s*>[\s\S]*?</(?P=raw)\s*>)",
     rf"<[A-Za-z][A-Za-z0-9-]*{ATTRIBUTES}\s*/?>",
     r"</[A-Za-z][A-Za-z0-9-]*\s*>",
-    # адрес сам по себе — и со скобками внутри
-    rf"\b[A-Za-z][A-Za-z0-9+.-]*://{balanced(r'(?:\\.|[^\s<>()\]\\])')}+",
 )), re.MULTILINE)
+# Начало адреса самого по себе: «https://».
+SCHEME = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)(?![\w-])"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
@@ -403,16 +395,59 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 
 def destinations(text: str) -> list[tuple[int, int]]:
-    """Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
+    r"""Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
     в <…> или со скобками внутри любой вложенности, с экранированием «\», с заголовком в
     "…", '…' или (…)."""
     found: list[tuple[int, int]] = []
     start = text.find("](")
     while start != -1:
-        end = destination_end(text, start + 2)
+        end = destination_end(text, start + 2) if opened(text, start) else None
         if end is not None:
             found.append((start, end))
         start = text.find("](", end if end is not None else start + 2)
+    return found
+
+
+def escaped(text: str, at: int) -> bool:
+    r"""Знак на месте at экранирован: перед ним нечётное число «\»."""
+    run = 0
+    while at - run - 1 >= 0 and text[at - run - 1] == "\\":
+        run += 1
+    return run % 2 == 1
+
+
+def opened(text: str, close: int) -> bool:
+    r"""У «]» на месте close есть парная «[» без экранирования: \[x](…) — текст, а не ссылка."""
+    depth = 0
+    for at in range(close - 1, -1, -1):
+        if text[at] not in "[]" or escaped(text, at):
+            continue
+        if text[at] == "]":
+            depth += 1
+        elif depth:
+            depth -= 1
+        else:
+            return True
+    return False
+
+
+def addresses(text: str) -> list[tuple[int, int]]:
+    """Где в тексте адрес сам по себе («https://…»): до пробела или «<», «>», «]», со скобками
+    внутри любой вложенности; «)» в конце, которой нет пары, и знак препинания в конце — не
+    адрес."""
+    found: list[tuple[int, int]] = []
+    for scheme in SCHEME.finditer(text):
+        end = scheme.end()
+        while end < len(text) and not text[end].isspace() and text[end] not in "<>]":
+            end += 1
+        while end > scheme.end() and (
+                text[end - 1] in ".,;:!?'\""
+                or (text[end - 1] == ")"
+                    and text.count(")", scheme.start(), end)
+                    > text.count("(", scheme.start(), end))):
+            end -= 1
+        if end > scheme.end():
+            found.append((scheme.start(), end))
     return found
 
 
@@ -465,8 +500,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     references = env.get("references", {})
     code = {n for token in tokens if token.type in BLOCKS and token.map
             for n in range(*token.map)}
-    code |= {n for found in references.values() if found.get("map")
-             for n in range(*found["map"])}
+    code |= {n for found in [*references.values(), *env.get("duplicate_refs", [])]
+             if found.get("map") for n in range(*found["map"])}
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
     # Метка сноски там, где ею пользуются: [..][Q1], [Q1][], [Q1]. Метки сравнивают, как
@@ -485,9 +520,10 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
 
     def inline(part: str) -> str:
-        # Что не трогают: по выражению и адреса ссылок (destinations) — они могут пересекаться.
+        # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
+        # (addresses) — они могут пересекаться.
         spans = sorted([kept.span() for kept in untouched.finditer(part)]
-                       + destinations(part))
+                       + destinations(part) + addresses(part))
         out: list[str] = []
         last = 0
         for start, end in spans:
