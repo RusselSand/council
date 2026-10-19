@@ -13,10 +13,18 @@ from spec_council.deps import get_agents, get_issues_of, get_launcher, get_notes
 from spec_council.export import words_for
 from spec_council.groups import arranged
 from spec_council.issue_files import rendered as issue_rendered
-from spec_council.models import CouncilStatus, Issue, Slicing, Structure, StructureProposal
+from spec_council.models import (
+    CouncilStatus,
+    Issue,
+    Outcome,
+    Slicing,
+    Structure,
+    StructureProposal,
+)
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
+from spec_council.tasks import Names, outcome_entry
 from spec_council.tasks_export import issue_text
 from tests.test_streams import (
     ALL_DECIDED,
@@ -429,3 +437,75 @@ def test_an_issue_file_names_other_issues_by_their_project_numbers():
     assert text.startswith("# Выдача после ISS-0007")
     assert "- Ждать ISS-0007, не трогая I10." in text
     assert "- Готова ли ISS-0007?" in text
+
+
+def test_stream_numbers_in_issue_files_and_plan_inputs_become_note_numbers():
+    names = Names({"Q1": "OQ-0001", "P2": "PRO-0002", "ADR-1": "ADR-0001"},
+                  {"F4": "Секреты не уходят в репозиторий."})
+    issue = Issue(id="I2", title="Выдача по Q1", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Учесть F4 и `Q1` (F4)."],
+                  open_questions=["Хватит ли P2?"])
+    text = issue_text(issue, "ISS-0008", ("OUT-0001", "Итог по ADR-1"),
+                      [("ADR-0001", "Решение (F4)")], [], [], [], words_for("Russian"),
+                      {"I2": "ISS-0008"}, names)
+    assert text.startswith("# Выдача по OQ-0001")
+    assert "- Учесть «Секреты не уходят в репозиторий» и `Q1`." in text    # код — как есть
+    assert "- OUT-0001: Итог по ADR-0001" in text
+    assert "- ADR-0001: Решение\n" in text
+    assert "- Хватит ли PRO-0002?" in text
+    # Что модели прочтут, то и перепишут в задачи: им — тоже номера заметок.
+    outcome = Outcome(id="O1", title="Итог по Q1", behavior="По Q1 (F4).", adr_ids=["ADR-1"],
+                      adr_notes={"ADR-1": "Следует из P2"}, acceptance_criteria=["Q1 решён"])
+    entry = outcome_entry(outcome, "OUT-0001", "C", {"ADR-1": "ADR-0001"}, names)
+    assert (entry["title"], entry["behavior"], entry["acceptance_criteria"], entry["follows"]) == (
+        "Итог по OQ-0001", "По OQ-0001.", ["OQ-0001 решён"], {"ADR-0001": "Следует из PRO-0002"})
+
+
+class Translating(Agents):
+    """Судья переводит файлы задач, каждый своим ходом, — и название задачи всякий раз
+    по-своему: «Индекс» — «Index 1», «Index 2»…"""
+
+    def __init__(self):
+        super().__init__()
+        self.turn = 0
+
+    def ask(self, model, prompt, key, workspace=None):
+        if "-notes_translation-" in key:
+            self.turn += 1
+            notes = json.loads(prompt.split("## NOTES\n")[1])
+            return json.dumps({"notes": [
+                {"key": n["key"], "text": n["text"].replace("Индекс", f"Index {self.turn}")}
+                for n in notes]})
+        return super().ask(model, prompt, key, workspace)
+
+
+def two_tasks(prompt):
+    """План: на итог две задачи, вторая — после первой."""
+    [issue] = Agents.task_plan(prompt)["issues"]
+    return {"issues": [issue | {"id": "I1", "title": "Индекс"},
+                       issue | {"id": "I2", "title": "Выдача", "depends_on": ["I1"]}]}
+
+
+def test_a_task_is_named_alike_in_every_file_after_translation_and_edits(agents, folders,
+                                                                        monkeypatch):
+    _, issues = folders
+    fake = Translating()
+    fake.task_plan = two_tasks
+    app.dependency_overrides[get_agents] = lambda: fake
+    council_id = ready()
+    plans(council_id)
+    monkeypatch.setattr(tasks_api, "notes_language", lambda: "English")
+    drafts(council_id)
+    draft = council(council_id).tasks_draft
+    assert draft.state == "done", draft.error
+    first, second = draft.notes
+    # Второй файл переводили своим ходом («Index 2»), а задачу в нём зовут, как в её файле.
+    assert first.text.startswith("# Index 1\n")
+    assert "- ISS-0001: Index 1" in second.text and "Index 2" not in second.text
+
+    # Человек переименовал задачу в её файле — так её зовут и в файле, что её ждёт.
+    renamed = "# Index, renamed" + first.text[first.text.index("\n"):]
+    assert writes(council_id, edits={first.key: renamed}).status_code == 200
+    assert "- ISS-0001: Index, renamed" in (issues / "ISS-0002.md").read_text(encoding="utf-8")
+    drafts(council_id)                                       # переводить нечего — всё на месте
+    assert {n.action for n in council(council_id).tasks_draft.notes} == {"same"}

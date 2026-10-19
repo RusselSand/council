@@ -60,8 +60,8 @@ from ..repository import (
     same_copy,
     working_copy,
 )
-from ..tasks import basis_of, inputs_of, not_ready
-from ..tasks_export import drafted_tasks
+from ..tasks import basis_of, inputs_of, not_ready, outcome_names
+from ..tasks_export import aligned, drafted_tasks
 from .councils import MISSING, NOT_FOUND, RunState, Slot, council_lock, reporter, running
 from .documents import NO_NOTES, WriteNotes
 from .groups import NOT_THESE_GROUPS, current
@@ -282,7 +282,8 @@ def drafted_for(council: Council, shelf: Shelf, store: Store
     try:
         return drafted_tasks(plan, fragments, shelf, export_in(council.tasks_export, shelf.issues),
                              words_for(language()), notes_language(),
-                             reserved_by_others(store, council.id, shelf.issues))
+                             reserved_by_others(store, council.id, shelf.issues),
+                             outcome_names(council, fragments))
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -319,7 +320,11 @@ def draft_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Conf
                            numbers=numbers)
         runs: list[CouncilRun] = []
         if not translate or not untranslated(draft.notes):
-            draft = draft.model_copy(update={"state": "done", "steps": []})
+            # Переводить нечего, но название задачи могли перевести по-разному раньше или
+            # поправить руками — строки других файлов берут его из её файла.
+            previous = export_in(council.tasks_export, issues)
+            draft = draft.model_copy(update={"state": "done", "steps": [],
+                                             "notes": realigned(notes, previous, shelf)})
         elif missing:
             draft = unconnected(draft, missing)
         else:
@@ -365,15 +370,29 @@ def write_tasks(council_id: str, edit: WriteNotes, store: StoreDep, notes_of: No
                                  root=str(issues), notes=exported, numbers=draft.numbers)
             saved.append(store.update_council(council_id, {"tasks_export": record}))
 
+        # Название задачи человек поправил в её файле — так её зовут и строки других файлов.
+        edits = {**edit.edits, **aligned(planned, {note.key: edit.edits.get(note.key, note.text)
+                                                   for note in planned})}
         try:
-            graph_problems(shelf.catalog, planned, vanished, edit.edits, edit.delete)
-            written_files(planned, vanished, edit.edits, edit.delete, shelf, previous, keep)
+            graph_problems(shelf.catalog, planned, vanished, edits, edit.delete)
+            written_files(planned, vanished, edits, edit.delete, shelf, previous, keep)
         except NotesError as exc:
             raise HTTPException(422, str(exc)) from None
         council = saved[0]
     if council is None:
         raise HTTPException(404, MISSING)
     return council
+
+
+def realigned(notes: list[NotePlan], previous: TasksExport | None,
+              shelf: Shelf) -> list[NotePlan]:
+    """Черновик, где задачу во всех файлах зовут названием из её файла (aligned), — и что
+    теперь будет с поправленными файлами при записи."""
+    before = {note.key: note for note in previous.notes} if previous else {}
+    texts = aligned(notes)
+    return [settled(note.model_copy(update={"text": texts[note.key]}),
+                    previous_of(note, before), shelf) if note.key in texts else note
+            for note in notes]
 
 
 def checked_draft(council: Council, edit: WriteNotes, issues: Path) -> TasksDraft:

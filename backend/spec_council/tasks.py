@@ -16,6 +16,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from .export import renumbered, stream_texts
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -38,6 +39,49 @@ class Context:
     """Итоги плана — номерами заметок — и на что может сослаться задача каждого из них."""
 
     outcomes: Mapping[str, Allowed]
+
+
+@dataclass(frozen=True)
+class Names:
+    """Номера потока (Q1, P2, F3, ADR-n, O-n, находки скана) и что за ними: номер заметки, а нет
+    её — текст. Тексты потока называют ими свои части, а в плане и в файлах задач нужны номера
+    заметок (renumbered)."""
+
+    numbers: Mapping[str, str]
+    texts: Mapping[str, str]
+
+    def __call__(self, text: str, quote: str = "«{}»") -> str:
+        return renumbered(text, self.numbers, self.texts, quote)
+
+
+def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
+             research: Mapping[str, str] | None = None) -> Names:
+    """Номера потока по его выгрузке. research — находки исследования совета: план читал его
+    карту кода и описание макета, и тексты задач называют их находки, а не копии потока."""
+    return Names(stream.notes.refs if stream.notes else {},
+                 stream_texts(stream, fragments) | dict(research or {}))
+
+
+def research_texts(council: Council) -> dict[str, str]:
+    """Находки исследования совета — карты кода (R…) и описания макета (D…)."""
+    research = council.research
+    scans = (research.scan, research.design_scan) if research else ()
+    return {finding.id: finding.statement for scan in scans
+            if scan is not None and scan.result is not None for finding in scan.result.findings}
+
+
+def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment]
+                  ) -> dict[str, Names]:
+    """Номера потока у каждого итога плана — по номеру заметки итога: файл задачи называет
+    части потока своего итога."""
+    research = research_texts(council)
+    found: dict[str, Names] = {}
+    for stream in council.streams or []:
+        names = names_of(stream, fragments, research)
+        for outcome in stream.outcomes.outcomes if stream.outcomes else []:
+            if outcome.id in names.numbers:
+                found[names.numbers[outcome.id]] = names
+    return found
 
 
 @dataclass(frozen=True)
@@ -108,6 +152,7 @@ def inputs_of(council: Council) -> Inputs:
     skipped: list[str] = []
     for stream in council.streams or []:
         refs = stream.notes.refs if stream.notes else {}
+        names = names_of(stream, fragments)
         written = {note.id: note.written for note in stream.notes.notes} if stream.notes else {}
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             note = refs.get(outcome.id)
@@ -115,7 +160,7 @@ def inputs_of(council: Council) -> Inputs:
                 skipped.append(f"Поток {stream.group}: {outcome.id} «{outcome.title}» не лёг в "
                                "заметки — в план не входит")
                 continue
-            entry = outcome_entry(outcome, note, stream.group, refs)
+            entry = outcome_entry(outcome, note, stream.group, refs, names)
             outcomes.append(entry)
             allowed[note] = Allowed(
                 frozenset([*entry["implements"], *entry["relies_on"],
@@ -125,7 +170,8 @@ def inputs_of(council: Council) -> Inputs:
             risks |= set(outcome.risk_ids)
             for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids):
                 if name in refs:
-                    decisions[refs[name]] = adr_entry(stream, name, refs[name], written)
+                    decisions[refs[name]] = adr_entry(stream, name, refs[name], written,
+                                                      names)
             projects = {d.adr_id: d for d in stream.project_decisions or []}
             for adr_id in outcome.project_decision_ids:
                 if adr_id in projects:
@@ -141,27 +187,32 @@ def inputs_of(council: Council) -> Inputs:
     return Inputs(values, context, [o["id"] for o in outcomes], skipped, basis_of(council))
 
 
-def outcome_entry(outcome: Outcome, note: str, group: str, refs: Mapping[str, str]) -> dict:
+def outcome_entry(outcome: Outcome, note: str, group: str, refs: Mapping[str, str],
+                  named: Names) -> dict:
     """Итог, как его видят модели: номер заметки, поток, что меняется и чем проверить, какие
-    решения он реализует и на какие опирается — номерами заметок."""
-    return {"id": note, "group": group, "title": outcome.title, "behavior": outcome.behavior,
-            "acceptance_criteria": outcome.acceptance_criteria,
+    решения он реализует и на какие опирается, — номерами заметок, и в тексте тоже (names):
+    что модели прочтут, то и перепишут в задачи."""
+    return {"id": note, "group": group, "title": named(outcome.title),
+            "behavior": named(outcome.behavior),
+            "acceptance_criteria": [named(item) for item in outcome.acceptance_criteria],
             "implements": [refs[name] for name in outcome.adr_ids if name in refs],
-            "follows": {refs[name]: text for name, text in outcome.adr_notes.items()
+            "follows": {refs[name]: named(text) for name, text in outcome.adr_notes.items()
                         if name in refs},
             "relies_on": [refs[name] for name in outcome.relies_on_adr_ids if name in refs],
             "project_decisions": outcome.project_decision_ids,
             "constraint_ids": outcome.constraint_ids, "risk_ids": outcome.risk_ids}
 
 
-def adr_entry(stream: Stream, name: str, note: str, written: Mapping[str, str]) -> dict:
+def adr_entry(stream: Stream, name: str, note: str, written: Mapping[str, str],
+              named: Names) -> dict:
     """Решение потока: номер заметки, вопрос и текст, как он лёг в заметку («решение, потому
-    что обоснование»)."""
+    что обоснование»), — с номерами заметок и в тексте (names): заметку могли выгрузить, когда
+    номера потока ещё оставались в ней как есть."""
     n = int(name.split("-")[1])
     scope = stream.scope or []
     question = scope[n - 1] if 0 < n <= len(scope) else None
-    return {"id": note, "question": (question.note or question.text) if question else "",
-            "decision": written.get(note, "")}
+    return {"id": note, "question": named(question.note or question.text) if question else "",
+            "decision": named(written.get(note, ""))}
 
 
 def limits_prompt(fragments: Mapping[int, LabeledFragment], ids: Iterable[int]) -> list[dict]:

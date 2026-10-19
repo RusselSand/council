@@ -409,7 +409,7 @@ export interface ExportedNote {
 /** Последняя выгрузка потока: из какого черновика и к каким утверждённым итогам. */
 export interface NotesExport {
   run: string; outcomes: string; language: string; root: string; notes: ExportedNote[]
-  /** Имена совета (O1, ADR-2) — номерами заметок этой выгрузки (OUT-…, ADR-…): так их называет план задач. */
+  /** Имена совета (O1, ADR-2, Q1, P3…) — номерами заметок этой выгрузки (OUT-…, ADR-…, OQ-…, PRO-…). */
   refs: Record<string, string>
 }
 

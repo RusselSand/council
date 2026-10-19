@@ -9,9 +9,13 @@
 и запись подтверждённого одной сделкой. Повторная выгрузка узнаёт свои задачи по названию и
 сути: прежняя задача — прежний номер и файл, новая — следующий номер после самого большого,
 какой есть в каталоге заметок, прежней выгрузке и папке задач.
+
+Задачу везде зовут одним названием — заголовком её файла, и после перевода тоже (aligned).
+Номера потока (Q1, F3…) в тексте задачи — номерами заметок, как и в самих заметках.
 """
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import re
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 
 from . import issue_files
 from .export import ISSUE, Part, Shelf, keyed, matched, planned
@@ -26,7 +30,10 @@ from .models import (
 )
 from .notes import Catalog, NotesError, issues_in
 from .questions import same_question
-from .tasks import relabeled
+from .tasks import Names, relabeled
+
+# Название задачи — заголовок её файла: первая строка «# …».
+TITLE = re.compile(r"^# +(.+?)[ \t]*$", re.MULTILINE)
 
 
 def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | None,
@@ -68,19 +75,31 @@ def line(text: str) -> str:
     return " ".join(text.split())
 
 
+def issue_title(issue: Issue, names: Mapping[str, str],
+                renumber: Callable[[str], str] | None = None) -> str:
+    """Название задачи, как оно ляжет и в её файл, и в строку «- ISS-…: …» задач, что ждут её."""
+    title = relabeled(issue.title, names)
+    return line(renumber(title) if renumber else title)
+
+
 def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
                adrs: Sequence[tuple[str, str]], after: Sequence[tuple[str, str]],
                keep: Sequence[str], risks: Sequence[str], words: Mapping[str, str],
-               names: Mapping[str, str] | None = None) -> str:
+               names: Mapping[str, str] | None = None,
+               renumber: Callable[[str], str] | None = None) -> str:
     """Задача для coding agent: кому и зачем, где менять и что там сейчас, что сделать, на чём
-    стоит, что соблюдать, что неясно и после каких задач, — и номер для финального коммита.
-    Задачи плана текст называет I-n, а агент найдёт их по номерам на весь проект: names."""
+    стоит, что соблюдать, что неясно и после каких задач (after — с названиями из issue_title), —
+    и номер для финального коммита. Задачи плана текст называет I-n, а агент найдёт их по
+    номерам на весь проект: names. Номера потока своего итога — номерами заметок: renumber."""
     names = names or {}
 
-    def named(value: str) -> str:
-        return relabeled(value, names)
+    def fixed(value: str) -> str:
+        return renumber(value) if renumber else value
 
-    lines = [f"# {line(named(issue.title))}", "", named(issue.user_story.strip())]
+    def named(value: str) -> str:
+        return fixed(relabeled(value, names))
+
+    lines = [f"# {issue_title(issue, names, renumber)}", "", named(issue.user_story.strip())]
 
     def section(title: str, items: Iterable[str]) -> None:
         items = list(items)
@@ -91,8 +110,8 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     section(words["entry"], (f"- {line(item)}" for item in issue.main_entry_points))
     section(words["now"], [named(now)] if now else [])
     section(words["scope"], (f"- {line(named(item))}" for item in issue.scope))
-    section(words["outcomes"], [f"- {outcome[0]}: {line(outcome[1])}"])
-    section(words["decisions"], (f"- {name}: {line(text)}" for name, text in adrs))
+    section(words["outcomes"], [f"- {outcome[0]}: {line(fixed(outcome[1]))}"])
+    section(words["decisions"], (f"- {name}: {line(fixed(text))}" for name, text in adrs))
     section(words["keep"], (f"- {line(text)}" for text in keep))
     section(words["risks"], (f"- {line(text)}" for text in risks))
     section(words["open"], (f"- {line(named(item))}" for item in issue.open_questions))
@@ -109,12 +128,13 @@ def title_of(catalog: Catalog, note_id: str) -> str:
 
 def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shelf: Shelf,
                   previous: TasksExport | None, words: Mapping[str, str], language: str,
-                  reserved: Collection[str] = ()
+                  reserved: Collection[str] = (), streams: Mapping[str, Names] | None = None
                   ) -> tuple[list[NotePlan], list[VanishedNote], list[IssueNumber]]:
     """Черновик выгрузки плана: файл на каждую задачу с номером, текстом и тем, что с ним будет;
     исчезнувшие файлы прежней выгрузки; номера задач. language — язык заметок: не тот, что у
     прошлой выгрузки, — прежние тексты не берутся, их напишет перевод заново (файлы, правленные
-    руками, — нет)."""
+    руками, — нет). streams — номера потока у каждого итога (по номеру заметки итога): ими
+    файл задачи называет части потока своего итога."""
     catalog = shelf.catalog
     numbers = numbered(plan.issues, catalog, previous, reserved, shelf.files,
                        issue_files.occupied(shelf.files))
@@ -128,18 +148,25 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     if gone:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(gone)}, а план на них стоит: "
                          "верните заметки или выгрузите потоки заново и спланируйте снова")
+    labels = {name: number.id for name, number in by_issue.items()}
+
+    def renumber(issue: Issue) -> Callable[[str], str] | None:
+        names = (streams or {}).get(issue.outcome_id)
+        return (lambda text: names(text, words["quote"])) if names else None
+
+    titles = {issue.id: issue_title(issue, labels, renumber(issue)) for issue in plan.issues}
     notes: list[NotePlan] = []
     for issue in plan.issues:
         number = by_issue[issue.id]
         outcome = (issue.outcome_id, title_of(catalog, issue.outcome_id))
         adrs = [(name, catalog.notes[name].body.strip()) for name in issue.adr_ids
                 if name in catalog.notes]
-        after = [(by_issue[name].id, by_issue[name].title) for name in issue.depends_on
+        after = [(by_issue[name].id, titles[name]) for name in issue.depends_on
                  if name in by_issue]
         text = issue_text(issue, number.id, outcome, adrs, after,
                           [fragments[i].text for i in issue.constraint_ids if i in fragments],
                           [fragments[i].text for i in issue.risk_ids if i in fragments], words,
-                          {name: number.id for name, number in by_issue.items()})
+                          labels, renumber(issue))
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
@@ -157,3 +184,40 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                 for old in filed.values()
                 if old.id not in current and old.id in shelf.files and old.id not in reserved]
     return notes, vanished, numbers
+
+
+def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Файлы задач (по ключу), где задача, после которой делать эту, названа не так, как в её
+    собственном файле, — с её названием оттуда. Каждый файл переводят своим ходом судьи, и одна
+    задача выходила бы под разными названиями; правку названия человеком тоже подхватывают
+    строки других файлов. texts — тексты, как файлы лягут (с правками); нет — текст черновика.
+    Файл, правленный руками, не трогается, но название в нём — какое есть."""
+    def current(note: NotePlan) -> str:
+        if note.action == "edited":
+            return note.current or ""
+        return (texts or {}).get(note.key, note.text)
+
+    titles = {note.id: found.group(1) for note in notes
+              if (found := TITLE.search(current(note))) is not None}
+    changed: dict[str, str] = {}
+    for note in notes:
+        if note.action == "edited":
+            continue
+        text = new = current(note)
+        for link in note.links:
+            if link != note.id and link in titles:
+                new = retitled(new, link, titles[link])
+        if new != text:
+            changed[note.key] = new
+    return changed
+
+
+def retitled(text: str, issue: str, title: str) -> str:
+    """Строка «- ISS-…: …» этой задачи — с этим названием. Таких несколько — последняя: список
+    задач, после которых делать эту, в файле последний."""
+    found = list(re.finditer(rf"^([ \t]*-[ \t]*{re.escape(issue)}[ \t]*:[ \t]*).*$", text,
+                             re.MULTILINE))
+    if not found:
+        return text
+    last = found[-1]
+    return text[:last.start()] + last.group(1) + title + text[last.end():]

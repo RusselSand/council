@@ -200,6 +200,7 @@ from .slicing import (
 )
 from .tasks import Inputs as TaskInputs
 from .tasks import plan_of, plan_prompt, same_plan
+from .tasks_export import aligned
 
 log = logging.getLogger(__name__)
 
@@ -1445,8 +1446,9 @@ class NotesRun(CouncilRun[NotesDraft | TasksDraft]):
     """Перевод черновика выгрузки на язык документации (COUNCIL_NOTES_LANGUAGE): ходы судьи
     по очереди — новые тексты заметок разом, файл задачи — каждый своим ходом (portions). Ход
     упал — шаг упал, а ответы готовых ходов остаются в лотке: повтор возьмёт их даром. Номера
-    заметок и задач в переводе — те же, иначе ответ негодный. После перевода совет заново
-    смотрит, что с каждой заметкой будет при записи."""
+    заметок и задач в переводе — те же, иначе ответ негодный. Задачу во всех файлах зовут так,
+    как перевели её собственный файл (aligned). После перевода совет заново смотрит, что с
+    каждой заметкой будет при записи."""
 
     what = "перевод заметок"
 
@@ -1469,7 +1471,12 @@ class NotesRun(CouncilRun[NotesDraft | TasksDraft]):
                                      partial(translations, sources=part))
         if not parts:
             self._skip(StepName.notes_translation)
-        notes = [settled(note.model_copy(update={"text": found.get(note.key, note.text)}),
+        texts = {note.key: found.get(note.key, note.text) for note in self.state.notes}
+        if isinstance(self.state, TasksDraft):
+            # Каждый файл задачи переводили своим ходом: задачу, после которой делать эту,
+            # зовут так, как перевели её собственный файл.
+            texts |= aligned(self.state.notes, texts)
+        notes = [settled(note.model_copy(update={"text": texts[note.key]}),
                          previous_of(note, self.previous), self.shelf)
                  for note in self.state.notes]
         return {"notes": notes}

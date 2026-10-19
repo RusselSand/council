@@ -230,13 +230,11 @@ def criterion(item: str) -> str:
 
 
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-             words: Mapping[str, str]
-             ) -> tuple[list[Part], list[str], dict[str, str], dict[str, str]]:
+             words: Mapping[str, str]) -> tuple[list[Part], list[str], dict[str, str]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
-    выгружается — с причиной, и какой частью ложится каждое решение потока (ADR-n) и каждый
-    итог (O1): по ним план задач называет их номерами заметок. И последним — какой частью
-    ложится всё, что тексты потока называют его номерами: идея (I1), вопрос, вариант (Pn и Fn),
-    решение, итог."""
+    выгружается — с причиной, и какой частью ложится всё, что тексты потока называют его
+    номерами: идея (I1), вопрос, вариант (Pn и Fn), решение (ADR-n), итог (O1). По ним план
+    задач называет итоги и решения номерами заметок, а тексты заметок и задач — всё остальное."""
     found = found_by_question(stream.proposals, stream.choices)
     choices = {choice.question_id: choice for choice in stream.choices or []}
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
@@ -267,7 +265,7 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
                 external.add(adr.key)
     outcomes, skipped, outcome_of = outcome_parts(stream, adr_of, external, words, taken)
     return ([Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-             *outcomes], skipped, adr_of | outcome_of, named | adr_of | outcome_of)
+             *outcomes], skipped, named | adr_of | outcome_of)
 
 
 def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> dict[str, str]:
@@ -288,11 +286,11 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
-               words: Mapping[str, str]) -> str:
+               quote: str = "«{}»") -> str:
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
-    выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках.
-    Номера заметок и незнакомые — как есть."""
+    выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
+    (quote). Номера заметок и незнакомые — как есть, код в `обратных кавычках` — тоже."""
     def number(match: re.Match[str]) -> str:
         return numbers.get(match.group(0), match.group(0))
 
@@ -300,23 +298,28 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         name = match.group(0)
         if name in numbers or name not in texts:
             return numbers.get(name, name)
-        return words["quote"].format(" ".join(texts[name].split()).rstrip(".!"))
+        return quote.format(" ".join(texts[name].split()).rstrip(".!"))
 
-    out: list[str] = []
-    last = 0
-    for match in CITED.finditer(text):
-        names = re.findall(CITED_NUMBER, match.group(0))
-        kept = [numbers.get(name, name) for name in names if name in numbers or name not in texts]
-        head = text[last:match.start()]
-        if not kept:
-            out.append(head.rstrip(" "))
-        elif len(kept) == len(names):
-            out += [head, LOCAL.sub(number, match.group(0))]
-        else:
-            out += [head, f"({', '.join(kept)})"]
-        last = match.end()
-    out.append(text[last:])
-    return LOCAL.sub(quoted, "".join(out))
+    def prose(text: str) -> str:
+        out: list[str] = []
+        last = 0
+        for match in CITED.finditer(text):
+            names = re.findall(CITED_NUMBER, match.group(0))
+            kept = [numbers.get(name, name) for name in names
+                    if name in numbers or name not in texts]
+            head = text[last:match.start()]
+            if not kept:
+                out.append(head.rstrip(" "))
+            elif len(kept) == len(names):
+                out += [head, LOCAL.sub(number, match.group(0))]
+            else:
+                out += [head, f"({', '.join(kept)})"]
+            last = match.end()
+        out.append(text[last:])
+        return LOCAL.sub(quoted, "".join(out))
+
+    return "".join(part if part.startswith("`") else prose(part)
+                   for part in re.split(r"(`[^`\n]*`)", text))
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -383,14 +386,14 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             language: str, reserved: Collection[str] = ()
             ) -> tuple[list[NotePlan], list[VanishedNote], list[str], dict[str, str]]:
     """Черновик выгрузки: заметки с номерами, текстом и тем, что с ними будет; исчезнувшие; что
-    не выгружается; номер заметки у каждого решения (ADR-n) и итога (O1) потока, что ляжет.
+    не выгружается; номер заметки у всего, что тексты потока называют его номерами (parts_of).
     language — язык заметок: не тот, что у прошлой выгрузки, — прежние тексты не берутся, их
     напишет перевод заново (файлы, правленные руками, — нет). reserved — номера
     заметок из выгрузок других потоков: их заметку могли удалить руками, но номер всё ещё их —
     новой заметке его не дают, а прежний номер потока, который записан и за другим, — уже не
     его."""
     catalog = shelf.catalog
-    parts, skipped, refs, named = parts_of(stream, fragments, catalog, words)
+    parts, skipped, named = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
@@ -410,8 +413,8 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
-    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words)), ids,
-                     olds.get(part.key), alias.get(part.key), shelf, reuse)
+    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words["quote"])),
+                     ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
     claimed = set(alias.values())
@@ -420,7 +423,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
                 if key not in claimed and old.id in catalog.notes and old.id not in reserved]
-    return notes, vanished, skipped, {name: ids[key] for name, key in refs.items()}
+    return notes, vanished, skipped, numbers
 
 
 def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: str | None,
