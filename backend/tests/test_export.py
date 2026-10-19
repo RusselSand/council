@@ -300,6 +300,14 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     indented = "Пример:\n\n    Q1 = F4\n    F4 = Q1\n\n- по Q1\n    и Q1"
     assert renumbered(indented, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
         "Пример:\n\n    Q1 = F4\n    F4 = Q1\n\n- по OQ-0002\n    и OQ-0002")
+    # Пустая строка с пробелами перед блоком — тоже пустая; строка кода — и через перенос.
+    assert renumbered("текст\n \n    Q1\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        "текст\n \n    Q1\n\nпо OQ-0002")
+    assert renumbered("`first\nQ1` и Q1", {"Q1": "OQ-0002"}, {}) == "`first\nQ1` и OQ-0002"
+    # Адрес — целиком, и со скобками внутри.
+    assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
+                      {"Q1": "OQ-0002"}, {}) == (
+        "[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 OQ-0002")
     # Адрес ссылки — не текст: подпись получает номер заметки, адрес остаётся.
     assert renumbered("[вопрос Q1](https://tracker.local/Q1), см. https://x.local/Q1",
                       {"Q1": "OQ-0002"}, {}) == (

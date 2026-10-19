@@ -34,6 +34,8 @@ from .tasks import Names, relabeled
 
 # Название задачи — заголовок её файла: первая строка «# …».
 TITLE = re.compile(r"^# +(.+?)[ \t]*$", re.MULTILINE)
+# Пункт списка задач, после которых делать эту: «- ISS-0012: название».
+AFTER = re.compile(r"^([ \t]*-[ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
 
 
 def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | None,
@@ -213,21 +215,31 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
     for note in notes:
         if note.action == "edited":
             continue
-        text = new = current(note)
-        for link in note.links:
-            if link != note.id and link in titles:
-                new = retitled(new, link, titles[link])
+        text = current(note)
+        # Список задач, после которых делать эту, issue_text кладёт последним разделом.
+        section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
+        new = retitled(text, {link: titles[link] for link in note.links
+                              if link != note.id and link in titles}, section)
         if new != text:
             changed[note.key] = new
     return changed
 
 
-def retitled(text: str, issue: str, title: str) -> str:
-    """Строка «- ISS-…: …» этой задачи — с этим названием. Таких несколько — последняя: список
-    задач, после которых делать эту, в файле последний."""
-    found = list(re.finditer(rf"^([ \t]*-[ \t]*{re.escape(issue)}[ \t]*:[ \t]*).*$", text,
-                             re.MULTILINE))
-    if not found:
+def retitled(text: str, titles: Mapping[str, str], section: int) -> str:
+    """Список задач, после которых делать эту, — с названиями из их файлов (titles). Это раздел
+    «## …» под тем же номером (section, с нуля), что и в тексте совета: перевод разделы не
+    переставляет, а пункт с номером задачи в другом разделе, хоть и дописанном ниже, — не из
+    списка. Пункты там не только «- ISS-…: …» или раздела нет — текст как есть."""
+    lines = text.split("\n")
+    heads = [n for n, row in enumerate(lines) if row.startswith("## ")]
+    if not 0 <= section < len(heads):
         return text
-    last = found[-1]
-    return text[:last.start()] + last.group(1) + title + text[last.end():]
+    end = heads[section + 1] if section + 1 < len(heads) else len(lines)
+    items = [(n, AFTER.match(lines[n])) for n in range(heads[section] + 1, end)
+             if lines[n].lstrip().startswith("- ")]
+    if not items or not all(found for _, found in items):
+        return text
+    for n, found in items:
+        if found is not None and found.group(2) in titles:
+            lines[n] = found.group(1) + titles[found.group(2)]
+    return "\n".join(lines)

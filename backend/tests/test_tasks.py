@@ -16,6 +16,7 @@ from spec_council.issue_files import rendered as issue_rendered
 from spec_council.models import (
     CouncilStatus,
     Issue,
+    NotePlan,
     Outcome,
     RepositoryFinding,
     RepositoryMap,
@@ -23,14 +24,15 @@ from spec_council.models import (
     RepositoryStep,
     Research,
     Slicing,
+    Stream,
     Structure,
     StructureProposal,
 )
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
-from spec_council.tasks import Names, outcome_entry, outcome_names, research_texts
-from spec_council.tasks_export import decisions_of, issue_text
+from spec_council.tasks import Names, names_of, outcome_entry, outcome_names, research_texts
+from spec_council.tasks_export import aligned, decisions_of, issue_text
 from tests.test_streams import (
     ALL_DECIDED,
     LABELS,
@@ -545,3 +547,28 @@ def test_task_names_come_from_the_streams_own_group_and_the_approved_research(ag
     approved = Research(scan=scan, repository=RepositoryStep(by="scan", scan_run="s1"))
     assert research_texts(council(council_id).model_copy(update={"research": approved})) == {
         "R1": "Ответы ищут полнотекстом."}
+
+
+def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():
+    def file(number, generated, text=None, links=()):
+        return NotePlan(key=f"i:{number}", id=number, type="issue", text=text or generated,
+                        generated=generated, links=list(links), action="create")
+
+    first = file("ISS-0001", "# Индекс\n\nКак команда.", "# Index v1\n\nAs a team.")
+    # Ниже списка зависимостей дописали раздел, где тоже «- ISS-0001: …», — он не список.
+    second = file("ISS-0002", "# Поиск\n\n## Что сделать\n- Искать\n\n## После задач\n"
+                              "- ISS-0001: Индекс\n\nКоммит ISS-0002.",
+                  "# Search\n\n## To do\n- Search\n\n## After the issues\n- ISS-0001: Index v2\n\n"
+                  "## Notes\n- ISS-0001: reuse its tokenizer\n\nCommit ISS-0002.",
+                  ["OUT-0001", "ISS-0001"])
+    assert aligned([first, second]) == {second.key: second.text.replace(
+        "- ISS-0001: Index v2", "- ISS-0001: Index v1")}
+
+
+def test_a_finding_of_the_approved_research_is_a_number_not_an_old_term():
+    # В копии скана потока «R2» было словом (бакет Cloudflare R2), а в нынешнем исследовании R2 —
+    # находка: в задачах это её номер.
+    bucket = Fragment(id=1, text="Файлы лежат в Cloudflare R2.", label="constraint", reason="",
+                      council_label="constraint")
+    names = names_of(Stream(group="C"), {1: bucket}, {"R2": "Ответы ищут полнотекстом."})
+    assert names("см. R2") == "см. «Ответы ищут полнотекстом»"
