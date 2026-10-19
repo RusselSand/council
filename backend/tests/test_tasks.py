@@ -754,8 +754,9 @@ def test_a_section_naming_only_some_prerequisites_is_not_their_list():
 
 
 def test_a_task_title_drops_its_closing_hashes():
-    # «# Index #» — тот же заголовок «Index»: закрывающие «#» в название не входят.
-    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index #",
+    # «  #<таб>Index #» — тот же заголовок «Index»: отступ, табуляция после «#» и закрывающие
+    # «#» в название не входят.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="  #\tIndex #",
                      generated="# Индекс", action="create")
     second = NotePlan(key="i:2", id="ISS-0002", type="issue",
                       text="# Search\n\n## After\n- ISS-0001: Индекс\n",

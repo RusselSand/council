@@ -318,6 +318,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"Q1\"")
     assert renumbered("Абзац\n[Q1]: /questions/Q1\n\nсм. [Q1]", {"Q1": "OQ-0002"}, {}) == (
         "Абзац\n[OQ-0002]: /questions/OQ-0002\n\nсм. [OQ-0002]")
+    # Вторая метка полной ссылки — сноска, хоть за ней и скобка.
+    full = "[текст][Q1](пояснение)\n\n[Q1]: /questions/1"
+    assert renumbered(full, {"Q1": "OQ-0002"}, {}) == full
     # \\[Q1] — экранирован сам «\», а [Q1] — снова ссылка на сноску; адрес в <…> — и с «\>».
     assert renumbered("см. \\\\[Q1] и Q1\n\n[Q1]: /q/1", {"Q1": "OQ-0002"}, {}) == (
         "см. \\\\[Q1] и OQ-0002\n\n[Q1]: /q/1")

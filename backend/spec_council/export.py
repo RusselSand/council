@@ -427,8 +427,10 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                if label.split()}
     extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
     if spelled:
-        extra.append(r"(?i:(?<!\\)(?:\\\\)*\[\s*(?:" + "|".join(sorted(spelled))
-                     + r")\s*\](?!\(|\[(?!\])))")
+        labels = "|".join(sorted(spelled))
+        # Вторая метка полной ссылки [текст][Q1] — сноска, что бы ни шло за ней.
+        extra.append(r"(?i:(?<=\])\[\s*(?:" + labels + r")\s*\])")
+        extra.append(r"(?i:(?<!\\)(?:\\\\)*\[\s*(?:" + labels + r")\s*\](?!\(|\[(?!\])))")
     untouched = UNTOUCHED
     if extra:
         untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
