@@ -66,11 +66,26 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 
 def research_texts(council: Council) -> dict[str, str]:
-    """Находки исследования совета — карты кода (R…) и описания макета (D…)."""
+    """Находки исследования совета — карты кода (R…) и описания макета (D…), — если шаг
+    пройден этим сканом: пропущенный или пройденный другим план не читал."""
     research = council.research
-    scans = (research.scan, research.design_scan) if research else ()
-    return {finding.id: finding.statement for scan in scans
-            if scan is not None and scan.result is not None for finding in scan.result.findings}
+    if research is None:
+        return {}
+    steps = ((research.repository, research.scan), (research.design, research.design_scan))
+    return {finding.id: finding.statement for step, scan in steps
+            if step is not None and step.by == "scan" and scan is not None
+            and scan.run == step.scan_run and scan.result is not None
+            for finding in scan.result.findings}
+
+
+def own_fragments(council: Council, stream: Stream,
+                  fragments: Mapping[int, LabeledFragment]) -> dict[int, LabeledFragment]:
+    """Фрагменты группы потока: по ним шли его вопросы, варианты и итоги — и выгрузка его
+    заметок. Термин другой группы — не термин этого потока."""
+    groups = council.structure.groups if council.structure else []
+    group = next((group for group in groups if group.id == stream.group), None)
+    return {i: fragment for i, fragment in fragments.items()
+            if group is None or i in group.fragment_ids}
 
 
 def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment]
@@ -80,7 +95,7 @@ def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment]
     research = research_texts(council)
     found: dict[str, Names] = {}
     for stream in council.streams or []:
-        names = names_of(stream, fragments, research)
+        names = names_of(stream, own_fragments(council, stream, fragments), research)
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             if outcome.id in names.numbers:
                 found[names.numbers[outcome.id]] = names
@@ -157,7 +172,7 @@ def inputs_of(council: Council) -> Inputs:
     skipped: list[str] = []
     for stream in council.streams or []:
         refs = stream.notes.refs if stream.notes else {}
-        names = names_of(stream, fragments)
+        names = names_of(stream, own_fragments(council, stream, fragments))
         written = {note.id: note.written for note in stream.notes.notes} if stream.notes else {}
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             note = refs.get(outcome.id)

@@ -17,6 +17,11 @@ from spec_council.models import (
     CouncilStatus,
     Issue,
     Outcome,
+    RepositoryFinding,
+    RepositoryMap,
+    RepositoryScan,
+    RepositoryStep,
+    Research,
     Slicing,
     Structure,
     StructureProposal,
@@ -24,7 +29,7 @@ from spec_council.models import (
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
-from spec_council.tasks import Names, outcome_entry
+from spec_council.tasks import Names, outcome_entry, outcome_names, research_texts
 from spec_council.tasks_export import issue_text
 from tests.test_streams import (
     ALL_DECIDED,
@@ -516,3 +521,22 @@ def test_a_task_is_named_alike_in_every_file_after_translation_and_edits(agents,
     assert "- ISS-0001: Index, renamed" in (issues / "ISS-0002.md").read_text(encoding="utf-8")
     drafts(council_id)                                       # переводить нечего — всё на месте
     assert {n.action for n in council(council_id).tasks_draft.notes} == {"same"}
+
+
+def test_task_names_come_from_the_streams_own_group_and_the_approved_research(agents, folders):
+    council_id = ready()
+    fragments = {f.id: f for f in council(council_id).slicing.fragments}
+    # «P1» — термин в тексте другой группы: в потоке C P1 — его вариант.
+    other = Fragment(id=99, text="Метрика P1 у соседней команды.", label="constraint",
+                     reason="", council_label="constraint")
+    [names] = outcome_names(council(council_id), fragments | {99: other}).values()
+    assert names("по P1") == f"по {names.numbers['P1']}"
+
+    # Находки скана, которым шаг «Репозиторий» не прошли, план не читал.
+    scan = RepositoryScan(state="done", run="s1", steps=[], result=RepositoryMap(findings=[
+        RepositoryFinding(id="R1", statement="Ответы ищут полнотекстом.", status="verified")]))
+    skipped = Research(scan=scan, repository=RepositoryStep(by="skipped"))
+    assert research_texts(council(council_id).model_copy(update={"research": skipped})) == {}
+    approved = Research(scan=scan, repository=RepositoryStep(by="scan", scan_run="s1"))
+    assert research_texts(council(council_id).model_copy(update={"research": approved})) == {
+        "R1": "Ответы ищут полнотекстом."}

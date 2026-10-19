@@ -290,6 +290,8 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     fenced = "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо Q1"
     assert renumbered(fenced, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
         "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо OQ-0002")
+    assert renumbered("~~~\nQ1: 1\n~~~\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        "~~~\nQ1: 1\n~~~\nпо OQ-0002")
 
 
 def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):

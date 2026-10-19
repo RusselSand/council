@@ -70,8 +70,9 @@ NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
 # находки скана репозитория и макета. В документации они ничего не значат.
 LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
-# Код в тексте: блок ```…``` (незакрытый — до конца) и `строка`. В нём номера — не ссылки.
-CODE = re.compile(r"(```[\s\S]*?(?:```|\Z)|`[^`\n]*`)")
+# Код в тексте: блок ```…``` или ~~~…~~~ (незакрытый — до конца) и `строка`. В нём номера — не
+# ссылки.
+CODE = re.compile(r"(```[\s\S]*?(?:```|\Z)|~~~[\s\S]*?(?:~~~|\Z)|`[^`\n]*`)")
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
@@ -319,7 +320,7 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
     (quote). Номера заметок и незнакомые — как есть, код в `обратных кавычках` и в блоках
-    ```…``` — тоже, и термины исходных текстов (terms_of) — тоже."""
+    ```…``` и ~~~…~~~ — тоже, и термины исходных текстов (terms_of) — тоже."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -350,7 +351,7 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
-    return "".join(part if part.startswith("`") else prose(part)
+    return "".join(part if part.startswith(("`", "~~~")) else prose(part)
                    for part in CODE.split(text))
 
 
