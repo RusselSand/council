@@ -275,9 +275,9 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         text = current(note)
         # Список задач, после которых делать эту, issue_text кладёт последним разделом.
         section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
-        new = retitled(text, {link: titles[link] for link in note.links
-                              if link != note.id and link in titles}, section,
-                       commit.format(id=note.id) if commit else None)
+        waits = {link for link in note.links if link != note.id and ISSUE.fullmatch(link)}
+        new = retitled(text, {link: titles[link] for link in waits if link in titles}, waits,
+                       section, commit.format(id=note.id) if commit else None)
         # Название с номером заметки или задачи (правили руками) принесло бы его в чужой файл
         # без ссылки во frontmatter: такой файл — как был.
         if new != text and numbering_problem(text, new) is None:
@@ -300,9 +300,11 @@ def commit_line(notes: Sequence[NotePlan], current: Callable[[NotePlan], str]) -
     return ranked[0][0]
 
 
-def retitled(text: str, titles: Mapping[str, str], section: int, commit: str | None) -> str:
-    """Список задач, после которых делать эту, — с названиями из их файлов (titles). Это раздел
-    «## …», где, кроме пустых, только строки «- ISS-…: …» задач, которых ждут (titles), — и
+def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], section: int,
+             commit: str | None) -> str:
+    """Список задач, после которых делать эту, — с названиями из их файлов (titles; у какой
+    названия не узнать — её строка как есть). Это раздел «## …», где, кроме пустых, только
+    строки «- ISS-…: …» задач, которых ждут (waits), — и
     последняя строка файла о номере для коммита (commit): issue_text ставит её после списка.
     Таких разделов несколько (человек дописал похожий) — тот, что под тем же номером (section,
     с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
@@ -317,12 +319,13 @@ def retitled(text: str, titles: Mapping[str, str], section: int, commit: str | N
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
         rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
         items = [(n, match) for n in rows if (match := AFTER.match(lines[n])) is not None]
-        if rows and len(items) == len(rows) and all(m.group(2) in titles for _, m in items):
+        if rows and len(items) == len(rows) and all(m.group(2) in waits for _, m in items):
             found.append((place, items))
     chosen = found[0][1] if len(found) == 1 else next(
         (items for place, items in found if place == section), None)
     if chosen is None:
         return text
     for n, match in chosen:
-        lines[n] = match.group(1) + titles[match.group(2)]
+        if match.group(2) in titles:
+            lines[n] = match.group(1) + titles[match.group(2)]
     return "\n".join(lines)

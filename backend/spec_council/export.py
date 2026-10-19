@@ -367,8 +367,21 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     исходном тексте («ADR-9999 fixture») — слово этого текста."""
     past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
             if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
-    return frozenset(past | {name for text in sources_of(stream, fragments, more)
+    return frozenset(past | {name for text in map(prose_of, sources_of(stream, fragments, more))
                              for name in (*LOCAL.findall(text), *NUMBER.findall(text))})
+
+
+def prose_of(text: str) -> str:
+    """Только проза текста — без кода, адресов и меток ссылок (in_prose): слово исходного
+    текста — термин, только если оно в прозе; `Q1` в коде — не его слово."""
+    parts: list[str] = []
+
+    def keep(part: str) -> str:
+        parts.append(part)
+        return part
+
+    in_prose(text, keep)
+    return "\n".join(parts)
 
 
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -392,7 +405,7 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     Номер задачи плана (I1) в тексте задачи — ссылка на другую задачу; термином он остаётся
     только в таком сочетании."""
     found: set[str] = set()
-    for text in sources_of(stream, fragments, more):
+    for text in map(prose_of, sources_of(stream, fragments, more)):
         for match in TASK.finditer(text):
             if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
                 found.add(text[match.start():match.end() + after.end()])
@@ -412,10 +425,12 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
     # Метка ссылки-сноски, определённой в тексте (не в блоке кода), — и там, где ссылкой
     # пользуются: [..][Q1], [Q1].
     labels = DEFINED.findall("".join(row for n, row in enumerate(lines) if n not in code))
-    # Метки сравнивают, как CommonMark: без регистра и с любыми пробелами между словами.
+    # Метки сравнивают, как CommonMark: без регистра и с любыми пробелами между словами. [Q1](…)
+    # и [Q1][метка] — не сноска Q1: там [Q1] — текст ссылки.
     spelled = {r"\s+".join(map(re.escape, label.split())) for label in labels if label.split()}
     untouched = UNTOUCHED if not spelled else re.compile(
-        UNTOUCHED.pattern + r"|(?i:\[\s*(?:" + "|".join(sorted(spelled)) + r")\s*\])",
+        UNTOUCHED.pattern + r"|(?i:\[\s*(?:" + "|".join(sorted(spelled))
+        + r")\s*\](?!\(|\[(?!\])))",
         UNTOUCHED.flags)
 
     def inline(part: str) -> str:

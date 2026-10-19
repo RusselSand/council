@@ -712,3 +712,25 @@ def test_a_note_number_that_is_a_stream_term_is_not_a_dead_reference(tmp_path):
     [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
                                  words_for("Russian"), "Russian", (), {"OUT-0001": names})
     assert "- Прогнать на ADR-9999 fixture." in file.text
+
+
+def test_dependencies_with_titles_are_aligned_even_if_another_has_none():
+    # У ISS-0001 файл правили руками и названия в первой строке нет — его строка как есть, а
+    # ISS-0002 в том же списке получает своё нынешнее название.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Индекс", generated="# Индекс",
+                     action="edited", current="Заметки.\n\n# Другое")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue", text="# Cache v2",
+                      generated="# Кэш", action="create")
+    third = NotePlan(key="i:3", id="ISS-0003", type="issue",
+                     text="# Search\n\n## After\n- ISS-0001: Index\n- ISS-0002: Cache\n",
+                     generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n- ISS-0002: Кэш\n",
+                     links=["OUT-0001", "ISS-0001", "ISS-0002"], action="create")
+    assert aligned([first, second, third]) == {
+        third.key: third.text.replace("- ISS-0002: Cache", "- ISS-0002: Cache v2")}
+
+
+def test_a_source_word_in_code_is_not_a_term():
+    source = Fragment(id=1, text="Назвать фикстуру `Q1`, а F1 score считать.", label="constraint",
+                      reason="", council_label="constraint")
+    names = names_of(Stream(group="C"), {1: source})
+    assert "F1" in names.terms and "Q1" not in names.terms
