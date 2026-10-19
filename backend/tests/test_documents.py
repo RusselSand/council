@@ -22,7 +22,6 @@ from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.projects import Projects
 from tests.test_project import put
 from tests.test_streams import (
-    OPTION,
     OWN,
     WHY,
     Agents,
@@ -120,12 +119,12 @@ def test_marking_what_an_own_option_refines_leaves_the_export_stale(agents, note
     drafts(council_id)
     assert chose(council_id, "C", [("Q1", None, OWN, "P1"), ("Q2", "P2")]).status_code == 200
     stream = streams_of(council_id)["C"]
-    # Проверка и итоги те же, а заметки легли бы иначе: P1 уже не ложится рядом с правкой.
+    # Проверка и итоги те же, а заметки легли бы иначе: правка встаёт в заметку P1.
     assert stream.decisions is not None and stream.outcomes.approved
     assert stream.notes_draft is None and stream.notes.outcomes == ""
     drafts(council_id)
     vanished = streams_of(council_id)["C"].notes_draft.vanished
-    assert [(v.type, v.text) for v in vanished] == [("proposal", OPTION)]
+    assert [(v.type, v.text) for v in vanished] == [("proposal", OWN)]
 
 
 def test_without_a_notes_folder_there_is_nothing_to_draft(agents):

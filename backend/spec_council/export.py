@@ -11,10 +11,10 @@
 Повторная выгрузка узнаёт свои прежние заметки по ключу части потока: вопрос из текста — по
 фрагменту, остальные — по формулировке; вариант — по вопросу и фрагменту или формулировке;
 решение — по вопросу и выбранному варианту (выбрали другой — это другое решение и новая
-заметка); итог — по названию. Правка варианта, которой своей заметки ещё не было, продолжает
-заметку исходного, и её решение — решение исходного. Совет написал бы то же, что в прошлый
-раз, — остаётся то, что тогда записали, с правками человека. Файл, который правили руками после
-выгрузки, совет не трогает. Исчезнувшее само не удаляется.
+заметка); итог — по названию. Правка варианта — по вопросу и исходному варианту: сколько её
+ни правь, это его заметка, и её решение — решение исходного. Совет написал бы то же, что в
+прошлый раз, — остаётся то, что тогда записали, с правками человека. Файл, который правили
+руками после выгрузки, совет не трогает. Исчезнувшее само не удаляется.
 
 Тексты потока называют его части его же номерами: «по Q1», «(F3)». В заметки они ложатся
 номерами заметок, а у чего заметки нет — без номера (renumbered).
@@ -139,8 +139,8 @@ def unique(key: str, taken: set[str]) -> str:
 class Part:
     """Часть потока, которая станет заметкой. links — ключи других частей или номера заметок
     каталога (у вопроса, который пересматривает прошлое решение, — этот ADR). was — под каким
-    ключом часть могла лечь в прошлый раз, если не под своим: правка варианта — под ключом
-    исходного, и её решение — тоже."""
+    ключом часть могла лечь в прошлый раз, если не под своим: правка варианта, которую выгрузили
+    своим вариантом до того, как отметили, — под ключом своей формулировки, и её решение — тоже."""
 
     key: str
     type: str
@@ -183,6 +183,10 @@ def question_key(question: OpenQuestion) -> str:
 
 
 def option_key(option: Mapping[str, object]) -> str:
+    """Чем вариант узнают при повторной выгрузке: фрагмент — номером, остальные — формулировкой,
+    правка — исходным вариантом (key)."""
+    if "key" in option:
+        return str(option["key"])
     identifier = str(option["id"])
     return identifier if identifier.startswith("F") else same_question(str(option["text"]))
 
@@ -192,8 +196,9 @@ def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
                decision: Decision | None = None) -> list[dict[str, str]]:
     """Варианты вопроса: из текста группы, найденные советом и свой вариант человека. Свой
     вариант — правка другого — встаёт на его место: тот лишь вышел неполным, его никто не
-    отклонял. У правки base — ключ исходного (option_key): его заметку она и продолжит. Решили
-    всё же исходным — остаются оба."""
+    отклонял. Ключ у правки — исходного (key): его заметку она и продолжит, сколько её ни правь;
+    was — ключ её формулировки, если её выгрузили своим вариантом до пометки. Решили всё же
+    исходным — остаются оба."""
     options = ([{"id": f"F{i}", "text": fragments[i].text} for i in question.proposal_ids
                 if i in fragments]
                + [{"id": p.id, "text": p.text} for p in found.get(question.id, [])])
@@ -204,7 +209,7 @@ def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
     was = next((option for option in options if option["id"] == base), None)
     if own is None or was is None or (decision is not None and decision.proposal == base):
         return options
-    refined = own | {"base": option_key(was)}
+    refined = own | {"key": option_key(was), "was": option_key(own)}
     return [refined if option is was else option for option in options if option is not own]
 
 
@@ -365,8 +370,8 @@ def question_parts(question: OpenQuestion, options: list[dict[str, str]],
     adr = None
     for option in options:
         option_part = unique(f"p:{key[2:]}:{option_key(option)}", taken)
-        # Правка, что встала на место исходного: прежде, чем её отметили, выгрузили исходный.
-        was = f"p:{key[2:]}:{option['base']}" if "base" in option else None
+        # Правку могли выгрузить своим вариантом прежде, чем отметили, что она правит.
+        was = f"p:{key[2:]}:{option['was']}" if "was" in option else None
         offered.append(Part(option_part, "proposal", option["text"], (key,), was))
         if decision is not None and decision.proposal == option["id"]:
             adr = Part(f"a:{option_part[2:]}", "adr",
@@ -424,8 +429,8 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     parts, skipped, named = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
-    # Правка, которой прежде не было своей заметкой, продолжает заметку исходного варианта: тот
-    # же вариант, только дописанный, — тот же номер.
+    # Правка, которую выгрузили своим вариантом до пометки, а заметки исходного уже нет, —
+    # продолжает свою прежнюю заметку.
     claimed = set(alias.values())
     for part in parts:
         if part.key not in alias and part.was in before and part.was not in claimed:
