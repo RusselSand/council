@@ -270,21 +270,36 @@ def test_a_refinement_marked_after_an_export_continues_the_note_of_its_option(ro
     assert vanished == []
 
 
-def test_a_refinement_exported_as_its_own_option_keeps_its_note(root):
-    chosen = [Choice(question_id="Q1", proposal="F3"), Choice(question_id="Q2", proposal=None),
-              Choice(question_id="Q3", proposal="P4", text=REFINED)]
-    decided = [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]
-    first, notes, _, _ = export(root, STREAM.model_copy(update={"choices": chosen,
-                                                                "decisions": decided}))
-    own = next(n for n in notes if n.text == REFINED)
+def refined_q3(text, based_on="P3"):
+    """Поток, где по Q3 решили своим вариантом text — правкой based_on."""
+    return STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P4", text=text, based_on=based_on)],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]})
+
+
+def test_a_refinement_exported_as_its_own_option_before_the_mark_joins_its_option(root):
+    first, notes, _, _ = export(root, refined_q3(REFINED, based_on=None))
+    own = next(n for n in notes if n.type == "proposal" and n.text == REFINED)
     base = next(n for n in notes if n.text == FOUND.options[2].proposals[0].text)
-    marked = [*chosen[:2], chosen[2].model_copy(update={"based_on": "P3"})]
-    notes, vanished, _ = draft(root, STREAM.model_copy(update={"choices": marked,
-                                                               "decisions": decided}),
-                               previous=first)
-    # Своя заметка у правки уже есть — она и остаётся, а исходный уходит: его не отклоняли.
-    assert [(n.id, n.action) for n in notes if n.text == REFINED] == [(own.id, "same")]
-    assert [v.id for v in vanished] == [base.id]
+    adr = next(n for n in notes if n.type == "adr" and n.links == [own.id])
+    notes, vanished, _ = draft(root, refined_q3(REFINED), previous=first)
+    # Отметили, что это правка P3: заметка P3 — уже с правкой, решение — то же, но о ней, а
+    # заметка, где правка лежала своим вариантом, уходит.
+    assert [(n.id, n.action) for n in notes if n.text == REFINED] == [(base.id, "update")]
+    assert by_id(notes)[adr.id].links == [base.id]
+    assert [v.id for v in vanished] == [own.id]
+
+
+def test_a_refinement_edited_again_stays_the_same_note(root):
+    first, notes, _, _ = export(root, refined_q3(REFINED))
+    before = {n.type: n.id for n in notes if n.text.startswith(REFINED.rstrip("."))}
+    again = "Ручной откат остаётся, но только по кнопке и с подтверждением."
+    notes, vanished, _ = draft(root, refined_q3(again), previous=first)
+    after = {n.type: n.id for n in notes if n.text.startswith(again.rstrip("."))}
+    assert after == before and set(after) == {"proposal", "adr"}
+    assert vanished == []
 
 
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
