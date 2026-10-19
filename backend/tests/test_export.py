@@ -321,6 +321,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     for link in ("[x](/questions/Q1 'Q1')", "[x](/questions/Q1 (Q1))", "[x](</questions/Q1>)",
                  '[x]( /questions/Q1 "Q1" )'):
         assert renumbered(f"{link} и Q1", {"Q1": "OQ-0002"}, {}) == f"{link} и OQ-0002"
+    # Код в HTML — целиком, а обычный текст между тегами — текст.
+    raw = "<code>Q1</code> <PRE class=\"x\">Q1\nF4</pre> <b>Q1</b>"
+    assert renumbered(raw, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "<code>Q1</code> <PRE class=\"x\">Q1\nF4</pre> <b>OQ-0002</b>")
     # Атрибут тега в кавычках — целиком, и с «>» внутри.
     tag = "<a title=\"x > Q1\" data-q='Q1' hidden>"
     assert renumbered(f"{tag}Q1</a>", {"Q1": "OQ-0002"}, {}) == f"{tag}OQ-0002</a>"
