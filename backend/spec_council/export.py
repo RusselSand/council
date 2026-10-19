@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import issue_files
 from .models import (
+    Choice,
     Decision,
     ExportedNote,
     LabeledFragment,
@@ -172,11 +173,22 @@ def option_key(option: Mapping[str, object]) -> str:
 
 
 def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
-               found: Mapping[str, list[Proposal]]) -> list[dict[str, str]]:
-    """Варианты вопроса: из текста группы, найденные советом и свой вариант человека."""
-    return ([{"id": f"F{i}", "text": fragments[i].text} for i in question.proposal_ids
-             if i in fragments]
-            + [{"id": p.id, "text": p.text} for p in found.get(question.id, [])])
+               found: Mapping[str, list[Proposal]], choice: Choice | None = None,
+               decision: Decision | None = None) -> list[dict[str, str]]:
+    """Варианты вопроса: из текста группы, найденные советом и свой вариант человека. Свой
+    вариант — правка другого — встаёт на его место: тот лишь вышел неполным, его никто не
+    отклонял. Решили всё же исходным — остаются оба."""
+    options = ([{"id": f"F{i}", "text": fragments[i].text} for i in question.proposal_ids
+                if i in fragments]
+               + [{"id": p.id, "text": p.text} for p in found.get(question.id, [])])
+    if choice is None or choice.text is None or choice.based_on is None:
+        return options
+    base = choice.based_on
+    own = next((option for option in options if option["id"] == choice.proposal), None)
+    if (own is None or all(option["id"] != base for option in options)
+            or (decision is not None and decision.proposal == base)):
+        return options
+    return [own if option["id"] == base else option for option in options if option is not own]
 
 
 def because(decision: str, rationale: str | None, words: Mapping[str, str]) -> str:
@@ -212,6 +224,7 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
     выгружается — с причиной, и какой частью ложится каждое решение потока (ADR-n) и каждый
     итог (O1): по ним план задач называет их номерами заметок."""
     found = found_by_question(stream.proposals, stream.choices)
+    choices = {choice.question_id: choice for choice in stream.choices or []}
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
     questions: list[Part] = []
     proposals: list[Part] = []
@@ -220,8 +233,9 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
     external: set[str] = set()           # решения вопросов, что растут из прошлых решений
     taken: set[str] = set()
     for n, question in enumerate(stream.scope or [], 1):
-        asked, offered, adr = question_parts(question, options_of(question, fragments, found),
-                                             decisions.get(question.id), catalog, words, taken)
+        decision = decisions.get(question.id)
+        options = options_of(question, fragments, found, choices.get(question.id), decision)
+        asked, offered, adr = question_parts(question, options, decision, catalog, words, taken)
         questions.append(asked)
         proposals += offered
         if adr is not None:

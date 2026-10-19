@@ -909,7 +909,8 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
     текст. Свой вариант получает номер дальше найденных советом и всех, какие поток уже давал
     (taken), по порядку отбора; совпавший с вариантом вопроса — это он и есть. Тот же свой
     вариант по тому же вопросу, что и прежде (before), сохраняет прежний номер: на нём стоят его
-    проверка и решение, которые переносятся."""
+    проверка и решение, которые переносятся. Правка (based_on) — только варианта этого вопроса;
+    правка, оставившая текст как был, — сам вариант."""
     given = per_question(scope, choices, "выбора")
     found = found_by_question(search)
     texts = {fragment.id: fragment.text for fragment in fragments}
@@ -920,12 +921,16 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
     for question in scope:
         choice = given[question.id]
         if choice.text is None:
+            if choice.based_on is not None:
+                raise HTTPException(422, f"Правка {choice.based_on} по {question.id} без текста")
             if choice.proposal is not None and choice.proposal not in offered_for(question, found):
                 raise HTTPException(422, f"У вопроса {question.id} нет варианта {choice.proposal}")
             result.append(Choice(question_id=question.id, proposal=choice.proposal))
             continue
         if choice.proposal is not None:
             raise HTTPException(422, f"По вопросу {question.id} и вариант, и свой текст")
+        if choice.based_on is not None and choice.based_on not in offered_for(question, found):
+            raise HTTPException(422, f"У вопроса {question.id} нет варианта {choice.based_on}")
         text = " ".join(choice.text.split())
         if not text:
             raise HTTPException(422, f"Свой вариант по {question.id} пуст")
@@ -938,7 +943,7 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
         result.append(Choice(question_id=question.id, proposal=same) if same is not None
                       else Choice(question_id=question.id,
                                   proposal=kept.get(question.id) or f"P{next(numbers)}",
-                                  text=text))
+                                  text=text, based_on=choice.based_on))
     return result
 
 

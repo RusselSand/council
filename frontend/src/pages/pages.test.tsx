@@ -879,6 +879,80 @@ describe('Поток: начало и вопросы', () => {
     expect(within(second).queryByText('P1')).toBeNull()
   })
 
+  it('вариант правят прямо у него — правка уходит текстом с номером варианта, нетронутая исчезает', async () => {
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Хранить в SQLite', reason: '', constraint_ids: [], risk_ids: [], depends_on: [],
+            recommended: true }] },
+        { question_id: 'Q2', verdict: 'none', reason: null, proposals: [] }],
+    }
+    const ready = { questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals }
+    const checking: DecisionAnalysis = { state: 'running', run: 'd1', choices: [], steps: [], analyses: [], error: null }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: ready }),
+               () => json(confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: { ...ready, analysis: checking, choices: [
+                 { question_id: 'Q1', proposal: 'P2', text: 'Хранить в SQLite, копию — в S3', based_on: 'P1' },
+                 { question_id: 'Q2', proposal: null }] } })))
+    const first = await screen.findByRole('radiogroup', { name: 'Где хранить состояние?' })
+    expect(within(first).getAllByRole('radio')).toHaveLength(4)    // правки ещё нет — и строки её нет
+    expect(within(first).getByRole('button', { name: 'Поправить F2' })).toBeTruthy()
+
+    // Поправили и передумали: нетронутая правка — не вариант, вместо неё снова кнопка.
+    fireEvent.click(within(first).getByRole('button', { name: 'Поправить P1' }))
+    expect(within(first).getByRole('radio', { name: /Правка P1/ })).toHaveProperty('checked', true)
+    fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
+    expect(within(first).queryByRole('radio', { name: /Правка P1/ })).toBeNull()
+
+    // Правка начинается с текста варианта; поправленная остаётся строкой, даже если выбрали другое.
+    fireEvent.click(within(first).getByRole('button', { name: 'Поправить P1' }))
+    const edit = screen.getByRole('textbox', { name: 'Правка P1 к Q1' }) as HTMLTextAreaElement
+    expect(edit.value).toBe('Хранить в SQLite')
+    expect(document.activeElement).toBe(edit)
+    fireEvent.change(edit, { target: { value: 'Хранить в SQLite, копию — в S3 ' } })
+    fireEvent.click(within(first).getByRole('radio', { name: /Хранить в SQLite/ }))
+    expect(screen.queryByRole('textbox', { name: 'Правка P1 к Q1' })).toBeNull()
+    expect(within(first).queryByRole('button', { name: 'Поправить P1' })).toBeNull()
+    fireEvent.click(within(first).getByRole('radio', { name: /Правка P1/ }))
+    expect((screen.getByRole('textbox', { name: 'Правка P1 к Q1' }) as HTMLTextAreaElement).value)
+      .toBe('Хранить в SQLite, копию — в S3 ')
+
+    const second = await slideTo('Как понять, что воркер не теряет результат?')
+    fireEvent.click(within(second).getByRole('radio', { name: ru['options.unresolved'] }))
+    fireEvent.click(screen.getByRole('button', { name: ru['options.approve'] }))
+    expect(await screen.findByRole('heading', { name: ru['decisions.title'] })).toBeTruthy()
+    expect(streamCalls).toEqual([{ group: 'A', action: 'choices', body: {
+      run: 'g1', revision: 0, proposals_run: 'p1', choices: [
+        { question_id: 'Q1', proposal: null, text: 'Хранить в SQLite, копию — в S3', based_on: 'P1' },
+        { question_id: 'Q2', proposal: null }] } }])
+  })
+
+  it('утверждённая правка видна у своего варианта с номером, а правка пропавшего варианта — просто свой', async () => {
+    const proposals: ProposalDiscovery = {
+      state: 'done', run: 'p1', scope: [], error: null, steps: [], options: [
+        { question_id: 'Q1', verdict: 'none', reason: null, proposals: [] },
+        { question_id: 'Q2', verdict: 'recommended', reason: null, proposals: [
+          { id: 'P1', text: 'Считать потери', reason: '', constraint_ids: [], risk_ids: [], depends_on: [],
+            recommended: true }] }],
+    }
+    openStream('A', () => confirmed(FOUND, GROUPED, { A: TEXT_IDEA }, { A: {
+      questions: QUESTIONS_FOUND, scope: QUESTIONS_FOUND.questions, proposals,
+      choices: [{ question_id: 'Q1', proposal: 'P3', text: 'Хранить в файле', based_on: 'P9' },
+                { question_id: 'Q2', proposal: 'P2', text: 'Считать потери по дням', based_on: 'P1' }] } }))
+    fireEvent.click(await screen.findByRole('button', { name: ru['decisions.change'] }))
+    const first = await screen.findByRole('radiogroup', { name: 'Где хранить состояние?' })
+    expect(within(first).getByRole('radio', { name: /Свой вариант/ })).toHaveProperty('checked', true)
+    expect((screen.getByRole('textbox', { name: 'Свой вариант к Q1' }) as HTMLTextAreaElement).value).toBe('Хранить в файле')
+
+    const second = await slideTo('Как понять, что воркер не теряет результат?')
+    expect(within(second).getByRole('radio', { name: /Правка P1/ })).toHaveProperty('checked', true)
+    expect(within(second).getByText('P2')).toBeTruthy()
+    const text = screen.getByRole('textbox', { name: 'Правка P1 к Q2' }) as HTMLTextAreaElement
+    expect(text.value).toBe('Считать потери по дням')
+    expect(document.activeElement).not.toBe(text)
+    fireEvent.change(text, { target: { value: 'Считать потери по неделям' } })
+    expect(within(second).queryByText('P2')).toBeNull()
+  })
+
   it('варианты ищет ИИ — найденное видно по вопросу, утвердить нельзя', async () => {
     const seeking: ProposalDiscovery = {
       state: 'running', run: 'p1', scope: [], error: null, steps: [], options: [

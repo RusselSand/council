@@ -213,6 +213,44 @@ def test_an_own_option_is_exported_as_a_proposal_with_its_decision(root):
     assert adr.text == "Секреты лежат в переменных окружения, потому что так проще."
 
 
+def proposals_of(notes, question):
+    asked = next(n for n in notes if n.type == "open_question" and n.text == question)
+    return [n.text for n in notes if n.type == "proposal" and n.links == [asked.id]]
+
+
+def test_a_refinement_takes_the_place_of_the_option_it_refines(root):
+    own = "Деплой запускают по тегу релиза, а hotfix — по merge."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="P1"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": [Decision(question_id="Q1", proposal="P4", rationale="Так быстрее.",
+                               rationale_by="human"), *DECIDED[1:]]})
+    notes, _, _ = draft(root, stream)
+    # P1 вышел неполным, его никто не отклонял: заметки «отклонённого» P1 нет.
+    assert proposals_of(notes, "Что запускает деплой?") == [FRAGMENTS[3].text, own]
+
+    # Решили всё же исходным — остаются оба: правку тогда и правда отклонили.
+    kept = stream.model_copy(update={"decisions": [
+        Decision(question_id="Q1", proposal="P1", rationale="Так проще.", rationale_by="human"),
+        *DECIDED[1:]]})
+    notes, _, _ = draft(root, kept)
+    assert proposals_of(notes, "Что запускает деплой?") == [
+        FRAGMENTS[3].text, FOUND.options[0].proposals[0].text, own]
+
+
+def test_a_refinement_of_an_option_from_the_group_text_takes_its_place_too(root):
+    own = "Деплой запускает CI после merge в main."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": None})
+    notes, _, _ = draft(root, stream)
+    assert proposals_of(notes, "Что запускает деплой?") == [
+        own, FOUND.options[0].proposals[0].text]
+
+
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
     first, _, _, _ = export(root)
     outside = Note("OQ-0009", "open_question", "Пересмотреть?", ("ADR-0002",))

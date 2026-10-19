@@ -939,12 +939,16 @@ function QuestionItem({ question, fragments, removed, busy, onToggle }: Readonly
 
 /** Выбран свой вариант: номер ему даст сервер, а до того в выборе — эта метка. */
 const OWN = 'own'
+/** Выбрана правка варианта: в выборе — «edit:» и номер варианта, который правят. */
+const EDIT = 'edit:'
+const editOf = (base: string) => `${EDIT}${base}`
+const baseOf = (value: string | null | undefined) => value?.startsWith(EDIT) ? value.slice(EDIT.length) : null
 
 /**
  * Шаг «Варианты»: к каждому отобранному вопросу совет ищет новые варианты ответа, а человек
- * выбирает один — из текста группы, найденный или свой, написанный тут же, — либо оставляет
- * вопрос unresolved: его разберёт следующий шаг. Найденное к вопросу видно, как только готово.
- * Черновик выбора — к нынешнему поиску; утверждённый выбор — его начало.
+ * выбирает один — из текста группы, найденный, его правку или свой, написанный тут же, — либо
+ * оставляет вопрос unresolved: его разберёт следующий шаг. Найденное к вопросу видно, как только
+ * готово. Черновик выбора — к нынешнему поиску; утверждённый выбор — его начало.
  */
 function OptionsStep({ council, structure, stream, group, onChange, approve, onBack, onApproved }: Readonly<{
   council: Council; structure: Structure; stream: Stream; group: Group
@@ -957,12 +961,28 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   // Выбор, с которого начать: утверждённый, а после правки отбора — прежний по тем же вопросам (если его вариант
   // у вопроса ещё есть): выбирать остаётся только новое.
   const [start] = useState(() => stream.choices ?? earlierChoices(stream))
-  // Выбор по вопросу: id варианта, OWN — свой, null — unresolved; нет ключа — ещё не выбран.
-  const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(
-    () => new Map(start.map(c => [c.question_id, c.text ? OWN : c.proposal])))
+  // Правка варианта, которого у вопроса уже нет, — просто свой вариант.
+  const editedBase = (c: Choice) => {
+    const question = scope.find(q => q.id === c.question_id)
+    const offered = !!c.based_on && (question?.proposal_ids.some(id => `F${id}` === c.based_on)
+      || (search?.options.find(o => o.question_id === c.question_id)?.proposals ?? []).some(p => p.id === c.based_on))
+    return c.text && offered ? c.based_on ?? null : null
+  }
+  // Выбор по вопросу: id варианта, OWN — свой, editOf(id) — правка варианта, null — unresolved; нет ключа — ещё
+  // не выбран.
+  const [picked, setPicked] = useState<ReadonlyMap<string, string | null>>(() => new Map(start.map(c => {
+    const base = editedBase(c)
+    if (base) return [c.question_id, editOf(base)] as const
+    return [c.question_id, c.text ? OWN : c.proposal] as const
+  })))
   // Свой вариант по вопросу: выбрали другой — текст остаётся, вернулись — он на месте.
   const [owned, setOwned] = useState<ReadonlyMap<string, string>>(
-    () => new Map(start.flatMap(c => c.text ? [[c.question_id, c.text] as const] : [])))
+    () => new Map(start.flatMap(c => c.text && !editedBase(c) ? [[c.question_id, c.text] as const] : [])))
+  // Правки вариантов: ключ — «вопрос вариант». Как и свой, правка остаётся, если выбрали другое.
+  const [edited, setEdited] = useState<ReadonlyMap<string, string>>(() => new Map(start.flatMap(c => {
+    const base = editedBase(c)
+    return base && c.text ? [[`${c.question_id} ${base}`, c.text] as const] : []
+  })))
   const retry = useAction(onChange)
   const busy = approve.busy || retry.busy
   const sought = search?.state === 'running'
@@ -970,8 +990,15 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   const fragments = new Map((council.slicing?.fragments ?? []).map(f => [f.id, f]))
   const found = new Map(search?.options.map(o => [o.question_id, o]) ?? [])
   const ownOf = (question: string) => squash(owned.get(question) ?? '')
-  // Свой вариант без текста — ещё не выбор: такой сервер не примет.
-  const answered = (question: string) => picked.has(question) && (picked.get(question) !== OWN || ownOf(question) !== '')
+  const editedOf = (question: string, base: string) => squash(edited.get(`${question} ${base}`) ?? '')
+  // Свой вариант или правка без текста — ещё не выбор: такой сервер не примет.
+  const answered = (question: string) => {
+    if (!picked.has(question)) return false
+    const value = picked.get(question)
+    const base = baseOf(value)
+    if (base) return editedOf(question, base) !== ''
+    return value !== OWN || ownOf(question) !== ''
+  }
   const chosen = scope.filter(q => answered(q.id)).length
   // Выбран вариант — готово. «Пока не решаю» — ответ шага, но вопрос открыт, как и на «Решениях»: жёлтый,
   // даже пока к нему ищут варианты. Без ответа: вариантов ещё ищут — ИИ работает, иначе — ход за человеком.
@@ -999,6 +1026,8 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
       return await api.approveChoices(council.id, { run: structure.run, revision: structure.revision },
                                       group.id, search?.run ?? '', scope.map(q => {
         const proposal = picked.get(q.id) ?? null
+        const base = baseOf(proposal)
+        if (base) return { question_id: q.id, proposal: null, text: editedOf(q.id, base), based_on: base }
         return proposal === OWN ? { question_id: q.id, proposal: null, text: ownOf(q.id) } : { question_id: q.id, proposal }
       }))
     } catch (e) {
@@ -1042,13 +1071,22 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
         {n => {
           const question = scope[n]
           const kept = stream.choices?.find(c => c.question_id === question.id)
+          const keptBase = kept ? editedBase(kept) : null
+          const edits = new Map([...edited].flatMap(([key, text]) => {
+            const [of, base] = key.split(' ')
+            return of === question.id ? [[base, text] as const] : []
+          }))
           return (
             <QuestionChoice key={question.id} question={question} options={found.get(question.id)}
                             sought={sought} fragments={fragments} value={picked.get(question.id)}
                             own={owned.get(question.id) ?? ''}
-                            ownId={kept?.text && squash(kept.text) === ownOf(question.id) ? kept.proposal : null}
+                            ownId={kept?.text && !keptBase && squash(kept.text) === ownOf(question.id) ? kept.proposal : null}
+                            edits={edits}
+                            editId={kept?.text && keptBase && squash(kept.text) === editedOf(question.id, keptBase)
+                              ? { base: keptBase, id: kept.proposal ?? '' } : null}
                             busy={busy} onPick={proposal => pick(question.id, proposal)}
-                            onOwn={text => setOwned(before => new Map(before).set(question.id, text))} />
+                            onOwn={text => setOwned(before => new Map(before).set(question.id, text))}
+                            onEdit={(base, text) => setEdited(before => new Map(before).set(`${question.id} ${base}`, text))} />
           )
         }}
       </Slider>
@@ -1062,24 +1100,64 @@ function OptionsStep({ council, structure, stream, group, onChange, approve, onB
   )
 }
 
-/** Вопрос и его варианты: из текста группы, найденные советом, свой и «пока не решаю». */
-function QuestionChoice({ question, options, sought, fragments, value, own, ownId, busy, onPick, onOwn }: Readonly<{
+/**
+ * Вопрос и его варианты: из текста группы, найденные советом, свой и «пока не решаю». Вариант из текста или
+ * найденный можно поправить: правка — своя строка под ним, а в заметках она встанет на его место.
+ */
+function QuestionChoice({ question, options, sought, fragments, value, own, ownId, edits, editId, busy, onPick, onOwn,
+  onEdit }: Readonly<{
   question: OpenQuestion; options: QuestionOptions | undefined; sought: boolean
   fragments: Map<number, LabeledFragment>; value: string | null | undefined
   /** Свой вариант и его номер, если сервер уже принял этот текст. */
-  own: string; ownId: string | null; busy: boolean
-  onPick: (proposal: string | null) => void; onOwn: (text: string) => void
+  own: string; ownId: string | null
+  /** Правки вариантов: какой вариант → текст; номер правки, если сервер уже принял её текст. */
+  edits: ReadonlyMap<string, string>; editId: { base: string; id: string } | null; busy: boolean
+  onPick: (proposal: string | null) => void; onOwn: (text: string) => void; onEdit: (base: string, text: string) => void
 }>) {
   const { t } = useTranslation()
   const name = `choice-${question.id}`
   const fromModels = question.source === 'inferred' || question.source === 'discovered'
-  // Свой вариант выбрали только что — поле сразу под курсором; восстановленный выбор фокус не берёт.
-  const [writing, setWriting] = useState(false)
+  // Свой вариант или правку выбрали только что — поле сразу под курсором; восстановленный выбор фокус не берёт.
+  const [writing, setWriting] = useState<string | null>(null)
+  const choose = (id: string | null) => { setWriting(id); onPick(id) }
+  // Правка варианта — строка под ним, пока её выбрали или текст уже другой; иначе — кнопка «Поправить», и
+  // правка начинается с текста варианта.
+  const edit = (base: string, text: string) => {
+    const id = editOf(base)
+    const draft = edits.get(base)
+    if (value !== id && (draft === undefined || squash(draft) === squash(text))) return (
+      <button className="btn-link option-edit" aria-label={t('options.editOf', { id: base })} disabled={busy}
+              onClick={() => { if (draft === undefined) onEdit(base, text); choose(id) }}>
+        {t('options.edit')}
+      </button>
+    )
+    return (
+      <div className="option-edited">
+        <label className="option">
+          <input type="radio" name={name} checked={value === id} disabled={busy} onChange={() => choose(id)} />
+          <span className="option-body">
+            <span className="option-head">
+              {editId?.base === base && <span className="fragment-id">{editId.id}</span>}
+              <span className="source-tag">{t('options.byYou')}</span>
+              <span className="option-text">{t('options.edited', { id: base })}</span>
+            </span>
+          </span>
+        </label>
+        {value === id && (
+          <div className="option-own">
+            <textarea className="idea-text" aria-label={t('options.editField', { id: base, question: question.id })}
+                      autoFocus={writing === id} value={draft ?? ''} maxLength={600} readOnly={busy}
+                      onChange={e => onEdit(base, e.target.value)} />
+            {squash(draft ?? '') === '' && <p className="fragment-note">{t('options.ownEmpty')}</p>}
+          </div>
+        )}
+      </div>
+    )
+  }
   const option = (id: string | null, body: ReactNode, className = 'option', more?: ReactNode) => (
     <li key={id ?? 'unresolved'}>
       <label className={className}>
-        <input type="radio" name={name} checked={value === id} disabled={busy}
-               onChange={() => { setWriting(id === OWN); onPick(id) }} />
+        <input type="radio" name={name} checked={value === id} disabled={busy} onChange={() => choose(id)} />
         <span className="option-body">{body}</span>
       </label>
       {more}
@@ -1101,7 +1179,7 @@ function QuestionChoice({ question, options, sought, fragments, value, own, ownI
             </span>
             <span>{fragments.get(id)?.text ?? '—'}</span>
           </>
-        )))}
+        ), 'option', fragments.has(id) && edit(`F${id}`, fragments.get(id)?.text ?? '')))}
         {options?.proposals.map(proposal => option(proposal.id, (
           <>
             <span className="option-head">
@@ -1121,7 +1199,7 @@ function QuestionChoice({ question, options, sought, fragments, value, own, ownI
               <span className="option-note">{t('options.depends', { ids: proposal.depends_on.join(', ') })}</span>
             )}
           </>
-        )))}
+        ), 'option', edit(proposal.id, proposal.text)))}
         {option(OWN, (
           <span className="option-head">
             {ownId && <span className="fragment-id">{ownId}</span>}
@@ -1130,7 +1208,7 @@ function QuestionChoice({ question, options, sought, fragments, value, own, ownI
           </span>
         ), 'option', value === OWN && (
           <div className="option-own">
-            <textarea className="idea-text" aria-label={t('options.ownField', { id: question.id })} autoFocus={writing}
+            <textarea className="idea-text" aria-label={t('options.ownField', { id: question.id })} autoFocus={writing === OWN}
                       placeholder={t('options.ownPlaceholder')} value={own} maxLength={600} readOnly={busy}
                       onChange={e => onOwn(e.target.value)} />
             {squash(own) === '' && <p className="fragment-note">{t('options.ownEmpty')}</p>}
