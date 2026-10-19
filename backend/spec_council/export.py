@@ -70,6 +70,8 @@ ISSUE = re.compile(r"ISS-(\d+)")
 # для split он пробел.
 SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
+# Решение из каталога: его номер с нулями или без («ADR-0007», «ADR-7») — одно решение.
+PAST_ADR = re.compile(r"ADR-0*([1-9]\d*)", re.IGNORECASE)
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
 # находки скана репозитория и макета. В документации они ничего не значат.
 LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
@@ -79,11 +81,14 @@ MARKDOWN = MarkdownIt("commonmark")
 BLOCKS = ("fence", "code_block", "html_block")
 # Что не трогают в строке текста: строка кода — `…`, ``…`` — до того же числа обратных кавычек, и
 # через перенос строки, но не через пустую; адрес ссылки [..](адрес), <адрес> и адрес сам по
-# себе — со скобками внутри: подпись ссылки — текст.
+# себе — со скобками внутри: подпись ссылки — текст; тег HTML с его атрибутами и комментарий —
+# текст между тегами остаётся текстом.
 UNTOUCHED = re.compile(r"""
     (?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)
     |\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)
     |<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>
+    |<!--[\s\S]*?-->
+    |</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>
     |\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^\s<>()\]]|\([^\s<>()]*\))+
 """, re.VERBOSE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
@@ -319,12 +324,16 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              more: Iterable[str] = ()) -> frozenset[str]:
     """Слова исходных текстов, похожие на номера потока: в тексте группы, находках скана
     репозитория и макета (и в more) — «F1 score», «Cloudflare R2». Это термины, а не ссылки:
-    номера потока появились позже текста, и такое слово в нём — не номер."""
+    номера потока появились позже текста, и такое слово в нём — не номер. И решение проекта,
+    отобранное для потока, без нулей в номере (ADR-0001 — «ADR-1»): каталог зовёт его и так, и
+    «ADR-1» в тексте — не обязательно первое решение потока."""
     sources = [fragment.text for fragment in fragments.values()]
     for scan in (stream.scan, stream.design_scan):
         if scan is not None and scan.result is not None:
             sources += [finding.statement for finding in scan.result.findings]
-    return frozenset(name for text in [*sources, *more] for name in LOCAL.findall(text))
+    past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
+            if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
+    return frozenset(past | {name for text in [*sources, *more] for name in LOCAL.findall(text)})
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],

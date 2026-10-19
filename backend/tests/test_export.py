@@ -29,6 +29,7 @@ from spec_council.models import (
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
+    ProjectDecision,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
@@ -307,6 +308,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Блоки кода и HTML на любой глубине: в цитате, в пункте списка.
     nested = "> ~~~yaml\n> Q1: 1\n> ~~~\n\n- пункт\n\n      Q1 = 2\n\n<pre>\nQ1\n</pre>\n\nпо Q1"
     assert renumbered(nested, {"Q1": "OQ-0002"}, {}) == nested.replace("по Q1", "по OQ-0002")
+    # Тег HTML с атрибутами — не текст, а то, что между тегами, — текст.
+    assert renumbered('<a href="/questions/Q1">Q1</a> <!-- Q1 --> и Q1', {"Q1": "OQ-0002"},
+                      {}) == '<a href="/questions/Q1">OQ-0002</a> <!-- Q1 --> и OQ-0002'
     # Адрес — целиком, и со скобками внутри.
     assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
                       {"Q1": "OQ-0002"}, {}) == (
@@ -315,6 +319,18 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered("[вопрос Q1](https://tracker.local/Q1), см. https://x.local/Q1",
                       {"Q1": "OQ-0002"}, {}) == (
         "[вопрос OQ-0002](https://tracker.local/Q1), см. https://x.local/Q1")
+
+
+def test_an_adr_number_a_past_decision_shares_stays_as_it_is(root):
+    # Решение проекта ADR-0001, отобранное для потока, каталог зовёт и «ADR-1»: «ADR-1» в тексте —
+    # не обязательно первое решение потока, и номером его заметки оно не становится.
+    stream = STREAM.model_copy(update={
+        "project_decisions": [ProjectDecision(adr_id="ADR-0001")],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={
+            "rationale": "так велит ADR-1, а Q2 открыт"})]})
+    notes = by_id(draft(root, stream)[0])
+    assert notes["ADR-0003"].text == (
+        "Ручной откат остаётся, потому что так велит ADR-1, а OQ-0003 открыт")
 
 
 def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):
