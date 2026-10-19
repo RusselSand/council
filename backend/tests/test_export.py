@@ -314,6 +314,12 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Адрес в определении ссылки-сноски — тоже адрес.
     assert renumbered("[вопрос Q1][q]\n\n[q]: /questions/Q1 \"Q1\"", {"Q1": "OQ-0002"}, {}) == (
         "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"OQ-0002\"")
+    # Экранированная скобка в адресе — часть адреса; определение сноски — и в продолжении
+    # вложенного пункта списка.
+    escaped = "[x](https://host/a\\(/Q1)"
+    assert renumbered(f"{escaped} и Q1", {"Q1": "OQ-0002"}, {}) == f"{escaped} и OQ-0002"
+    listed = "- outer\n  - inner\n\n    [Q1]: /questions/Q1\n\n[t][Q1] и Q1"
+    assert renumbered(listed, {"Q1": "OQ-0002"}, {}) == listed.replace("и Q1", "и OQ-0002")
     # Определение сноски — и в цитате, и в пункте списка.
     nested = "> [вопрос][Q1]\n>\n> [Q1]: /questions/Q1\n\n- [Q2]: /q/Q2\n\nпо Q1"
     assert renumbered(nested, {"Q1": "OQ-0002", "Q2": "OQ-0003"}, {}) == nested.replace(

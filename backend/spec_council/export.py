@@ -81,8 +81,9 @@ LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
 # списка): их ищет разбор Markdown. Номера в них — не ссылки.
 MARKDOWN = MarkdownIt("commonmark")
 BLOCKS = ("fence", "code_block", "html_block")
-# Начало строки внутри цитаты и пункта списка: «> », «- », «1. » — сколько угодно раз.
-CONTAINER = r"^(?:[ ]{0,3}(?:>[ ]?|[-*+][ ]+|\d{1,9}[.)][ ]+))*[ ]{0,3}"
+# Начало строки внутри цитаты и пункта списка: «> », «- », «1. » — сколько угодно раз, и отступ
+# продолжения пункта. Блок кода с отступом сюда не попадёт: его строки уже не трогают (BLOCKS).
+CONTAINER = r"^(?:[ \t]*(?:>[ ]?|[-*+][ ]+|\d{1,9}[.)][ ]+))*[ \t]*"
 # Определение ссылки-сноски: «[метка]: адрес» — и в цитате, и в пункте списка.
 DEFINED = re.compile(CONTAINER + r"\[([^\]\n]+)\]:", re.MULTILINE)
 
@@ -104,8 +105,9 @@ RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
 UNTOUCHED = re.compile("|".join((
     # строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через перенос, но не пустую
     r"(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)",
-    # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри
-    rf"\]\(\s*(?:<[^<>\n]*>|{balanced(r'[^()\s]')}*)"
+    # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри, и с
+    # экранированными «\(»
+    rf"\]\(\s*(?:<[^<>\n]*>|{balanced(r'(?:\\.|[^()\s\\])')}*)"
     r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)""",
     # адрес в определении ссылки-сноски «[метка]: адрес» — и в цитате, и в пункте списка
     CONTAINER + r"\[[^\]\n]+\]:[ \t]*(?:<[^>\n]*>|\S+)",
@@ -119,7 +121,7 @@ UNTOUCHED = re.compile("|".join((
     rf"<[A-Za-z][A-Za-z0-9-]*{ATTRIBUTES}\s*/?>",
     r"</[A-Za-z][A-Za-z0-9-]*\s*>",
     # адрес сам по себе — и со скобками внутри
-    rf"\b[A-Za-z][A-Za-z0-9+.-]*://{balanced(r'[^\s<>()\]]')}+",
+    rf"\b[A-Za-z][A-Za-z0-9+.-]*://{balanced(r'(?:\\.|[^\s<>()\]\\])')}+",
 )), re.MULTILINE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
@@ -394,13 +396,41 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
+def in_prose(text: str, change: Callable[[str], str]) -> str:
+    """Текст, где change — только в прозе: блоки кода и HTML на любой глубине (BLOCKS), строки
+    кода, адреса ссылок, теги (UNTOUCHED) и метки ссылок-сносок, определённых в тексте, — как
+    есть."""
+    # Метка ссылки-сноски, определённой в тексте, — и там, где ссылкой пользуются: [..][Q1], [Q1].
+    labels = DEFINED.findall(text)
+    untouched = UNTOUCHED if not labels else re.compile(
+        UNTOUCHED.pattern + r"|(?i:\[(?:" + "|".join(map(re.escape, labels)) + r")\])",
+        UNTOUCHED.flags)
+
+    def inline(part: str) -> str:
+        out: list[str] = []
+        last = 0
+        for kept in untouched.finditer(part):
+            out += [change(part[last:kept.start()]), kept.group(0)]
+            last = kept.end()
+        out.append(change(part[last:]))
+        return "".join(out)
+
+    code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
+            for n in range(*token.map)}
+    lines = [f"{row}\n" for row in text.split("\n")]
+    lines[-1] = lines[-1][:-1]
+    return "".join(
+        "".join(row for _, row in rows) if inside else inline("".join(row for _, row in rows))
+        for inside, rows in groupby(enumerate(lines), key=lambda item: item[0] in code))
+
+
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
                quote: str = "«{}»", terms: Collection[str] = ()) -> str:
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
-    (quote). Номера заметок и незнакомые — как есть; блоки кода и HTML (BLOCKS), строки кода и
-    адреса ссылок (UNTOUCHED) и термины исходных текстов (terms_of) — тоже."""
+    (quote). Номера заметок и незнакомые — как есть; код, адреса и метки ссылок (in_prose) и
+    термины исходных текстов (terms_of) — тоже."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -431,28 +461,7 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
-    # Метка ссылки-сноски, определённой в тексте, — и там, где ссылкой пользуются: [..][Q1], [Q1].
-    labels = DEFINED.findall(text)
-    untouched = UNTOUCHED if not labels else re.compile(
-        UNTOUCHED.pattern + r"|(?i:\[(?:" + "|".join(map(re.escape, labels)) + r")\])",
-        UNTOUCHED.flags)
-
-    def inline(text: str) -> str:
-        out: list[str] = []
-        last = 0
-        for kept in untouched.finditer(text):
-            out += [prose(text[last:kept.start()]), kept.group(0)]
-            last = kept.end()
-        out.append(prose(text[last:]))
-        return "".join(out)
-
-    code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
-            for n in range(*token.map)}
-    lines = [f"{row}\n" for row in text.split("\n")]
-    lines[-1] = lines[-1][:-1]
-    return "".join(
-        "".join(row for _, row in rows) if inside else inline("".join(row for _, row in rows))
-        for inside, rows in groupby(enumerate(lines), key=lambda item: item[0] in code))
+    return in_prose(text, prose)
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],

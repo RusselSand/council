@@ -16,7 +16,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from .export import phrases_of, renumbered, stream_texts, terms_of
+from .export import in_prose, phrases_of, renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -57,11 +57,6 @@ class Names:
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
         return renumbered(text, self.numbers, self.texts, quote, self.terms)
-
-    def owns(self, note: str) -> bool:
-        """Заметка — этого потока: прошлое решение проекта называет свои вопросы своими
-        номерами, и номера этого потока к нему не подходят."""
-        return note in self.numbers.values()
 
     def within(self, notes: Collection[str]) -> Names:
         """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
@@ -275,7 +270,8 @@ def texts_of(value: object) -> list[str]:
 
 def relabeled(text: str, names: Mapping[str, str], keep: Collection[str] = ()) -> str:
     """Номера задач в тексте — новыми (names: прежний → новый), за один проход: I1 ↔ I2 не
-    путаются. Сочетания keep («I1 cache») — как есть: там номер — слово."""
+    путаются. Сочетания keep («I1 cache») — как есть: там номер — слово; код и адреса ссылок —
+    тоже (in_prose)."""
     if not names:
         return text
     pattern = re.compile(r"(?<![\w-])(" + "|".join(
@@ -284,17 +280,23 @@ def relabeled(text: str, names: Mapping[str, str], keep: Collection[str] = ()) -
     def renamed(part: str) -> str:
         return pattern.sub(lambda found: names[found.group(1)], part)
 
-    if not keep:
-        return renamed(text)
-    guard = re.compile("|".join(re.escape(phrase) for phrase in sorted(keep, key=len,
-                                                                        reverse=True)))
-    out: list[str] = []
-    last = 0
-    for kept in guard.finditer(text):
-        out += [renamed(text[last:kept.start()]), kept.group(0)]
-        last = kept.end()
-    out.append(renamed(text[last:]))
-    return "".join(out)
+    guard = None
+    if keep:
+        guard = re.compile("|".join(re.escape(phrase)
+                                    for phrase in sorted(keep, key=len, reverse=True)))
+
+    def prose(part: str) -> str:
+        if guard is None:
+            return renamed(part)
+        out: list[str] = []
+        last = 0
+        for kept in guard.finditer(part):
+            out += [renamed(part[last:kept.start()]), kept.group(0)]
+            last = kept.end()
+        out.append(renamed(part[last:]))
+        return "".join(out)
+
+    return in_prose(text, prose)
 
 
 def plan_of(data: dict, context: Context) -> list[Issue]:
