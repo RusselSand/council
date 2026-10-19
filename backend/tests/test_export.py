@@ -302,6 +302,42 @@ def test_a_refined_option_is_named_by_its_refinement(root):
     assert adr.text == f"Ручной откат остаётся, потому что откат нужен и при {refined.id}"
 
 
+REFINED = "Ручной откат остаётся, но только по кнопке."
+
+
+def test_a_refinement_marked_after_an_export_continues_the_note_of_its_option(root):
+    first, _, _, _ = export(root)                                         # решили P3 как есть
+    refined = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P4", text=REFINED, based_on="P3")],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]})
+    notes, vanished, _ = draft(root, refined, previous=first)
+    note = by_id(notes)
+    # Тот же вариант, только дописанный, — та же заметка, и решение по нему — то же.
+    assert (note["PRO-0005"].text, note["PRO-0005"].action) == (REFINED, "update")
+    assert note["ADR-0003"].text.startswith(REFINED.rstrip("."))
+    assert note["ADR-0003"].links == ["PRO-0005"]
+    assert vanished == []
+
+
+def test_a_refinement_exported_as_its_own_option_keeps_its_note(root):
+    chosen = [Choice(question_id="Q1", proposal="F3"), Choice(question_id="Q2", proposal=None),
+              Choice(question_id="Q3", proposal="P4", text=REFINED)]
+    decided = [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]
+    first, notes, _, _ = export(root, STREAM.model_copy(update={"choices": chosen,
+                                                                "decisions": decided}))
+    own = next(n for n in notes if n.text == REFINED)
+    base = next(n for n in notes if n.text == FOUND.options[2].proposals[0].text)
+    marked = [*chosen[:2], chosen[2].model_copy(update={"based_on": "P3"})]
+    notes, vanished, _ = draft(root, STREAM.model_copy(update={"choices": marked,
+                                                               "decisions": decided}),
+                               previous=first)
+    # Своя заметка у правки уже есть — она и остаётся, а исходный уходит: его не отклоняли.
+    assert [(n.id, n.action) for n in notes if n.text == REFINED] == [(own.id, "same")]
+    assert [v.id for v in vanished] == [base.id]
+
+
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
     first, _, _, _ = export(root)
     outside = Note("OQ-0009", "open_question", "Пересмотреть?", ("ADR-0002",))

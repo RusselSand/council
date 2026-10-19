@@ -851,6 +851,8 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
         anew = analyzes_anew(stream, choices)
         if anew and below_running(stream, "analysis"):
             raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
+        if not anew and refines_anew(stream, choices) and below_running(stream, "notes_draft"):
+            raise HTTPException(423, "Совет ещё переводит заметки потока — дождитесь его")
         if anew:
             expired(store, council, stream, changed_choice(notes_of(council), stream))
         # Модели нужны, только если есть что проверять: проверка того же выбора переносится.
@@ -876,6 +878,12 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
                 analysis = runs[0].state.model_copy(deep=True)
             changes |= {"analysis": analysis, "decisions": None, "outcomes": None,
                         "earlier": kept_work(stream), **remembered(stream)}
+        elif refines_anew(stream, choices):
+            # Проверка и итоги те же, а заметки легли бы иначе: черновика выгрузки нет, прежняя
+            # выгрузка — уже не к этим итогам (по ней повторная узнает свои заметки).
+            changes["notes_draft"] = None
+            if stream.notes is not None:
+                changes["notes"] = stream.notes.model_copy(update={"outcomes": ""})
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -899,6 +907,13 @@ def choices_for(council: Council, group: str, stream: Stream,
 def analyzes_anew(stream: Stream, choices: list[Choice]) -> bool:
     """Выбор проверяется заново, если его ещё не проверяли или проверяли другой."""
     return stream.analysis is None or stream.analysis.choices != choices_key(choices)
+
+
+def refines_anew(stream: Stream, choices: list[Choice]) -> bool:
+    """Свои варианты правят другие варианты не так, как при прежнем выборе: проверке это не
+    важно, а заметки ложатся иначе — правка встаёт на место исходного."""
+    before = {choice.question_id: choice.based_on for choice in stream.choices or []}
+    return {choice.question_id: choice.based_on for choice in choices} != before
 
 
 def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
