@@ -824,3 +824,26 @@ def test_an_example_in_a_code_block_is_not_a_dependency_list():
                       generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
                       links=["OUT-0001", "ISS-0001"], action="create")
     assert aligned([first, second]) == {}
+
+
+def test_a_known_note_number_in_an_exported_note_stays_a_reference():
+    # «OQ-0002 validation» в выгруженной заметке — ссылка на заметку потока, а не слово.
+    note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
+                        written="Проверить по OQ-0002 validation и ADR-9999 fixture", digest="d")
+    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
+                                                 refs={"I1": "IDEA-0001", "Q2": "OQ-0002"}))
+    phrases = names_of(stream, {}).phrases
+    assert "ADR-9999 fixture" in phrases
+    assert not any("OQ-0002" in phrase for phrase in phrases)
+
+
+def test_a_section_repeating_a_prerequisite_is_not_the_list():
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v1",
+                     generated="# Индекс", action="create")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue", text="# Cache v1",
+                      generated="# Кэш", action="create")
+    third = NotePlan(key="i:3", id="ISS-0003", type="issue",
+                     text="# Search\n\n## Notes\n- ISS-0001: a\n- ISS-0002: b\n- ISS-0001: c\n",
+                     generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n- ISS-0002: Кэш\n",
+                     links=["OUT-0001", "ISS-0001", "ISS-0002"], action="create")
+    assert aligned([first, second, third]) == {}

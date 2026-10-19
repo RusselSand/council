@@ -74,9 +74,12 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     дописать туда своё «Q1 reporting»."""
     found = dict(research or {})
     written = [note.written for note in stream.notes.notes] if stream.notes else []
+    # Номер заметки потока или отобранного решения проекта в выгруженном тексте — ссылка.
+    known = {*(stream.notes.refs.values() if stream.notes else ()),
+             *(decision.adr_id for decision in stream.project_decisions or [])}
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found, terms_of(stream),
-                 phrases_of(stream, fragments, [*found.values(), *written]))
+                 phrases_of(stream, fragments, found.values(), written, known))
 
 
 def research_texts(council: Council) -> dict[str, str]:

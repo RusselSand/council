@@ -327,7 +327,12 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
         if scan is not None and scan.result is not None:
             texts |= {finding.id: finding.statement for finding in scan.result.findings}
     questions = [*(stream.questions.questions if stream.questions else []), *(stream.scope or [])]
-    texts |= {question.id: question.text for question in questions}
+    # Как вопрос лёг в заметку (question_parts): его формулировка, а нет её — текст. И номер
+    # фрагмента вопроса из текста группы — о нём же.
+    texts |= {question.id: question.note or question.text for question in questions}
+    texts |= {f"F{question.source_question_id}": question.note or question.text
+              for question in questions
+              if question.source == "user" and question.source_question_id is not None}
     texts |= {proposal.id: proposal.text
               for options in found_by_question(stream.proposals, stream.choices).values()
               for proposal in options}
@@ -378,15 +383,22 @@ def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
-               more: Iterable[str] = ()) -> frozenset[str]:
+               more: Iterable[str] = (), notes: Iterable[str] = (),
+               known: Collection[str] = ()) -> frozenset[str]:
     """Где в прозе исходных текстов — текста группы, идеи, отобранных решений проекта,
     находок скана (и more) — слово, похожее на номер («F1 score», «Cloudflare R2», «I1 cache»,
     «ADR-9999 fixture»): оно с соседним словом. Номера потока, заметок и задач появились позже
     этих текстов, и в таком сочетании слово — их слово, а не ссылка; то же слово в другом месте
-    текста совета — ссылка."""
+    текста совета — ссылка. notes — тексты заметок: в них номер известной заметки (known) —
+    настоящая ссылка, и его сочетание словом не становится."""
     found: set[str] = set()
-    for text in map(prose_of, sources_of(stream, fragments, more)):
+    sources = [(text, ()) for text in sources_of(stream, fragments, more)]
+    sources += [(text, known) for text in notes]
+    for source, skip in sources:
+        text = prose_of(source)
         for match in WORDLIKE.finditer(text):
+            if match.group(0) in skip:
+                continue
             if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
                 found.add(text[match.start():match.end() + after.end()])
             if (before := re.search(r"\w+[ \t]+$", text[:match.start()])) is not None:
@@ -420,6 +432,10 @@ def destinations(text: str) -> list[tuple[int, int]]:
             found.append((start, end))
         start = text.find("](", end if end is not None else start + 2)
     return found
+
+
+# Что «\» экранирует в CommonMark: знаки препинания ASCII, а перед пробелом и буквой «\» — знак.
+PUNCTUATION = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 
 
 def escaped(text: str, at: int) -> bool:
@@ -474,18 +490,22 @@ def destination_end(text: str, at: int) -> int | None:
             i += 1
         return i
 
+    def step(i: int) -> int:
+        """Следующий знак: «\» и знак препинания за ним — одно целое."""
+        return i + 2 if text[i] == "\\" and text[i + 1:i + 2] in PUNCTUATION else i + 1
+
     i = blank(at)
     if i < size and text[i] == "<":
         i += 1
         while i < size and text[i] not in "<>\n":
-            i += 2 if text[i] == "\\" else 1
+            i = step(i)
         if i >= size or text[i] != ">":
             return None
         i += 1
     else:
         depth = 0
         while i < size and not text[i].isspace():
-            if text[i] == "\\":
+            if text[i] == "\\" and text[i + 1:i + 2] in PUNCTUATION:
                 i += 2
                 continue
             if text[i] == ")" and depth == 0:
@@ -499,7 +519,7 @@ def destination_end(text: str, at: int) -> int | None:
         close = ")" if text[i] == "(" else text[i]
         i += 1
         while i < size and text[i] != close:
-            i += 2 if text[i] == "\\" else 1
+            i = step(i)
         i = blank(i + 1)
     return i + 1 if i < size and text[i] == ")" else None
 
@@ -522,16 +542,25 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         labels = "|".join(sorted(spelled))
         # Вторая метка полной ссылки [текст][Q1] — сноска, что бы ни шло за ней.
         extra.append(r"(?i:(?<=\])\[\s*(?:" + labels + r")\s*\])")
-        extra.append(r"(?i:(?<!\\)(?:\\\\)*\[\s*(?:" + labels + r")\s*\](?!\(|\[(?!\])))")
     untouched = UNTOUCHED
     if extra:
         untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
+    used = re.compile(r"(?i:(?<!\\)(?:\\\\)*\[\s*(?:" + "|".join(sorted(spelled))
+                      + r")\s*\](?!\[(?!\])))") if spelled else None
+
+    def uses(part: str) -> list[tuple[int, int]]:
+        """[Q1] сноской: за ней не настоящая встроенная ссылка «(адрес)» (destination_end)."""
+        if used is None:
+            return []
+        return [found.span() for found in used.finditer(part)
+                if not (part.startswith("(", found.end())
+                        and destination_end(part, found.end() + 1) is not None)]
 
     def inline(part: str) -> str:
         # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
         # (addresses) — они могут пересекаться.
         spans = sorted([kept.span() for kept in untouched.finditer(part)]
-                       + destinations(part) + addresses(part))
+                       + uses(part) + destinations(part) + addresses(part))
         out: list[str] = []
         last = 0
         for start, end in spans:

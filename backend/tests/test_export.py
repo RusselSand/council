@@ -326,6 +326,11 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{bare} и Q1.", {"Q1": "OQ-0002"}, {}) == f"{bare} и OQ-0002."
     twice = "[Q1]: /a/Q1\n\n[q1]: /backup/Q1"
     assert renumbered(f"{twice}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{twice}\n\nпо OQ-0002"
+    # «\» перед пробелом — не экранирование: [x](foo\ Q1) — не ссылка; [Q1](не адрес) — не
+    # встроенная ссылка, и [Q1] — сноска.
+    assert renumbered("[x](foo\\ Q1)", {"Q1": "OQ-0002"}, {}) == "[x](foo\\ OQ-0002)"
+    shortcut = "[Q1](не адрес)\n\n[Q1]: /q/1"
+    assert renumbered(f"{shortcut}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{shortcut}\n\nи OQ-0002"
     # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
     assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\\](/questions/OQ-0002)")
@@ -466,8 +471,11 @@ def test_a_refined_option_is_named_by_its_refinement(root):
     refined = next(n for n in notes if n.type == "proposal" and n.text == own)
     adr = next(n for n in notes if n.type == "adr" and n.text.startswith("Ручной откат"))
     assert adr.text == f"Ручной откат остаётся, потому что откат нужен и при {refined.id}"
-    # Заметки нет (удалили) — за номером исходного уже текст правки, а не прежний.
-    assert stream_texts(stream, FRAGMENTS)["P1"] == own
+    # Заметки нет (удалили) — за номером исходного уже текст правки, а не прежний; за номером
+    # вопроса и его фрагмента — его формулировка в заметке.
+    texts = stream_texts(stream, FRAGMENTS)
+    assert texts["P1"] == own
+    assert texts["Q1"] == texts["F5"] == SCOPE[0].note
 
 
 REFINED = "Ручной откат остаётся, но только по кнопке."

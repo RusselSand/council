@@ -324,8 +324,10 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
         rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
         items = [(n, match) for n in rows
                  if n not in code and (match := AFTER.match(lines[n])) is not None]
-        # Список — все задачи, которых ждут, и только они: пункт об одной из них — ещё не он.
-        if rows and len(items) == len(rows) and {m.group(2) for _, m in items} == set(waits):
+        # Список — все задачи, которых ждут, по строке на каждую, и только они: пункт об одной
+        # из них или повтор — ещё не он.
+        if (rows and len(items) == len(rows) == len(waits)
+                and {m.group(2) for _, m in items} == set(waits)):
             found.append((place, items))
     chosen = found[0][1] if len(found) == 1 else next(
         (items for place, items in found if place == section), None)
