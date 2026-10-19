@@ -4,6 +4,7 @@
 import json
 import os
 import shutil
+from dataclasses import replace
 
 import pytest
 
@@ -577,17 +578,23 @@ def test_a_finding_of_the_approved_research_is_a_number_not_an_old_term():
 
 def test_task_files_keep_stream_terms_and_skip_deleted_notes(tmp_path):
     catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
-    # «I1» в исходных текстах потока — термин (I1 cache), и номером задачи плана оно не
-    # становится; Q1 ведёт на OQ-0001, которой в каталоге уже нет, — встаёт сам вопрос.
-    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001"}, {"Q1": "Где хранить кэш?"},
-                  frozenset({"I1"}))
+    # «I1 cache» — сочетание из исходных текстов потока: номером задачи плана оно не становится,
+    # а ссылка на задачу I1 — становится. Q1 ведёт на OQ-0001, которой в каталоге уже нет, —
+    # встаёт сам вопрос.
+    bucket = Fragment(id=1, text="Прогрев I1 cache ускоряет ответы.", label="constraint",
+                      reason="", council_label="constraint")
+    names = names_of(Stream(group="C"), {1: bucket})
+    assert {"I1 cache", "Прогрев I1"} <= names.phrases and "I1" in names.terms
+    names = replace(names, numbers={"Q1": "OQ-0001", "O1": "OUT-0001"},
+                    texts={"Q1": "Где хранить кэш?"})
     issue = Issue(id="I1", title="Прогреть I1 cache", user_story="As a team, I want answers.",
-                  outcome_id="OUT-0001", scope=["Ответить на Q1."])
+                  outcome_id="OUT-0001", scope=["Ответить на Q1.", "Сверить с I1."])
     plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
     [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
                                  words_for("Russian"), "Russian", (), {"OUT-0001": names})
     assert file.text.startswith("# Прогреть I1 cache\n")
     assert "- Ответить на «Где хранить кэш?»." in file.text
+    assert "- Сверить с ISS-0001." in file.text
 
 
 def test_a_dependency_list_is_found_after_its_sections_were_edited():
@@ -604,3 +611,15 @@ def test_a_dependency_list_is_found_after_its_sections_were_edited():
                   "Commit ISS-0002.", ["OUT-0001", "ADR-0001", "ISS-0001"])
     assert aligned([first, second]) == {second.key: second.text.replace(
         "- ISS-0001: Index v2", "- ISS-0001: Index v1")}
+
+
+def test_a_title_with_note_numbers_does_not_spread_to_other_files():
+    # Название задачи поправили руками, и в нём номер заметки: в чужой файл он попал бы без
+    # ссылки во frontmatter — такой файл остаётся как был.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Индекс",
+                     generated="# Индекс", action="edited", current="# Индекс по ADR-9999")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {}

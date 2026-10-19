@@ -70,6 +70,8 @@ ISSUE = re.compile(r"ISS-(\d+)")
 # для split он пробел.
 SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
+# Номер задачи плана: I1, I2…
+TASK = re.compile(r"(?<![\w-])I[1-9]\d*(?![\w-])")
 # Решение из каталога: его номер с нулями или без («ADR-0007», «ADR-7») — одно решение.
 PAST_ADR = re.compile(r"ADR-0*([1-9]\d*)", re.IGNORECASE)
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
@@ -354,15 +356,38 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     отобранное для потока, без нулей в номере (ADR-0001 — «ADR-1»): каталог зовёт его и так, и
     «ADR-1» в тексте — не обязательно первое решение потока. Тексты этих решений — тоже
     исходные: модели их видели и могли переписать «P1 incidents» как есть."""
+    past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
+            if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
+    return frozenset(past | {name for text in sources_of(stream, fragments, more)
+                             for name in LOCAL.findall(text)})
+
+
+def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
+               more: Iterable[str] = ()) -> list[str]:
+    """Исходные тексты потока: текст группы, тексты отобранных решений проекта, находки скана
+    репозитория и макета — и more."""
     sources = [fragment.text for fragment in fragments.values()]
     sources += [text for decision in stream.project_decisions or []
                 for text in (decision.idea, decision.question, decision.decision)]
     for scan in (stream.scan, stream.design_scan):
         if scan is not None and scan.result is not None:
             sources += [finding.statement for finding in scan.result.findings]
-    past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
-            if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
-    return frozenset(past | {name for text in [*sources, *more] for name in LOCAL.findall(text)})
+    return [*sources, *more]
+
+
+def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
+               more: Iterable[str] = ()) -> frozenset[str]:
+    """Где в исходных текстах номер задачи плана — слово («I1 cache»): оно с соседним словом.
+    Номер задачи плана (I1) в тексте задачи — ссылка на другую задачу; термином он остаётся
+    только в таком сочетании."""
+    found: set[str] = set()
+    for text in sources_of(stream, fragments, more):
+        for match in TASK.finditer(text):
+            if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
+                found.add(text[match.start():match.end() + after.end()])
+            if (before := re.search(r"\w+[ \t]+$", text[:match.start()])) is not None:
+                found.add(text[before.start():match.end()])
+    return frozenset(found)
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],

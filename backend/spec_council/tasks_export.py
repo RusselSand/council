@@ -18,7 +18,7 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 
 from . import issue_files
-from .export import ISSUE, Part, Shelf, keyed, matched, planned
+from .export import ISSUE, Part, Shelf, keyed, matched, numbering_problem, planned
 from .models import (
     Issue,
     IssueNumber,
@@ -78,9 +78,9 @@ def line(text: str) -> str:
 
 
 def issue_title(issue: Issue, names: Mapping[str, str],
-                renumber: Callable[[str], str] | None = None) -> str:
+                renumber: Callable[[str], str] | None = None, keep: Collection[str] = ()) -> str:
     """Название задачи, как оно ляжет и в её файл, и в строку «- ISS-…: …» задач, что ждут её."""
-    title = relabeled(issue.title, names)
+    title = relabeled(issue.title, names, keep)
     return line(renumber(title) if renumber else title)
 
 
@@ -88,21 +88,23 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
                adrs: Sequence[tuple[str, str]], after: Sequence[tuple[str, str]],
                keep: Sequence[str], risks: Sequence[str], words: Mapping[str, str],
                names: Mapping[str, str] | None = None,
-               renumber: Callable[[str], str] | None = None) -> str:
+               renumber: Callable[[str], str] | None = None,
+               phrases: Collection[str] = ()) -> str:
     """Задача для coding agent: кому и зачем, где менять и что там сейчас, что сделать, на чём
     стоит, что соблюдать, что неясно и после каких задач (after — с названиями из issue_title), —
     и номер для финального коммита. Задачи плана текст называет I-n, а агент найдёт их по
-    номерам на весь проект: names. Номера потока своего итога — номерами заметок: renumber (в
-    тексте решений — уже: decisions_of)."""
+    номерам на весь проект: names, кроме сочетаний phrases («I1 cache»). Номера потока своего
+    итога — номерами заметок: renumber (в тексте решений — уже: decisions_of)."""
     names = names or {}
 
     def fixed(value: str) -> str:
         return renumber(value) if renumber else value
 
     def named(value: str) -> str:
-        return fixed(relabeled(value, names))
+        return fixed(relabeled(value, names, phrases))
 
-    lines = [f"# {issue_title(issue, names, renumber)}", "", named(issue.user_story.strip())]
+    lines = [f"# {issue_title(issue, names, renumber, phrases)}", "",
+             named(issue.user_story.strip())]
 
     def section(title: str, items: Iterable[str]) -> None:
         items = list(items)
@@ -170,13 +172,11 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         names = names_of(issue)
         return (lambda text: names(text, words["quote"])) if names else None
 
-    def labels_of(issue: Issue) -> dict[str, str]:
-        """Номера задач плана — кроме тех, что в исходных текстах потока термины («I1 cache»)."""
+    def kept(issue: Issue) -> frozenset[str]:
         names = names_of(issue)
-        return {name: number for name, number in labels.items()
-                if names is None or name not in names.terms}
+        return names.phrases if names is not None else frozenset()
 
-    titles = {issue.id: issue_title(issue, labels_of(issue), renumber(issue))
+    titles = {issue.id: issue_title(issue, labels, renumber(issue), kept(issue))
               for issue in plan.issues}
     notes: list[NotePlan] = []
     for issue in plan.issues:
@@ -188,7 +188,7 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         text = issue_text(issue, number.id, outcome, adrs, after,
                           [fragments[i].text for i in issue.constraint_ids if i in fragments],
                           [fragments[i].text for i in issue.risk_ids if i in fragments], words,
-                          labels_of(issue), renumber(issue))
+                          labels, renumber(issue), kept(issue))
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
@@ -230,7 +230,9 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
         new = retitled(text, {link: titles[link] for link in note.links
                               if link != note.id and link in titles}, section)
-        if new != text:
+        # Название с номером заметки или задачи (правили руками) принесло бы его в чужой файл
+        # без ссылки во frontmatter: такой файл — как был.
+        if new != text and numbering_problem(text, new) is None:
             changed[note.key] = new
     return changed
 

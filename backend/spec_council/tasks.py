@@ -16,7 +16,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from .export import renumbered, stream_texts, terms_of
+from .export import phrases_of, renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -51,6 +51,9 @@ class Names:
     texts: Mapping[str, str]
     # Термины исходных текстов, похожие на номера: их не трогают (terms_of).
     terms: frozenset[str] = frozenset()
+    # Сочетания исходных текстов с номером задачи плана («I1 cache»): номером задачи они не
+    # становятся (phrases_of).
+    phrases: frozenset[str] = frozenset()
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
         return renumbered(text, self.numbers, self.texts, quote, self.terms)
@@ -76,7 +79,8 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     found = dict(research or {})
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found,
-                 terms_of(stream, fragments, found.values()) - set(found))
+                 terms_of(stream, fragments, found.values()) - set(found),
+                 phrases_of(stream, fragments, found.values()))
 
 
 def research_texts(council: Council) -> dict[str, str]:
@@ -269,14 +273,28 @@ def texts_of(value: object) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()][:ITEMS_MAX]
 
 
-def relabeled(text: str, names: Mapping[str, str]) -> str:
+def relabeled(text: str, names: Mapping[str, str], keep: Collection[str] = ()) -> str:
     """Номера задач в тексте — новыми (names: прежний → новый), за один проход: I1 ↔ I2 не
-    путаются."""
+    путаются. Сочетания keep («I1 cache») — как есть: там номер — слово."""
     if not names:
         return text
     pattern = re.compile(r"(?<![\w-])(" + "|".join(
         re.escape(name) for name in sorted(names, key=len, reverse=True)) + r")(?![\w-])")
-    return pattern.sub(lambda found: names[found.group(1)], text)
+
+    def renamed(part: str) -> str:
+        return pattern.sub(lambda found: names[found.group(1)], part)
+
+    if not keep:
+        return renamed(text)
+    guard = re.compile("|".join(re.escape(phrase) for phrase in sorted(keep, key=len,
+                                                                        reverse=True)))
+    out: list[str] = []
+    last = 0
+    for kept in guard.finditer(text):
+        out += [renamed(text[last:kept.start()]), kept.group(0)]
+        last = kept.end()
+    out.append(renamed(text[last:]))
+    return "".join(out)
 
 
 def plan_of(data: dict, context: Context) -> list[Issue]:
