@@ -101,6 +101,8 @@ HIDING = (
     r"<!\[CDATA\[[\s\S]*?\]\]>",
 )
 HIDDEN = re.compile("|".join(HIDING))
+# Пустая строка между абзацами.
+PARAGRAPH = re.compile(r"\n[ \t]*\n")
 UNTOUCHED = re.compile("|".join((
     *HIDING,
     # <адрес> и <почта>, почта сама по себе
@@ -467,9 +469,12 @@ def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
 
 def opened(text: str, close: int, hidden: Collection[tuple[int, int]] = ()) -> bool:
     r"""У «]» на месте close есть парная «[» без экранирования и не в скрытом тексте (hidden: код,
-    комментарий): \[x](…) и `[x` ](…) — текст, а не ссылка."""
+    комментарий) и в том же абзаце: \[x](…), `[x` ](…) и «[x», пустая строка, «](…)» — текст, а
+    не ссылка."""
+    # Пустая строка кончает абзац: «[» до неё — из другого блока.
+    paragraph = max((gap.end() for gap in PARAGRAPH.finditer(text, 0, close)), default=0)
     depth = 0
-    for at in range(close - 1, -1, -1):
+    for at in range(close - 1, paragraph - 1, -1):
         if text[at] not in "[]" or escaped(text, at) or inside(at, hidden):
             continue
         if text[at] == "]":
@@ -531,7 +536,12 @@ def destination_end(text: str, at: int) -> int | None:
     size = len(text)
 
     def blank(i: int) -> int:
+        """Пробелы и не больше одного переноса строки: пустая строка кончает абзац."""
+        breaks = 0
         while i < size and text[i] in " \t\n":
+            breaks += text[i] == "\n"
+            if breaks > 1:
+                break
             i += 1
         return i
 
