@@ -340,12 +340,20 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
     return texts
 
 
+def decision_texts(stream: Stream) -> list[str]:
+    """Тексты отобранных для потока решений проекта: идея, вопрос, решение — из каталога."""
+    return [text for decision in stream.project_decisions or []
+            for text in (decision.idea, decision.question, decision.decision)]
+
+
 def terms_of(stream: Stream) -> frozenset[str]:
-    """Номера, которых не трогают нигде: решение проекта, отобранное для потока, без нулей в
-    номере (ADR-0001 — «ADR-1»). Каталог зовёт его и так, и «ADR-1» в тексте — не обязательно
-    первое решение потока."""
-    return frozenset(f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
-                     if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None)
+    """Номера, которых не трогают нигде: решения проекта — отобранное для потока и те, что
+    называет проза отобранных, — без нулей в номере (ADR-0001 — «ADR-1»). Каталог зовёт решение
+    и так, и «ADR-1» в тексте — не обязательно первое решение потока."""
+    named = [decision.adr_id for decision in stream.project_decisions or []]
+    named += [found for text in decision_texts(stream) for found in NUMBER.findall(prose_of(text))]
+    return frozenset(f"ADR-{int(found.group(1))}" for name in named
+                     if (found := PAST_ADR.fullmatch(name)) is not None)
 
 
 def note_key(note_id: str) -> tuple[str, int] | str:
@@ -369,13 +377,11 @@ def prose_of(text: str) -> str:
 
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = ()) -> list[str]:
-    """Исходные тексты потока: текст группы, его утверждённая идея, тексты отобранных решений
-    проекта, находки скана репозитория и макета — и more."""
+    """Исходные тексты потока, что старше номеров заметок: текст группы, его утверждённая идея,
+    находки скана репозитория и макета — и more."""
     sources = [fragment.text for fragment in fragments.values()]
     if stream.idea is not None:
         sources.append(stream.idea.text)
-    sources += [text for decision in stream.project_decisions or []
-                for text in (decision.idea, decision.question, decision.decision)]
     for scan in (stream.scan, stream.design_scan):
         if scan is not None and scan.result is not None:
             sources += [finding.statement for finding in scan.result.findings]
@@ -385,20 +391,30 @@ def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = (), notes: Iterable[str] = (),
                known: Collection[str] = ()) -> frozenset[str]:
-    """Где в прозе исходных текстов — текста группы, идеи, отобранных решений проекта,
-    находок скана (и more) — слово, похожее на номер («F1 score», «Cloudflare R2», «I1 cache»,
-    «ADR-9999 fixture»): оно с соседним словом. Номера потока, заметок и задач появились позже
-    этих текстов, и в таком сочетании слово — их слово, а не ссылка; то же слово в другом месте
-    текста совета — ссылка. notes — тексты заметок: в них номер известной заметки (known) —
-    настоящая ссылка, и его сочетание словом не становится."""
+    """Где в прозе исходных текстов — текста группы, идеи, находок скана (и more) — слово,
+    похожее на номер («F1 score», «Cloudflare R2», «I1 cache», «ADR-9999 fixture»): оно с
+    соседним словом. Номера потока, заметок и задач появились позже этих текстов, и в таком
+    сочетании слово — их слово, а не ссылка; то же слово в другом месте текста совета — ссылка.
+    notes — тексты заметок: в них номер известной заметки (known) — настоящая ссылка, и его
+    сочетание словом не становится. Тексты отобранных решений проекта — из каталога: там
+    ссылка — любой номер заметки, а слово — только номер потока («Q1 reporting»)."""
     found: set[str] = set()
-    sources: list[tuple[str, Collection[object]]] = [
-        (text, ()) for text in sources_of(stream, fragments, more)]
-    sources += [(text, {note_key(note_id) for note_id in known}) for text in notes]
-    for source, skip in sources:
+    keys = {note_key(note_id) for note_id in known}
+
+    def known_note(name: str) -> bool:
+        return note_key(name) in keys
+
+    def any_note(name: str) -> bool:
+        return NUMBER.fullmatch(name) is not None
+
+    sources: list[tuple[str, Callable[[str], bool] | None]] = [
+        (text, None) for text in sources_of(stream, fragments, more)]
+    sources += [(text, known_note) for text in notes]
+    sources += [(text, any_note) for text in decision_texts(stream)]
+    for source, linked in sources:
         text = prose_of(source)
         for match in WORDLIKE.finditer(text):
-            if note_key(match.group(0)) in skip:
+            if linked is not None and linked(match.group(0)):
                 continue
             if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
                 found.add(text[match.start():match.end() + after.end()])

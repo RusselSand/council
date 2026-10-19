@@ -22,6 +22,7 @@ from spec_council.models import (
     NotesExport,
     OpenQuestion,
     Outcome,
+    ProjectDecision,
     RepositoryFinding,
     RepositoryMap,
     RepositoryScan,
@@ -835,6 +836,18 @@ def test_a_known_note_number_in_an_exported_note_stays_a_reference():
     phrases = names_of(stream, {}).phrases
     assert "ADR-9999 fixture" in phrases
     assert not any("OQ-0002" in phrase for phrase in phrases)
+
+
+def test_a_note_number_in_a_project_decision_stays_a_reference():
+    # Тексты решений проекта — из каталога: номер заметки в них — ссылка, хоть решение и не
+    # отобрано («ADR-0002 validation»), и проверку удалённых заметок не обходит; номером
+    # решения потока «ADR-2» не становится (terms). Слово потока «Q1 reporting» — слово.
+    decision = ProjectDecision(adr_id="ADR-0001", decision="Сверить по ADR-0002 validation, "
+                                                          "как в Q1 reporting")
+    names = names_of(Stream(group="C", project_decisions=[decision]), {})
+    assert "Q1 reporting" in names.phrases
+    assert not any("ADR-0002" in phrase for phrase in names.phrases)
+    assert {"ADR-1", "ADR-2"} <= names.terms
 
 
 def test_a_section_repeating_a_prerequisite_is_not_the_list():
