@@ -400,8 +400,13 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
     """Текст, где change — только в прозе: блоки кода и HTML на любой глубине (BLOCKS), строки
     кода, адреса ссылок, теги (UNTOUCHED) и метки ссылок-сносок, определённых в тексте, — как
     есть."""
-    # Метка ссылки-сноски, определённой в тексте, — и там, где ссылкой пользуются: [..][Q1], [Q1].
-    labels = DEFINED.findall(text)
+    code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
+            for n in range(*token.map)}
+    lines = [f"{row}\n" for row in text.split("\n")]
+    lines[-1] = lines[-1][:-1]
+    # Метка ссылки-сноски, определённой в тексте (не в блоке кода), — и там, где ссылкой
+    # пользуются: [..][Q1], [Q1].
+    labels = DEFINED.findall("".join(row for n, row in enumerate(lines) if n not in code))
     untouched = UNTOUCHED if not labels else re.compile(
         UNTOUCHED.pattern + r"|(?i:\[(?:" + "|".join(map(re.escape, labels)) + r")\])",
         UNTOUCHED.flags)
@@ -415,10 +420,6 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
         out.append(change(part[last:]))
         return "".join(out)
 
-    code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
-            for n in range(*token.map)}
-    lines = [f"{row}\n" for row in text.split("\n")]
-    lines[-1] = lines[-1][:-1]
     return "".join(
         "".join(row for _, row in rows) if inside else inline("".join(row for _, row in rows))
         for inside, rows in groupby(enumerate(lines), key=lambda item: item[0] in code))

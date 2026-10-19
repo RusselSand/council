@@ -661,3 +661,26 @@ def test_the_planner_sees_decisions_and_questions_as_they_were_written():
     entry = adr_entry(stream, "ADR-1", "ADR-0001", written, Names({"Q1": "OQ-0001"}, {}))
     assert (entry["question"], entry["decision"]) == ("Как считать долю?",
                                                       "Считать по Q1 reporting")
+
+
+def test_note_numbers_in_task_code_and_links_are_not_references(tmp_path):
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001",
+                  scope=["Назвать фикстуру `ADR-9999`, как в [примере](/examples/ADR-9999)."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                 words_for("Russian"), "Russian")
+    assert "`ADR-9999`" in file.text
+
+
+def test_a_section_with_more_than_dependencies_is_not_their_list():
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v1",
+                     generated="# Индекс", action="create")
+    # Списка зависимостей нет, а в «Notes» рядом с пунктом — проза: это не список.
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Search\n\n## Notes\n- ISS-0001: reuse it\nKeep the old index.\n\n"
+                           "Commit ISS-0002.",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит ISS-0002.",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {}

@@ -18,7 +18,17 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 
 from . import issue_files
-from .export import ISSUE, NUMBER, Part, Shelf, keyed, matched, numbering_problem, planned
+from .export import (
+    ISSUE,
+    NUMBER,
+    Part,
+    Shelf,
+    in_prose,
+    keyed,
+    matched,
+    numbering_problem,
+    planned,
+)
 from .models import (
     Issue,
     IssueNumber,
@@ -133,6 +143,18 @@ def written_by_plan(issue: Issue) -> list[str]:
             *issue.open_questions]
 
 
+def numbers_in_prose(text: str) -> list[str]:
+    """Номера заметок и задач в прозе: в коде и адресах ссылок (in_prose) номер — не ссылка."""
+    found: list[str] = []
+
+    def collect(part: str) -> str:
+        found.extend(NUMBER.findall(part))
+        return part
+
+    in_prose(text, collect)
+    return found
+
+
 def numbered_key(note_id: str) -> tuple[str, int] | str:
     """Номер заметки без нулей: ADR-7 и ADR-0007 — одна заметка."""
     found = re.fullmatch(r"([A-Za-z]+)-0*(\d+)", note_id)
@@ -171,7 +193,7 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
     known = {numbered_key(note_id) for note_id in catalog.notes}
     dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
-                   for found in NUMBER.findall(text)
+                   for found in numbers_in_prose(text)
                    if not found.startswith("ISS-") and numbered_key(found) not in known})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
@@ -247,7 +269,7 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         # Список задач, после которых делать эту, issue_text кладёт последним разделом.
         section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
         new = retitled(text, {link: titles[link] for link in note.links
-                              if link != note.id and link in titles}, section)
+                              if link != note.id and link in titles}, section, note.id)
         # Название с номером заметки или задачи (правили руками) принесло бы его в чужой файл
         # без ссылки во frontmatter: такой файл — как был.
         if new != text and numbering_problem(text, new) is None:
@@ -255,19 +277,22 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
     return changed
 
 
-def retitled(text: str, titles: Mapping[str, str], section: int) -> str:
+def retitled(text: str, titles: Mapping[str, str], section: int, own: str) -> str:
     """Список задач, после которых делать эту, — с названиями из их файлов (titles). Это раздел
-    «## …», где пункты — только «- ISS-…: …» и только задачи, которых ждут (titles). Таких
-    разделов несколько (человек дописал похожий) — тот, что под тем же номером (section, с
-    нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
+    «## …», где, кроме пустых, только строки «- ISS-…: …» задач, которых ждут (titles), — и
+    последняя строка файла о его номере (own) для коммита: issue_text ставит её после списка.
+    Таких разделов несколько (человек дописал похожий) — тот, что под тем же номером (section,
+    с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
     узнать — текст как есть."""
     lines = text.split("\n")
     heads = [n for n, row in enumerate(lines) if row.startswith("## ")]
     if not heads:
         return text
+    filled = [n for n, row in enumerate(lines) if row.strip()]
+    closing = filled[-1] if filled and own in lines[filled[-1]] else None
     found: list[tuple[int, list[tuple[int, re.Match[str]]]]] = []
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
-        rows = [n for n in range(start + 1, end) if lines[n].lstrip().startswith("- ")]
+        rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
         items = [(n, match) for n in rows if (match := AFTER.match(lines[n])) is not None]
         if rows and len(items) == len(rows) and all(m.group(2) in titles for _, m in items):
             found.append((place, items))
