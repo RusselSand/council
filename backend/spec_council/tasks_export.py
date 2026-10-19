@@ -18,7 +18,7 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 
 from . import issue_files
-from .export import ISSUE, Part, Shelf, keyed, matched, numbering_problem, planned
+from .export import ISSUE, NUMBER, Part, Shelf, keyed, matched, numbering_problem, planned
 from .models import (
     Issue,
     IssueNumber,
@@ -126,6 +126,19 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     return "\n".join(lines)
 
 
+def written_by_plan(issue: Issue) -> list[str]:
+    """Что в задаче написала модель плана: название, история, что там сейчас, что сделать,
+    что неясно."""
+    return [issue.title, issue.user_story, issue.current_state, *issue.scope,
+            *issue.open_questions]
+
+
+def numbered_key(note_id: str) -> tuple[str, int] | str:
+    """Номер заметки без нулей: ADR-7 и ADR-0007 — одна заметка."""
+    found = re.fullmatch(r"([A-Za-z]+)-0*(\d+)", note_id)
+    return (found.group(1).upper(), int(found.group(2))) if found else note_id
+
+
 def title_of(catalog: Catalog, note_id: str) -> str:
     """Заметка коротко — её первая строка: у итога это название."""
     note = catalog.notes.get(note_id)
@@ -154,6 +167,16 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     if gone:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(gone)}, а план на них стоит: "
                          "верните заметки или выгрузите потоки заново и спланируйте снова")
+    # Модели плана видели номера заметок и писали их в текст задач: какую с тех пор удалили, на
+    # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
+    known = {numbered_key(note_id) for note_id in catalog.notes}
+    dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
+                   for found in NUMBER.findall(text)
+                   if not found.startswith("ISS-") and numbered_key(found) not in known})
+    if dead:
+        raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
+                         "называют: верните заметки или выгрузите потоки заново и спланируйте "
+                         "снова")
     labels = {name: number.id for name, number in by_issue.items()}
 
     def names_of(issue: Issue) -> Names | None:

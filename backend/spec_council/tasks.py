@@ -238,14 +238,17 @@ def outcome_entry(outcome: Outcome, note: str, group: str, refs: Mapping[str, st
 
 def adr_entry(stream: Stream, name: str, note: str, written: Mapping[str, str],
               named: Names) -> dict:
-    """Решение потока: номер заметки, вопрос и текст, как он лёг в заметку («решение, потому
-    что обоснование»), — с номерами заметок и в тексте (names): заметку могли выгрузить, когда
-    номера потока ещё оставались в ней как есть."""
+    """Решение потока: номер заметки, вопрос и текст, как они легли в заметки («решение,
+    потому что обоснование»): номера потока в них ушли при выгрузке, а правку человека
+    пересчитывать нельзя. Вопроса в заметках нет — его текст в потоке, с номерами заметок
+    (names)."""
     n = int(name.split("-")[1])
     scope = stream.scope or []
     question = scope[n - 1] if 0 < n <= len(scope) else None
-    return {"id": note, "question": named(question.note or question.text) if question else "",
-            "decision": named(written.get(note, ""))}
+    asked = written.get(named.numbers.get(question.id, "")) if question else None
+    return {"id": note,
+            "question": asked or (named(question.note or question.text) if question else ""),
+            "decision": written.get(note, "")}
 
 
 def limits_prompt(fragments: Mapping[int, LabeledFragment], ids: Iterable[int]) -> list[dict]:

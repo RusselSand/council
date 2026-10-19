@@ -18,6 +18,7 @@ from spec_council.models import (
     CouncilStatus,
     Issue,
     NotePlan,
+    OpenQuestion,
     Outcome,
     RepositoryFinding,
     RepositoryMap,
@@ -31,9 +32,16 @@ from spec_council.models import (
     TaskPlan,
 )
 from spec_council.models import LabeledFragment as Fragment
-from spec_council.notes import Catalog, Note, path_of, rendered
+from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
 from spec_council.pipeline import start_tasks
-from spec_council.tasks import Names, names_of, outcome_entry, outcome_names, research_texts
+from spec_council.tasks import (
+    Names,
+    adr_entry,
+    names_of,
+    outcome_entry,
+    outcome_names,
+    research_texts,
+)
 from spec_council.tasks_export import aligned, drafted_tasks, issue_text
 from tests.test_streams import (
     ALL_DECIDED,
@@ -633,3 +641,23 @@ def test_a_task_title_is_only_its_first_line():
                       generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
                       links=["OUT-0001", "ISS-0001"], action="create")
     assert aligned([first, second]) == {}
+
+
+def test_a_note_number_the_plan_wrote_must_still_be_in_the_catalog(tmp_path):
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Ответить на OQ-0009 и OUT-1."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    with pytest.raises(NotesError, match="больше нет OQ-0009, а задачи плана их называют"):
+        drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian")
+
+
+def test_the_planner_sees_decisions_and_questions_as_they_were_written():
+    # Человек поправил решение при выгрузке: «Q1 reporting» в нём — его слово, а не вопрос Q1.
+    stream = Stream(group="C", scope=[OpenQuestion(id="Q1", text="Как считать?",
+                                                   source="discovered")])
+    written = {"ADR-0001": "Считать по Q1 reporting", "OQ-0001": "Как считать долю?"}
+    entry = adr_entry(stream, "ADR-1", "ADR-0001", written, Names({"Q1": "OQ-0001"}, {}))
+    assert (entry["question"], entry["decision"]) == ("Как считать долю?",
+                                                      "Считать по Q1 reporting")
