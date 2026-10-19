@@ -751,3 +751,25 @@ def test_a_section_naming_only_some_prerequisites_is_not_their_list():
     third = file("ISS-0003", "# Search\n\n## Notes\n- ISS-0001: reuse its tokenizer\n\n"
                              "Commit ISS-0003.", ["OUT-0001", "ISS-0001", "ISS-0002"])
     assert aligned([first, second, third]) == {}
+
+
+def test_a_task_title_drops_its_closing_hashes():
+    # «# Index #» — тот же заголовок «Index»: закрывающие «#» в название не входят.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index #",
+                     generated="# Индекс", action="create")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Search\n\n## After\n- ISS-0001: Индекс\n",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {
+        second.key: "# Search\n\n## After\n- ISS-0001: Index\n"}
+
+
+def test_a_hyphenated_word_is_not_a_dead_note_reference(tmp_path):
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Следовать RFC-ADR-9999."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                 words_for("Russian"), "Russian")
+    assert "RFC-ADR-9999" in file.text
