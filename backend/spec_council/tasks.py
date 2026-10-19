@@ -13,8 +13,8 @@
 
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 
 from .export import renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
@@ -59,6 +59,13 @@ class Names:
         """Заметка — этого потока: прошлое решение проекта называет свои вопросы своими
         номерами, и номера этого потока к нему не подходят."""
         return note in self.numbers.values()
+
+    def within(self, notes: Collection[str]) -> Names:
+        """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
+        могли удалить руками, и ссылка на неё вела бы в никуда — тогда в тексте встанет то,
+        что за номером."""
+        return replace(self, numbers={name: number for name, number in self.numbers.items()
+                                      if number in notes})
 
 
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],

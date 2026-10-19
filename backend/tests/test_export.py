@@ -321,6 +321,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     for link in ("[x](/questions/Q1 'Q1')", "[x](/questions/Q1 (Q1))", "[x](</questions/Q1>)",
                  '[x]( /questions/Q1 "Q1" )'):
         assert renumbered(f"{link} и Q1", {"Q1": "OQ-0002"}, {}) == f"{link} и OQ-0002"
+    # Скобки в адресе — и вложенные; почта — и в <…>, и сама по себе.
+    deep = "[x](https://host/a_(b_(c))/Q1) <foo.Q1@example.com> foo.Q1@example.com"
+    assert renumbered(f"{deep} и Q1", {"Q1": "OQ-0002"}, {}) == f"{deep} и OQ-0002"
     # Адрес — целиком, и со скобками внутри.
     assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
                       {"Q1": "OQ-0002"}, {}) == (

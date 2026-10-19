@@ -10,7 +10,7 @@ import pytest
 from spec_council.api import tasks as tasks_api
 from spec_council.app import app
 from spec_council.deps import get_agents, get_issues_of, get_launcher, get_notes_of
-from spec_council.export import words_for
+from spec_council.export import Shelf, words_for
 from spec_council.groups import arranged
 from spec_council.issue_files import rendered as issue_rendered
 from spec_council.models import (
@@ -27,12 +27,13 @@ from spec_council.models import (
     Stream,
     Structure,
     StructureProposal,
+    TaskPlan,
 )
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
 from spec_council.tasks import Names, names_of, outcome_entry, outcome_names, research_texts
-from spec_council.tasks_export import aligned, decisions_of, issue_text
+from spec_council.tasks_export import aligned, decisions_of, drafted_tasks, issue_text
 from tests.test_streams import (
     ALL_DECIDED,
     LABELS,
@@ -572,3 +573,34 @@ def test_a_finding_of_the_approved_research_is_a_number_not_an_old_term():
                       council_label="constraint")
     names = names_of(Stream(group="C"), {1: bucket}, {"R2": "Ответы ищут полнотекстом."})
     assert names("см. R2") == "см. «Ответы ищут полнотекстом»"
+
+
+def test_task_files_keep_stream_terms_and_skip_deleted_notes(tmp_path):
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    # «I1» в исходных текстах потока — термин (I1 cache), и номером задачи плана оно не
+    # становится; Q1 ведёт на OQ-0001, которой в каталоге уже нет, — встаёт сам вопрос.
+    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001"}, {"Q1": "Где хранить кэш?"},
+                  frozenset({"I1"}))
+    issue = Issue(id="I1", title="Прогреть I1 cache", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Ответить на Q1."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                 words_for("Russian"), "Russian", (), {"OUT-0001": names})
+    assert file.text.startswith("# Прогреть I1 cache\n")
+    assert "- Ответить на «Где хранить кэш?»." in file.text
+
+
+def test_a_dependency_list_is_found_after_its_sections_were_edited():
+    def file(number, generated, text=None, links=()):
+        return NotePlan(key=f"i:{number}", id=number, type="issue", text=text or generated,
+                        generated=generated, links=list(links), action="create")
+
+    first = file("ISS-0001", "# Индекс\n\nКак команда.", "# Index v1\n\nAs a team.")
+    # Раздел «Решения» перед списком убрали: список — уже второй раздел, а не третий.
+    second = file("ISS-0002", "# Поиск\n\n## Что сделать\n- Искать\n\n"
+                              "## Решения\n- ADR-0001: Да\n\n"
+                              "## После задач\n- ISS-0001: Индекс\n\nКоммит ISS-0002.",
+                  "# Search\n\n## To do\n- Search\n\n## After the issues\n- ISS-0001: Index v2\n\n"
+                  "Commit ISS-0002.", ["OUT-0001", "ADR-0001", "ISS-0001"])
+    assert aligned([first, second]) == {second.key: second.text.replace(
+        "- ISS-0001: Index v2", "- ISS-0001: Index v1")}

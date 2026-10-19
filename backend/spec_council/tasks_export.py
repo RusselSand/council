@@ -162,23 +162,33 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                          "верните заметки или выгрузите потоки заново и спланируйте снова")
     labels = {name: number.id for name, number in by_issue.items()}
 
-    def renumber(issue: Issue) -> Callable[[str], str] | None:
+    def names_of(issue: Issue) -> Names | None:
         names = (streams or {}).get(issue.outcome_id)
+        return names.within(catalog.notes) if names is not None else None
+
+    def renumber(issue: Issue) -> Callable[[str], str] | None:
+        names = names_of(issue)
         return (lambda text: names(text, words["quote"])) if names else None
 
-    titles = {issue.id: issue_title(issue, labels, renumber(issue)) for issue in plan.issues}
+    def labels_of(issue: Issue) -> dict[str, str]:
+        """Номера задач плана — кроме тех, что в исходных текстах потока термины («I1 cache»)."""
+        names = names_of(issue)
+        return {name: number for name, number in labels.items()
+                if names is None or name not in names.terms}
+
+    titles = {issue.id: issue_title(issue, labels_of(issue), renumber(issue))
+              for issue in plan.issues}
     notes: list[NotePlan] = []
     for issue in plan.issues:
         number = by_issue[issue.id]
         outcome = (issue.outcome_id, title_of(catalog, issue.outcome_id))
-        adrs = decisions_of(issue, catalog, (streams or {}).get(issue.outcome_id),
-                            words["quote"])
+        adrs = decisions_of(issue, catalog, names_of(issue), words["quote"])
         after = [(by_issue[name].id, titles[name]) for name in issue.depends_on
                  if name in by_issue]
         text = issue_text(issue, number.id, outcome, adrs, after,
                           [fragments[i].text for i in issue.constraint_ids if i in fragments],
                           [fragments[i].text for i in issue.risk_ids if i in fragments], words,
-                          labels, renumber(issue))
+                          labels_of(issue), renumber(issue))
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
@@ -227,19 +237,24 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
 
 def retitled(text: str, titles: Mapping[str, str], section: int) -> str:
     """Список задач, после которых делать эту, — с названиями из их файлов (titles). Это раздел
-    «## …» под тем же номером (section, с нуля), что и в тексте совета: перевод разделы не
-    переставляет, а пункт с номером задачи в другом разделе, хоть и дописанном ниже, — не из
-    списка. Пункты там не только «- ISS-…: …» или раздела нет — текст как есть."""
+    «## …», где пункты — только «- ISS-…: …» и только задачи, которых ждут (titles). Таких
+    разделов несколько (человек дописал похожий) — тот, что под тем же номером (section, с
+    нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
+    узнать — текст как есть."""
     lines = text.split("\n")
     heads = [n for n, row in enumerate(lines) if row.startswith("## ")]
-    if not 0 <= section < len(heads):
+    if not heads:
         return text
-    end = heads[section + 1] if section + 1 < len(heads) else len(lines)
-    items = [(n, AFTER.match(lines[n])) for n in range(heads[section] + 1, end)
-             if lines[n].lstrip().startswith("- ")]
-    if not items or not all(found for _, found in items):
+    found: list[tuple[int, list[tuple[int, re.Match[str]]]]] = []
+    for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
+        rows = [n for n in range(start + 1, end) if lines[n].lstrip().startswith("- ")]
+        items = [(n, match) for n in rows if (match := AFTER.match(lines[n])) is not None]
+        if rows and len(items) == len(rows) and all(m.group(2) in titles for _, m in items):
+            found.append((place, items))
+    chosen = found[0][1] if len(found) == 1 else next(
+        (items for place, items in found if place == section), None)
+    if chosen is None:
         return text
-    for n, found in items:
-        if found is not None and found.group(2) in titles:
-            lines[n] = found.group(1) + titles[found.group(2)]
+    for n, match in chosen:
+        lines[n] = match.group(1) + titles[match.group(2)]
     return "\n".join(lines)
