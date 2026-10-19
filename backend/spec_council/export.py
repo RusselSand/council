@@ -88,6 +88,8 @@ BLOCKS = ("fence", "code_block", "html_block")
 ATTRIBUTES = (r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*"""
               r"""(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*""")
 RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
+# Из них — сырой текст: тег внутри — текст до своего закрывающего.
+RAW_TEXT = frozenset(("script", "style", "textarea"))
 # Открывающий и закрывающий тег такого элемента: его содержимое ищет raw_elements.
 RAW_TAG = re.compile(rf"(?i:<(?P<open>{RAW})\b{ATTRIBUTES}\s*>|</(?P<close>{RAW})\s*>)")
 # Что не трогают в строке текста — номера в нём не ссылки, а текст вокруг остаётся текстом.
@@ -101,8 +103,6 @@ HIDING = (
     r"<!\[CDATA\[[\s\S]*?\]\]>",
 )
 HIDDEN = re.compile("|".join(HIDING))
-# Пустая строка между абзацами.
-PARAGRAPH = re.compile(r"\n[ \t]*\n")
 UNTOUCHED = re.compile("|".join((
     *HIDING,
     # <адрес> и <почта>, почта сама по себе
@@ -422,9 +422,10 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
-def blocks_of(text: str) -> tuple[set[int], dict[str, dict]]:
+def blocks_of(text: str) -> tuple[set[int], dict[str, dict], dict[int, int]]:
     """По разбору Markdown: строки текста (с нуля), что занимают блоки кода и HTML на любой
-    глубине и определения ссылок-сносок, — и сами определения по метке."""
+    глубине и определения ссылок-сносок, — сами определения по метке и строки прозы (абзаца,
+    заголовка) с номером их блока."""
     env: dict = {}
     tokens = MARKDOWN.parse(text, env)
     references = env.get("references", {})
@@ -432,7 +433,9 @@ def blocks_of(text: str) -> tuple[set[int], dict[str, dict]]:
              for n in range(*token.map)}
     lines |= {n for found in [*references.values(), *env.get("duplicate_refs", [])]
               if found.get("map") for n in range(*found["map"])}
-    return lines, references
+    prose = {n: block for block, token in enumerate(tokens) if token.type == "inline" and token.map
+             for n in range(*token.map)}
+    return lines, references, prose
 
 
 def destinations(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
@@ -469,12 +472,10 @@ def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
 
 def opened(text: str, close: int, hidden: Collection[tuple[int, int]] = ()) -> bool:
     r"""У «]» на месте close есть парная «[» без экранирования и не в скрытом тексте (hidden: код,
-    комментарий) и в том же абзаце: \[x](…), `[x` ](…) и «[x», пустая строка, «](…)» — текст, а
-    не ссылка."""
-    # Пустая строка кончает абзац: «[» до неё — из другого блока.
-    paragraph = max((gap.end() for gap in PARAGRAPH.finditer(text, 0, close)), default=0)
+    комментарий): \[x](…) и `[x` ](…) — текст, а не ссылка. Текст — один блок прозы (in_prose):
+    «[» другого абзаца или заголовка сюда не попадает."""
     depth = 0
-    for at in range(close - 1, paragraph - 1, -1):
+    for at in range(close - 1, -1, -1):
         if text[at] not in "[]" or escaped(text, at) or inside(at, hidden):
             continue
         if text[at] == "]":
@@ -489,12 +490,13 @@ def opened(text: str, close: int, hidden: Collection[tuple[int, int]] = ()) -> b
 def raw_elements(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
     """Где в тексте элемент HTML, чьё содержимое — код (RAW), — с вложенными в него такими же:
     <code>…<code>…</code>…</code> — одно целое. Тег в скрытом тексте (hidden: `<code>` в строке
-    кода, комментарий) — не тег; незакрытый элемент — не элемент."""
+    кода, комментарий) и в сыром (RAW_TEXT: <script>"<script>"</script>) — не тег; незакрытый
+    элемент — не элемент."""
     found: list[tuple[int, int]] = []
     start = None
     names: list[str] = []
     for tag in RAW_TAG.finditer(text):
-        if inside(tag.start(), hidden):
+        if inside(tag.start(), hidden) or (names and names[-1] in RAW_TEXT and tag.group("open")):
             continue
         if tag.group("open"):
             if not names:
@@ -507,18 +509,23 @@ def raw_elements(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tu
     return found
 
 
-def addresses(text: str) -> list[tuple[int, int]]:
+def addresses(text: str, opaque: Collection[tuple[int, int]] = (),
+              hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
     """Где в тексте адрес сам по себе («https://…»): до пробела или «<», «>», «]», со скобками
     внутри любой вложенности; «)» в конце, которой нет пары, и знак препинания в конце — не
-    адрес."""
+    адрес. Адрес, что начат в том, что не трогают (opaque: код, тег), — не адрес; скрытый текст
+    (hidden: код, комментарий) его обрывает: `https://host`/Q1."""
     found: list[tuple[int, int]] = []
     for scheme in SCHEME.finditer(text):
+        if inside(scheme.start(), opaque):
+            continue
+        stop = min((start for start, _ in hidden if start > scheme.start()), default=len(text))
         end = scheme.end()
         # Адрес узла IPv6 — в квадратных скобках сразу после «://»: «]» его не обрывает.
-        close = text.find("]", end) if text.startswith("[", end) else -1
+        close = text.find("]", end, stop) if text.startswith("[", end) else -1
         if close != -1 and not any(sign.isspace() for sign in text[end:close]):
             end = close + 1
-        while end < len(text) and not text[end].isspace() and text[end] not in "<>]":
+        while end < stop and not text[end].isspace() and text[end] not in "<>]":
             end += 1
         while end > scheme.end() and (
                 text[end - 1] in ".,;:!?'\""
@@ -584,7 +591,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     ссылок-сносок (их строки — по разбору Markdown), строки кода, теги (UNTOUCHED), адреса
     ссылок (destinations), метки сносок там, где ими пользуются, и сочетания keep («F1 score») —
     как есть."""
-    code, references = blocks_of(text)
+    code, references, prose = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
     # Метка сноски там, где ею пользуются: [..][Q1], [Q1][], [Q1]. Метки сравнивают, как
@@ -618,8 +625,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         # теги элементов кода — только не в скрытом тексте: сами теги им нужны.
         hidden = [kept.span() for kept in HIDDEN.finditer(part)]
         opaque = [kept.span() for kept in untouched.finditer(part)]
-        spans = sorted(opaque + uses(part) + destinations(part, opaque) + addresses(part)
-                       + raw_elements(part, hidden))
+        spans = sorted(opaque + uses(part) + destinations(part, opaque)
+                       + addresses(part, opaque, hidden) + raw_elements(part, hidden))
         out: list[str] = []
         last = 0
         for start, end in spans:
@@ -631,9 +638,15 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         out.append(change(part[last:]))
         return "".join(out)
 
+    def block(item: tuple[int, str]) -> int | None:
+        """Строка кода — None, прозы — номер её блока (абзаца, заголовка), прочие — -1: ссылка
+        и строка кода не выходят за свой блок, «[» абзаца над заголовком — не начало ссылки в
+        нём."""
+        return None if item[0] in code else prose.get(item[0], -1)
+
     return "".join(
-        "".join(row for _, row in rows) if inside else inline("".join(row for _, row in rows))
-        for inside, rows in groupby(enumerate(lines), key=lambda item: item[0] in code))
+        "".join(row for _, row in rows) if key is None else inline("".join(row for _, row in rows))
+        for key, rows in groupby(enumerate(lines), key=block))
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],

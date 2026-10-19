@@ -350,6 +350,13 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{ipv6} и Q1", {"Q1": "OQ-0002"}, {}) == f"{ipv6} и OQ-0002"
     nested_code = "<code>outer <code>Q1</code> Q1</code>"
     assert renumbered(f"{nested_code} и Q1", {"Q1": "OQ-0002"}, {}) == f"{nested_code} и OQ-0002"
+    # Адрес в строке кода кончается с ней; «[» абзаца над заголовком — не начало ссылки в нём;
+    # в <script> тег — текст до </script>.
+    assert renumbered("`https://host`/Q1", {"Q1": "OQ-0002"}, {}) == "`https://host`/OQ-0002"
+    assert renumbered("[x\n# ](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x\n# ](/questions/OQ-0002)")
+    script = '<script>const tag = "<script>"; Q1</script>'
+    assert renumbered(f"До {script} и Q1", {"Q1": "OQ-0002"}, {}) == f"До {script} и OQ-0002"
     # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
     assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\\](/questions/OQ-0002)")

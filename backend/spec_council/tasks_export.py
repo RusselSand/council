@@ -307,7 +307,7 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     узнать — текст как есть."""
     lines = text.split("\n")
     # Пример кода в задаче — не её разделы: «##» в нём не заголовок, а строка — не пункт.
-    code, _ = blocks_of(text)
+    code, _, _ = blocks_of(text)
     heads = [n for n, row in enumerate(lines) if n not in code and SECTION.match(row)]
     if not heads:
         return text
