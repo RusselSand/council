@@ -45,6 +45,8 @@ from .tasks import Names, relabeled
 # Название задачи — заголовок её файла: первая строка «# …» (без закрывающих «#»). Первая
 # строка не заголовок (файл правили руками) — названия нет.
 TITLE = re.compile(r"[ ]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*(?=\n|\Z)")
+# Заголовок раздела файла задачи «## …» — и с отступом до трёх пробелов, и с табуляцией.
+SECTION = re.compile(r"[ ]{0,3}##(?:[ \t]|$)")
 # Пункт списка задач, после которых делать эту: «- ISS-0012: название».
 AFTER = re.compile(r"^([ \t]*-[ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
 
@@ -282,7 +284,7 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
             continue
         text = current(note)
         # Список задач, после которых делать эту, issue_text кладёт последним разделом.
-        section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
+        section = sum(bool(SECTION.match(row)) for row in note.generated.split("\n")) - 1
         waits = {link for link in note.links if link != note.id and ISSUE.fullmatch(link)}
         new = retitled(text, {link: titles[link] for link in waits if link in titles}, waits,
                        section, closing(note))
@@ -309,7 +311,7 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
     узнать — текст как есть."""
     lines = text.split("\n")
-    heads = [n for n, row in enumerate(lines) if row.startswith("## ")]
+    heads = [n for n, row in enumerate(lines) if SECTION.match(row)]
     if not heads:
         return text
     filled = [n for n, row in enumerate(lines) if row.strip()]

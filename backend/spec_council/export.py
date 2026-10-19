@@ -100,10 +100,6 @@ RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
 UNTOUCHED = re.compile("|".join((
     # строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через перенос, но не пустую
     r"(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)",
-    # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри, и с
-    # экранированными «\(» и «\>»
-    rf"\]\(\s*(?:<(?:\\.|[^<>\\\n])*>|{balanced(r'(?:\\.|[^()\s\\])')}*)"
-    r"""(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)""",
     # <адрес> и <почта>, почта сама по себе
     r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>",
     r"<?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
@@ -406,11 +402,64 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
+def destinations(text: str) -> list[tuple[int, int]]:
+    """Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
+    в <…> или со скобками внутри любой вложенности, с экранированием «\», с заголовком в
+    "…", '…' или (…)."""
+    found: list[tuple[int, int]] = []
+    start = text.find("](")
+    while start != -1:
+        end = destination_end(text, start + 2)
+        if end is not None:
+            found.append((start, end))
+        start = text.find("](", end if end is not None else start + 2)
+    return found
+
+
+def destination_end(text: str, at: int) -> int | None:
+    """Конец «адрес "заголовок")» с позиции at (сразу после «](»): за «)»; не ссылка — None."""
+    size = len(text)
+
+    def blank(i: int) -> int:
+        while i < size and text[i] in " \t\n":
+            i += 1
+        return i
+
+    i = blank(at)
+    if i < size and text[i] == "<":
+        i += 1
+        while i < size and text[i] not in "<>\n":
+            i += 2 if text[i] == "\\" else 1
+        if i >= size or text[i] != ">":
+            return None
+        i += 1
+    else:
+        depth = 0
+        while i < size and not text[i].isspace():
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == ")" and depth == 0:
+                break
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        if depth:
+            return None
+    i = blank(i)
+    if i < size and text[i] in "\"'(":
+        close = ")" if text[i] == "(" else text[i]
+        i += 1
+        while i < size and text[i] != close:
+            i += 2 if text[i] == "\\" else 1
+        i = blank(i + 1)
+    return i + 1 if i < size and text[i] == ")" else None
+
+
 def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()) -> str:
     """Текст, где change — только в прозе: блоки кода и HTML на любой глубине и определения
-    ссылок-сносок (их строки — по разбору Markdown), строки кода, адреса ссылок, теги
-    (UNTOUCHED), метки сносок там, где ими пользуются, и сочетания keep («F1 score») — как
-    есть."""
+    ссылок-сносок (их строки — по разбору Markdown), строки кода, теги (UNTOUCHED), адреса
+    ссылок (destinations), метки сносок там, где ими пользуются, и сочетания keep («F1 score») —
+    как есть."""
     env: dict = {}
     tokens = MARKDOWN.parse(text, env)
     references = env.get("references", {})
@@ -436,11 +485,17 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
 
     def inline(part: str) -> str:
+        # Что не трогают: по выражению и адреса ссылок (destinations) — они могут пересекаться.
+        spans = sorted([kept.span() for kept in untouched.finditer(part)]
+                       + destinations(part))
         out: list[str] = []
         last = 0
-        for kept in untouched.finditer(part):
-            out += [change(part[last:kept.start()]), kept.group(0)]
-            last = kept.end()
+        for start, end in spans:
+            if start >= last:
+                out += [change(part[last:start]), part[start:end]]
+            elif end > last:
+                out.append(part[last:end])
+            last = max(last, end)
         out.append(change(part[last:]))
         return "".join(out)
 

@@ -790,3 +790,13 @@ def test_a_hyphenated_word_is_not_a_dead_note_reference(tmp_path):
     [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
                                  words_for("Russian"), "Russian")
     assert "RFC-ADR-9999" in file.text
+
+
+def test_a_dependency_list_under_an_indented_heading_is_found():
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v1",
+                     generated="# Индекс", action="create")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Search\n\n  ##\tAfter the issues\n- ISS-0001: Index v2\n",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {second.key: second.text.replace("Index v2", "Index v1")}
