@@ -14,13 +14,16 @@
 заметка); итог — по названию. Совет написал бы то же, что в прошлый раз, — остаётся то, что
 тогда записали, с правками человека. Файл, который правили руками после выгрузки, совет не
 трогает. Исчезнувшее само не удаляется.
+
+Тексты потока называют его части его же номерами: «по Q1», «(F3)». В заметки они ложатся
+номерами заметок, а у чего заметки нет — без номера (renumbered).
 """
 
 import hashlib
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import issue_files
@@ -48,12 +51,14 @@ WORDS = {
                 "entry": "Где менять", "now": "Что там сейчас", "scope": "Что сделать",
                 "outcomes": "Итоги", "decisions": "Решения", "keep": "Соблюдать",
                 "risks": "Риски", "after": "После задач", "open": "Открытые вопросы",
-                "commit": "В финальном коммите укажите номер задачи — {id}."},
+                "commit": "В финальном коммите укажите номер задачи — {id}.",
+                "quote": "«{}»"},
     "english": {"because": "because", "criteria": "Acceptance criteria", "issues": "Issues",
                 "entry": "Where to change", "now": "What is there now", "scope": "To do",
                 "outcomes": "Outcomes", "decisions": "Decisions", "keep": "Keep",
                 "risks": "Risks", "after": "After the issues", "open": "Open questions",
-                "commit": "Put the issue number {id} into the final commit."},
+                "commit": "Put the issue number {id} into the final commit.",
+                "quote": "“{}”"},
 }
 ALIASES = {"русский": "russian", "ru": "russian", "en": "english", "английский": "english"}
 ISSUE = re.compile(r"ISS-(\d+)")
@@ -61,6 +66,12 @@ ISSUE = re.compile(r"ISS-(\d+)")
 # для split он пробел.
 SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
+# Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
+# находки скана репозитория и макета. В документации они ничего не значат.
+LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
+# Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
+CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
+CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
 # Критерий, что начинается как строка задачи: «ISS-0042: …».
 ISSUE_START = re.compile(r"\s*(ISS-\d+)\s*:")
 
@@ -219,10 +230,13 @@ def criterion(item: str) -> str:
 
 
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-             words: Mapping[str, str]) -> tuple[list[Part], list[str], dict[str, str]]:
+             words: Mapping[str, str]
+             ) -> tuple[list[Part], list[str], dict[str, str], dict[str, str]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
     выгружается — с причиной, и какой частью ложится каждое решение потока (ADR-n) и каждый
-    итог (O1): по ним план задач называет их номерами заметок."""
+    итог (O1): по ним план задач называет их номерами заметок. И последним — какой частью
+    ложится всё, что тексты потока называют его номерами: идея (I1), вопрос, вариант (Pn и Fn),
+    решение, итог."""
     found = found_by_question(stream.proposals, stream.choices)
     choices = {choice.question_id: choice for choice in stream.choices or []}
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
@@ -230,14 +244,22 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
     proposals: list[Part] = []
     adrs: list[Part] = []
     adr_of: dict[str, str] = {}          # ADR-n потока → ключ части
+    named: dict[str, str] = {"I1": "idea"}
     external: set[str] = set()           # решения вопросов, что растут из прошлых решений
     taken: set[str] = set()
     for n, question in enumerate(stream.scope or [], 1):
         decision = decisions.get(question.id)
-        options = options_of(question, fragments, found, choices.get(question.id), decision)
+        choice = choices.get(question.id)
+        options = options_of(question, fragments, found, choice, decision)
         asked, offered, adr = question_parts(question, options, decision, catalog, words, taken)
         questions.append(asked)
         proposals += offered
+        named[question.id] = asked.key
+        for option, part in zip(options, offered, strict=True):
+            named.setdefault(option["id"], part.key)
+        if choice is not None and choice.based_on is not None and choice.proposal in named:
+            # Правка встала на место исходного: текст, что называет исходный, — о ней.
+            named.setdefault(choice.based_on, named[choice.proposal])
         if adr is not None:
             adrs.append(adr)
             adr_of[f"ADR-{n}"] = adr.key
@@ -245,7 +267,56 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
                 external.add(adr.key)
     outcomes, skipped, outcome_of = outcome_parts(stream, adr_of, external, words, taken)
     return ([Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-             *outcomes], skipped, adr_of | outcome_of)
+             *outcomes], skipped, adr_of | outcome_of, named | adr_of | outcome_of)
+
+
+def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> dict[str, str]:
+    """Что значит номер потока, если заметки у него нет: фрагмент текста группы, находка скана
+    репозитория или макета, вопрос, вариант, итог."""
+    texts = {f"F{i}": fragment.text for i, fragment in fragments.items()}
+    for scan in (stream.scan, stream.design_scan):
+        if scan is not None and scan.result is not None:
+            texts |= {finding.id: finding.statement for finding in scan.result.findings}
+    questions = [*(stream.questions.questions if stream.questions else []), *(stream.scope or [])]
+    texts |= {question.id: question.text for question in questions}
+    texts |= {proposal.id: proposal.text
+              for options in found_by_question(stream.proposals, stream.choices).values()
+              for proposal in options}
+    texts |= {outcome.id: outcome.title
+              for outcome in (stream.outcomes.outcomes if stream.outcomes else [])}
+    return texts
+
+
+def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
+               words: Mapping[str, str]) -> str:
+    """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
+    значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
+    выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках.
+    Номера заметок и незнакомые — как есть."""
+    def number(match: re.Match[str]) -> str:
+        return numbers.get(match.group(0), match.group(0))
+
+    def quoted(match: re.Match[str]) -> str:
+        name = match.group(0)
+        if name in numbers or name not in texts:
+            return numbers.get(name, name)
+        return words["quote"].format(" ".join(texts[name].split()).rstrip(".!"))
+
+    out: list[str] = []
+    last = 0
+    for match in CITED.finditer(text):
+        names = re.findall(CITED_NUMBER, match.group(0))
+        kept = [numbers.get(name, name) for name in names if name in numbers or name not in texts]
+        head = text[last:match.start()]
+        if not kept:
+            out.append(head.rstrip(" "))
+        elif len(kept) == len(names):
+            out += [head, LOCAL.sub(number, match.group(0))]
+        else:
+            out += [head, f"({', '.join(kept)})"]
+        last = match.end()
+    out.append(text[last:])
+    return LOCAL.sub(quoted, "".join(out))
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -319,7 +390,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     новой заметке его не дают, а прежний номер потока, который записан и за другим, — уже не
     его."""
     catalog = shelf.catalog
-    parts, skipped, refs = parts_of(stream, fragments, catalog, words)
+    parts, skipped, refs, named = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     olds = {key: before[was] for key, was in alias.items()}
@@ -337,7 +408,10 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     for part in parts:
         if part.key not in ids:
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
-    notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
+    numbers = {name: ids[key] for name, key in named.items()}
+    texts = stream_texts(stream, fragments)
+    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words)), ids,
+                     olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
     claimed = set(alias.values())

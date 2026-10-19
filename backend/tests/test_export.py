@@ -251,6 +251,51 @@ def test_a_refinement_of_an_option_from_the_group_text_takes_its_place_too(root)
         own, FOUND.options[0].proposals[0].text]
 
 
+LIMIT = LabeledFragment(id=4, text="Секреты не уходят в репозиторий.", label="constraint",
+                        reason="", council_label="constraint")
+
+
+def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
+    stream = STREAM.model_copy(update={
+        "decisions": [
+            DECIDED[0].model_copy(update={
+                "rationale": "рутина не требует ручной работы (F4), а тег (P1) нужен лишь по Q2"}),
+            DECIDED[1],
+            DECIDED[2].model_copy(update={
+                "rationale": "так велит F4, как и ADR-1 (Q2, F4), а P9 и ADR-0001 — чужие"})],
+        "outcomes": OUTCOMES.model_copy(update={"outcomes": [
+            OUTCOMES.outcomes[0].model_copy(update={
+                "behavior": "CI выкладывает сам (I1), секреты — в O2 (R7)."}),
+            *OUTCOMES.outcomes[1:]]})})
+    notes = by_id(drafted(stream, FRAGMENTS | {4: LIMIT}, shelf(root), None, WORDS, "Russian")[0])
+    # Номер с заметкой — её номером; ограничение без заметки в скобках выпадает: фраза его
+    # пересказывает, — а посреди фразы встаёт его текст. Номера заметок и незнакомые — как есть.
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что рутина не требует ручной работы, а тег "
+        "(PRO-0003) нужен лишь по OQ-0003")
+    assert notes["ADR-0003"].text == (
+        "Ручной откат остаётся, потому что так велит «Секреты не уходят в репозиторий», как и "
+        "ADR-0002 (OQ-0003), а P9 и ADR-0001 — чужие")
+    # Итог, который не выгружается, — своим названием; незнакомая находка R7 — как есть.
+    assert notes["OUT-0002"].text.splitlines()[2] == (
+        "CI выкладывает сам (IDEA-0002), секреты — в «Хранение секретов» (R7).")
+
+
+def test_a_refined_option_is_named_by_its_refinement(root):
+    own = "Деплой запускают по тегу релиза, а hotfix — по merge."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="P1"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": [Decision(question_id="Q1", proposal="P4", rationale="Так быстрее.",
+                               rationale_by="human"), DECIDED[1],
+                      DECIDED[2].model_copy(update={"rationale": "откат нужен и при P1"})]})
+    notes, _, _ = draft(root, stream)
+    refined = next(n for n in notes if n.type == "proposal" and n.text == own)
+    adr = next(n for n in notes if n.type == "adr" and n.text.startswith("Ручной откат"))
+    assert adr.text == f"Ручной откат остаётся, потому что откат нужен и при {refined.id}"
+
+
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
     first, _, _, _ = export(root)
     outside = Note("OQ-0009", "open_question", "Пересмотреть?", ("ADR-0002",))
