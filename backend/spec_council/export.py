@@ -614,9 +614,11 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     def inline(part: str) -> str:
         # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
         # (addresses) — они могут пересекаться.
+        # «[» начала ссылки не ищут ни в чём, что не трогают (код, тег с атрибутами, адрес);
+        # теги элементов кода — только не в скрытом тексте: сами теги им нужны.
         hidden = [kept.span() for kept in HIDDEN.finditer(part)]
-        spans = sorted([kept.span() for kept in untouched.finditer(part)] + uses(part)
-                       + destinations(part, hidden) + addresses(part)
+        opaque = [kept.span() for kept in untouched.finditer(part)]
+        spans = sorted(opaque + uses(part) + destinations(part, opaque) + addresses(part)
                        + raw_elements(part, hidden))
         out: list[str] = []
         last = 0

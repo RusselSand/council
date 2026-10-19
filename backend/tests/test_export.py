@@ -331,6 +331,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered("[x](foo\\ Q1)", {"Q1": "OQ-0002"}, {}) == "[x](foo\\ OQ-0002)"
     shortcut = "[Q1](не адрес)\n\n[Q1]: /q/1"
     assert renumbered(f"{shortcut}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{shortcut}\n\nи OQ-0002"
+    # «[» в атрибуте тега — не начало ссылки.
+    tagged = '<span title="[">x</span> ](/questions/Q1)'
+    assert renumbered(tagged, {"Q1": "OQ-0002"}, {}) == tagged.replace("/Q1", "/OQ-0002")
     # «[» из прошлого абзаца — не начало ссылки, и пустая строка внутри «](…)» — тоже не ссылка.
     assert renumbered("[x\n\n](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\n\n](/questions/OQ-0002)")
