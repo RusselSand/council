@@ -623,3 +623,15 @@ def test_a_title_with_note_numbers_does_not_spread_to_other_files():
                       generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
                       links=["OUT-0001", "ISS-0001"], action="create")
     assert aligned([first, second]) == {}
+
+
+def test_a_task_title_is_only_its_first_line():
+    # Файл правили руками: первая строка уже не заголовок — названия нет, ниже «# …» — не оно.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Индекс",
+                     generated="# Индекс", action="edited",
+                     current="Заметки о задаче.\n\n# Совсем другое")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {}

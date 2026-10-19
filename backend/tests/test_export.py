@@ -314,6 +314,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Адрес в определении ссылки-сноски — тоже адрес.
     assert renumbered("[вопрос Q1][q]\n\n[q]: /questions/Q1 \"Q1\"", {"Q1": "OQ-0002"}, {}) == (
         "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"OQ-0002\"")
+    # Определение сноски — и в цитате, и в пункте списка.
+    nested = "> [вопрос][Q1]\n>\n> [Q1]: /questions/Q1\n\n- [Q2]: /q/Q2\n\nпо Q1"
+    assert renumbered(nested, {"Q1": "OQ-0002", "Q2": "OQ-0003"}, {}) == nested.replace(
+        "по Q1", "по OQ-0002")
     # Метка сноски — не текст ни в определении, ни там, где ссылкой пользуются.
     assert renumbered("[вопрос][Q1], [q1] и Q1\n\n[Q1]: /questions/1", {"Q1": "OQ-0002"},
                       {}) == "[вопрос][Q1], [q1] и OQ-0002\n\n[Q1]: /questions/1"
@@ -339,6 +343,13 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered("[вопрос Q1](https://tracker.local/Q1), см. https://x.local/Q1",
                       {"Q1": "OQ-0002"}, {}) == (
         "[вопрос OQ-0002](https://tracker.local/Q1), см. https://x.local/Q1")
+
+
+def test_a_term_of_the_approved_idea_stays_in_its_note(root):
+    # Идею написал человек раньше, чем у потока появились номера: «P1 incidents» в ней — слово.
+    stream = STREAM.model_copy(update={"idea": StreamIdea(text="Разбирать P1 incidents быстрее.",
+                                                         by="human")})
+    assert by_id(draft(root, stream)[0])["IDEA-0002"].text == "Разбирать P1 incidents быстрее."
 
 
 def test_an_adr_number_a_past_decision_shares_stays_as_it_is(root):

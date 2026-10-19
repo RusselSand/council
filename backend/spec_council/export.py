@@ -81,8 +81,10 @@ LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
 # списка): их ищет разбор Markdown. Номера в них — не ссылки.
 MARKDOWN = MarkdownIt("commonmark")
 BLOCKS = ("fence", "code_block", "html_block")
-# Определение ссылки-сноски: «[метка]: адрес».
-DEFINED = re.compile(r"^[ ]{0,3}\[([^\]\n]+)\]:", re.MULTILINE)
+# Начало строки внутри цитаты и пункта списка: «> », «- », «1. » — сколько угодно раз.
+CONTAINER = r"^(?:[ ]{0,3}(?:>[ ]?|[-*+][ ]+|\d{1,9}[.)][ ]+))*[ ]{0,3}"
+# Определение ссылки-сноски: «[метка]: адрес» — и в цитате, и в пункте списка.
+DEFINED = re.compile(CONTAINER + r"\[([^\]\n]+)\]:", re.MULTILINE)
 
 
 def balanced(plain: str, depth: int = 5) -> str:
@@ -105,8 +107,8 @@ UNTOUCHED = re.compile("|".join((
     # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри
     rf"\]\(\s*(?:<[^<>\n]*>|{balanced(r'[^()\s]')}*)"
     r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)""",
-    # адрес в определении ссылки-сноски «[метка]: адрес»
-    r"^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(?:<[^>\n]*>|\S+)",
+    # адрес в определении ссылки-сноски «[метка]: адрес» — и в цитате, и в пункте списка
+    CONTAINER + r"\[[^\]\n]+\]:[ \t]*(?:<[^>\n]*>|\S+)",
     # <адрес> и <почта>, почта сама по себе
     r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>",
     r"<?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
@@ -364,9 +366,11 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = ()) -> list[str]:
-    """Исходные тексты потока: текст группы, тексты отобранных решений проекта, находки скана
-    репозитория и макета — и more."""
+    """Исходные тексты потока: текст группы, его утверждённая идея, тексты отобранных решений
+    проекта, находки скана репозитория и макета — и more."""
     sources = [fragment.text for fragment in fragments.values()]
+    if stream.idea is not None:
+        sources.append(stream.idea.text)
     sources += [text for decision in stream.project_decisions or []
                 for text in (decision.idea, decision.question, decision.decision)]
     for scan in (stream.scan, stream.design_scan):

@@ -32,8 +32,9 @@ from .notes import Catalog, NotesError, issues_in
 from .questions import same_question
 from .tasks import Names, relabeled
 
-# Название задачи — заголовок её файла: первая строка «# …».
-TITLE = re.compile(r"^# +(.+?)[ \t]*$", re.MULTILINE)
+# Название задачи — заголовок её файла: первая строка «# …». Первая строка не заголовок
+# (файл правили руками) — названия нет.
+TITLE = re.compile(r"# +(.+?)[ \t]*(?=\n|\Z)")
 # Пункт списка задач, после которых делать эту: «- ISS-0012: название».
 AFTER = re.compile(r"^([ \t]*-[ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
 
@@ -220,7 +221,7 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         return (texts or {}).get(note.key, note.text)
 
     titles = {note.id: found.group(1) for note in notes
-              if (found := TITLE.search(current(note))) is not None}
+              if (found := TITLE.match(current(note))) is not None}
     changed: dict[str, str] = {}
     for note in notes:
         if note.action == "edited":
