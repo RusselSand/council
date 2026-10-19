@@ -401,6 +401,20 @@ def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_s
         "растёт")
 
 
+def test_a_source_phrase_stays_but_the_same_number_elsewhere_is_a_reference(root):
+    # «P1 incidents» — слово текста группы, а «выбрать P1» в обосновании — вариант P1.
+    term = LabeledFragment(id=1, text="Разбирать P1 incidents первыми.", label="idea",
+                           reason="", council_label="idea")
+    stream = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"rationale": "лучше выбрать P1 для Q2, а P1 incidents — "
+                                                   "первыми"}),
+        *DECIDED[1:]]})
+    notes = by_id(drafted(stream, FRAGMENTS | {1: term}, shelf(root), None, WORDS, "Russian")[0])
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что лучше выбрать PRO-0003 для OQ-0003, а "
+        "P1 incidents — первыми")
+
+
 def test_a_refined_option_is_named_by_its_refinement(root):
     own = "Деплой запускают по тегу релиза, а hotfix — по merge."
     stream = STREAM.model_copy(update={

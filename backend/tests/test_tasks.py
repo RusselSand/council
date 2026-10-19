@@ -482,10 +482,12 @@ def test_stream_numbers_in_issue_files_and_plan_inputs_become_note_numbers():
     entry = outcome_entry(outcome, "OUT-0001", "C", {"ADR-1": "ADR-0001"}, names)
     assert (entry["title"], entry["behavior"], entry["acceptance_criteria"], entry["follows"]) == (
         "Итог по OQ-0001", "По OQ-0001.", ["OQ-0001 решён"], {"ADR-0001": "Следует из PRO-0002"})
-    # Слово из исходных текстов, похожее на номер (находка про бакет Cloudflare R2), — термин.
-    termed = Names({"Q1": "OQ-0001"}, {"R2": "Файлы лежат в Cloudflare R2."},
-                   frozenset({"R2"}))
-    assert termed("Хранить в R2 (R2), как в Q1") == "Хранить в R2 (R2), как в OQ-0001"
+    # Сочетание из исходных текстов (бакет Cloudflare R2) — их слово, а R2 в другом месте —
+    # находка R2.
+    termed = Names({"Q1": "OQ-0001"}, {"R2": "Файлы лежат в бакете."},
+                   phrases=frozenset({"Cloudflare R2"}))
+    assert termed("Хранить в Cloudflare R2 по R2, как в Q1") == (
+        "Хранить в Cloudflare R2 по «Файлы лежат в бакете», как в OQ-0001")
 
 
 class Translating(Agents):
@@ -590,7 +592,7 @@ def test_task_files_keep_stream_terms_and_skip_deleted_notes(tmp_path):
     bucket = Fragment(id=1, text="Прогрев I1 cache ускоряет ответы.", label="constraint",
                       reason="", council_label="constraint")
     names = names_of(Stream(group="C"), {1: bucket})
-    assert {"I1 cache", "Прогрев I1"} <= names.phrases and "I1" in names.terms
+    assert {"I1 cache", "Прогрев I1"} <= names.phrases
     names = replace(names, numbers={"Q1": "OQ-0001", "O1": "OUT-0001"},
                     texts={"Q1": "Где хранить кэш?"})
     issue = Issue(id="I1", title="Прогреть I1 cache", user_story="As a team, I want answers.",
@@ -733,4 +735,5 @@ def test_a_source_word_in_code_is_not_a_term():
     source = Fragment(id=1, text="Назвать фикстуру `Q1`, а F1 score считать.", label="constraint",
                       reason="", council_label="constraint")
     names = names_of(Stream(group="C"), {1: source})
-    assert "F1" in names.terms and "Q1" not in names.terms
+    assert "F1 score" in names.phrases
+    assert not any("Q1" in phrase for phrase in names.phrases)

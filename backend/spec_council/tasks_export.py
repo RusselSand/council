@@ -143,15 +143,16 @@ def written_by_plan(issue: Issue) -> list[str]:
             *issue.open_questions]
 
 
-def numbers_in_prose(text: str) -> list[str]:
-    """Номера заметок и задач в прозе: в коде и адресах ссылок (in_prose) номер — не ссылка."""
+def numbers_in_prose(text: str, keep: Collection[str] = ()) -> list[str]:
+    """Номера заметок и задач в прозе: в коде, адресах ссылок и сочетаниях keep (in_prose)
+    номер — не ссылка."""
     found: list[str] = []
 
     def collect(part: str) -> str:
         found.extend(NUMBER.findall(part))
         return part
 
-    in_prose(text, collect)
+    in_prose(text, collect, keep)
     return found
 
 
@@ -192,15 +193,14 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     # Модели плана видели номера заметок и писали их в текст задач: какую с тех пор удалили, на
     # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
     known = {numbered_key(note_id) for note_id in catalog.notes}
-    def terms(issue: Issue) -> frozenset[str]:
-        names = (streams or {}).get(issue.outcome_id)
-        return names.terms if names is not None else frozenset()
+    def own_names(issue: Issue) -> Names:
+        return (streams or {}).get(issue.outcome_id) or Names({}, {})
 
-    # Номер, что в исходных текстах потока — слово («ADR-9999 fixture»), — не ссылка.
+    # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
     dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
-                   for found in numbers_in_prose(text)
+                   for found in numbers_in_prose(text, own_names(issue).phrases)
                    if not found.startswith("ISS-") and numbered_key(found) not in known
-                   and found not in terms(issue)})
+                   and found not in own_names(issue).terms})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
                          "называют: верните заметки или выгрузите потоки заново и спланируйте "

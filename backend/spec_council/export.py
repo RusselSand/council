@@ -70,8 +70,8 @@ ISSUE = re.compile(r"ISS-(\d+)")
 # для split он пробел.
 SEP = "\x1f"
 NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
-# Номер задачи плана: I1, I2…
-TASK = re.compile(r"(?<![\w-])I[1-9]\d*(?![\w-])")
+# Слово, похожее на номер потока, заметки или задачи плана: Q1, F3, ADR-9999, I1.
+WORDLIKE = re.compile(r"(?<![\w-])(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)(?![\w-])")
 # Решение из каталога: его номер с нулями или без («ADR-0007», «ADR-7») — одно решение.
 PAST_ADR = re.compile(r"ADR-0*([1-9]\d*)", re.IGNORECASE)
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
@@ -356,24 +356,17 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
     return texts
 
 
-def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
-             more: Iterable[str] = ()) -> frozenset[str]:
-    """Слова исходных текстов, похожие на номера потока: в тексте группы, находках скана
-    репозитория и макета (и в more) — «F1 score», «Cloudflare R2». Это термины, а не ссылки:
-    номера потока появились позже текста, и такое слово в нём — не номер. И решение проекта,
-    отобранное для потока, без нулей в номере (ADR-0001 — «ADR-1»): каталог зовёт его и так, и
-    «ADR-1» в тексте — не обязательно первое решение потока. Тексты этих решений — тоже
-    исходные: модели их видели и могли переписать «P1 incidents» как есть. И номер заметки в
-    исходном тексте («ADR-9999 fixture») — слово этого текста."""
-    past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
-            if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
-    return frozenset(past | {name for text in map(prose_of, sources_of(stream, fragments, more))
-                             for name in (*LOCAL.findall(text), *NUMBER.findall(text))})
+def terms_of(stream: Stream) -> frozenset[str]:
+    """Номера, которых не трогают нигде: решение проекта, отобранное для потока, без нулей в
+    номере (ADR-0001 — «ADR-1»). Каталог зовёт его и так, и «ADR-1» в тексте — не обязательно
+    первое решение потока."""
+    return frozenset(f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
+                     if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None)
 
 
 def prose_of(text: str) -> str:
-    """Только проза текста — без кода, адресов и меток ссылок (in_prose): слово исходного
-    текста — термин, только если оно в прозе; `Q1` в коде — не его слово."""
+    """Только проза текста — без кода, адресов и меток ссылок (in_prose): сочетание исходного
+    текста — его слово, только если оно в прозе; `Q1` в коде — не его слово."""
     parts: list[str] = []
 
     def keep(part: str) -> str:
@@ -401,12 +394,14 @@ def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = ()) -> frozenset[str]:
-    """Где в исходных текстах номер задачи плана — слово («I1 cache»): оно с соседним словом.
-    Номер задачи плана (I1) в тексте задачи — ссылка на другую задачу; термином он остаётся
-    только в таком сочетании."""
+    """Где в прозе исходных текстов — текста группы, идеи, отобранных решений проекта,
+    находок скана (и more) — слово, похожее на номер («F1 score», «Cloudflare R2», «I1 cache»,
+    «ADR-9999 fixture»): оно с соседним словом. Номера потока, заметок и задач появились позже
+    этих текстов, и в таком сочетании слово — их слово, а не ссылка; то же слово в другом месте
+    текста совета — ссылка."""
     found: set[str] = set()
     for text in map(prose_of, sources_of(stream, fragments, more)):
-        for match in TASK.finditer(text):
+        for match in WORDLIKE.finditer(text):
             if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
                 found.add(text[match.start():match.end() + after.end()])
             if (before := re.search(r"\w+[ \t]+$", text[:match.start()])) is not None:
@@ -414,10 +409,10 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
-def in_prose(text: str, change: Callable[[str], str]) -> str:
+def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()) -> str:
     """Текст, где change — только в прозе: блоки кода и HTML на любой глубине (BLOCKS), строки
-    кода, адреса ссылок, теги (UNTOUCHED) и метки ссылок-сносок, определённых в тексте, — как
-    есть."""
+    кода, адреса ссылок, теги (UNTOUCHED), метки ссылок-сносок, определённых в тексте, и
+    сочетания keep («F1 score») — как есть."""
     code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
             for n in range(*token.map)}
     lines = [f"{row}\n" for row in text.split("\n")]
@@ -428,10 +423,12 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
     # Метки сравнивают, как CommonMark: без регистра и с любыми пробелами между словами. [Q1](…)
     # и [Q1][метка] — не сноска Q1: там [Q1] — текст ссылки.
     spelled = {r"\s+".join(map(re.escape, label.split())) for label in labels if label.split()}
-    untouched = UNTOUCHED if not spelled else re.compile(
-        UNTOUCHED.pattern + r"|(?i:\[\s*(?:" + "|".join(sorted(spelled))
-        + r")\s*\](?!\(|\[(?!\])))",
-        UNTOUCHED.flags)
+    extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
+    if spelled:
+        extra.append(r"(?i:\[\s*(?:" + "|".join(sorted(spelled)) + r")\s*\](?!\(|\[(?!\])))")
+    untouched = UNTOUCHED
+    if extra:
+        untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
 
     def inline(part: str) -> str:
         out: list[str] = []
@@ -448,12 +445,13 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
-               quote: str = "«{}»", terms: Collection[str] = ()) -> str:
+               quote: str = "«{}»", terms: Collection[str] = (),
+               phrases: Collection[str] = ()) -> str:
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
-    (quote). Номера заметок и незнакомые — как есть; код, адреса и метки ссылок (in_prose) и
-    термины исходных текстов (terms_of) — тоже."""
+    (quote). Номера заметок и незнакомые — как есть; код, адреса и метки ссылок (in_prose),
+    сочетания исходных текстов (phrases_of) и двусмысленные номера (terms_of) — тоже."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -484,7 +482,7 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
-    return in_prose(text, prose)
+    return in_prose(text, prose, phrases)
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],
@@ -588,9 +586,9 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
-    terms = terms_of(stream, fragments)
+    terms, phrases = terms_of(stream), phrases_of(stream, fragments)
     notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words["quote"],
-                                                   terms)),
+                                                   terms, phrases)),
                      ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}

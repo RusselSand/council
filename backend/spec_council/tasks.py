@@ -49,14 +49,14 @@ class Names:
 
     numbers: Mapping[str, str]
     texts: Mapping[str, str]
-    # Термины исходных текстов, похожие на номера: их не трогают (terms_of).
+    # Двусмысленные номера: их не трогают нигде (terms_of).
     terms: frozenset[str] = frozenset()
-    # Сочетания исходных текстов с номером задачи плана («I1 cache»): номером задачи они не
-    # становятся (phrases_of).
+    # Сочетания исходных текстов со словом, похожим на номер («F1 score», «I1 cache»): номером
+    # они не становятся (phrases_of).
     phrases: frozenset[str] = frozenset()
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
-        return renumbered(text, self.numbers, self.texts, quote, self.terms)
+        return renumbered(text, self.numbers, self.texts, quote, self.terms, self.phrases)
 
     def within(self, notes: Collection[str]) -> Names:
         """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
@@ -69,12 +69,10 @@ class Names:
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              research: Mapping[str, str] | None = None) -> Names:
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
-    карту кода и описание макета, и тексты задач называют их находки, а не копии потока. Номер
-    такой находки — номер, даже если в прежней копии скана потока то же слово было термином."""
+    карту кода и описание макета, и тексты задач называют их находки, а не копии потока."""
     found = dict(research or {})
     return Names(stream.notes.refs if stream.notes else {},
-                 stream_texts(stream, fragments) | found,
-                 terms_of(stream, fragments, found.values()) - set(found),
+                 stream_texts(stream, fragments) | found, terms_of(stream),
                  phrases_of(stream, fragments, found.values()))
 
 
@@ -283,23 +281,7 @@ def relabeled(text: str, names: Mapping[str, str], keep: Collection[str] = ()) -
     def renamed(part: str) -> str:
         return pattern.sub(lambda found: names[found.group(1)], part)
 
-    guard = None
-    if keep:
-        guard = re.compile("|".join(re.escape(phrase)
-                                    for phrase in sorted(keep, key=len, reverse=True)))
-
-    def prose(part: str) -> str:
-        if guard is None:
-            return renamed(part)
-        out: list[str] = []
-        last = 0
-        for kept in guard.finditer(part):
-            out += [renamed(part[last:kept.start()]), kept.group(0)]
-            last = kept.end()
-        out.append(renamed(part[last:]))
-        return "".join(out)
-
-    return in_prose(text, prose)
+    return in_prose(text, renamed, keep)
 
 
 def plan_of(data: dict, context: Context) -> list[Issue]:
