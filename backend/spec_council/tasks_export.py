@@ -254,12 +254,14 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     return notes, vanished, numbers
 
 
-def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -> dict[str, str]:
+def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
+            fresh: Collection[str] = ()) -> dict[str, str]:
     """Файлы задач (по ключу), где задача, после которой делать эту, названа не так, как в её
     собственном файле, — с её названием оттуда. Каждый файл переводят своим ходом судьи, и одна
     задача выходила бы под разными названиями; правку названия человеком тоже подхватывают
     строки других файлов. texts — тексты, как файлы лягут (с правками); нет — текст черновика.
-    Файл, правленный руками, не трогается, но название в нём — какое есть."""
+    fresh — ключи файлов, что только что перевели. Файл, правленный руками, не трогается, но
+    название в нём — какое есть."""
     def current(note: NotePlan) -> str:
         if note.action == "edited":
             return note.current or ""
@@ -267,7 +269,13 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
 
     titles = {note.id: found.group(1) for note in notes
               if (found := TITLE.match(current(note))) is not None}
-    commit = commit_line(notes, current)
+    def closing(note: NotePlan) -> str | None:
+        """Строка о номере для коммита этого файла: у только что переведённого — его последняя
+        строка с его номером (перевод хранит строение текста, а слова у каждого файла свои),
+        иначе — последняя строка черновика, как она есть: правку человека не угадывать."""
+        last = filled(current(note) if note.key in fresh else note.text)
+        return last if last is not None and note.id in last else None
+
     changed: dict[str, str] = {}
     for note in notes:
         if note.action == "edited":
@@ -277,7 +285,7 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
         waits = {link for link in note.links if link != note.id and ISSUE.fullmatch(link)}
         new = retitled(text, {link: titles[link] for link in waits if link in titles}, waits,
-                       section, commit.format(id=note.id) if commit else None)
+                       section, closing(note))
         # Название с номером заметки или задачи (правили руками) принесло бы его в чужой файл
         # без ссылки во frontmatter: такой файл — как был.
         if new != text and numbering_problem(text, new) is None:
@@ -285,19 +293,10 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
     return changed
 
 
-def commit_line(notes: Sequence[NotePlan], current: Callable[[NotePlan], str]) -> str | None:
-    """Строка о номере для коммита, как она во всех файлах задач, — с «{id}» на месте номера:
-    последняя строка файла с его номером — та, что у большинства файлов. Поровну — не узнать."""
-    seen: dict[str, int] = {}
-    for note in notes:
-        rows = [row.strip() for row in current(note).split("\n") if row.strip()]
-        if rows and note.id in rows[-1]:
-            shape = rows[-1].replace("{", "{{").replace("}", "}}").replace(note.id, "{id}")
-            seen[shape] = seen.get(shape, 0) + 1
-    ranked = sorted(seen.items(), key=lambda item: -item[1])
-    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
-        return None
-    return ranked[0][0]
+def filled(text: str) -> str | None:
+    """Последняя непустая строка текста."""
+    rows = [row.strip() for row in text.split("\n") if row.strip()]
+    return rows[-1] if rows else None
 
 
 def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], section: int,

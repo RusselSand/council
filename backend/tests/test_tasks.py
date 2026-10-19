@@ -694,13 +694,29 @@ def test_only_the_commit_line_of_the_draft_may_follow_a_dependency_list():
                         generated="# Задача\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
                         links=list(links), action="create")
 
-    # Строка о коммите у файлов одна и та же; «Notes for ISS-0002» — не она, и раздел с ней —
-    # не список зависимостей.
+    # Человек убрал список и дописал «Notes» с прозой «Notes for ISS-0002» в конце: строка о
+    # коммите в черновике другая, и раздел с этой прозой — не список зависимостей.
     first = file("ISS-0001", "# Index v1\n\nAs a team.\n\nCommit ISS-0001.")
-    third = file("ISS-0003", "# Other\n\nAs a team.\n\nCommit ISS-0003.")
-    second = file("ISS-0002", "# Search\n\n## Notes\n- ISS-0001: reuse it\n\nNotes for ISS-0002",
+    second = file("ISS-0002", "# Search\n\n## After\n- ISS-0001: Index\n\nCommit ISS-0002.",
                   ["OUT-0001", "ISS-0001"])
-    assert aligned([first, second, third]) == {}
+    edited = "# Search\n\n## Notes\n- ISS-0001: reuse it\n\nNotes for ISS-0002"
+    assert aligned([first, second], {second.key: edited}) == {}
+
+
+def test_titles_are_aligned_though_each_file_words_its_commit_line_its_own_way():
+    # Каждый файл переводили своим ходом: строка о коммите у них разная, а список находится.
+    def file(number, generated, links=()):
+        return NotePlan(key=f"i:{number}", id=number, type="issue", text=generated,
+                        generated=generated, links=list(links), action="create")
+
+    first = file("ISS-0001", "# Индекс\n\nКоммит ISS-0001.")
+    second = file("ISS-0002", "# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит ISS-0002.",
+                  ["OUT-0001", "ISS-0001"])
+    translated = {first.key: "# Index v1\n\nPut ISS-0001 into the commit.",
+                  second.key: "# Search\n\n## After\n- ISS-0001: Index v2\n\n"
+                              "Mention ISS-0002 in the final commit."}
+    assert aligned([first, second], translated, translated.keys()) == {
+        second.key: translated[second.key].replace("Index v2", "Index v1")}
 
 
 def test_a_note_number_that_is_a_stream_term_is_not_a_dead_reference(tmp_path):

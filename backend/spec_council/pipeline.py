@@ -1475,7 +1475,7 @@ class NotesRun(CouncilRun[NotesDraft | TasksDraft]):
         if isinstance(self.state, TasksDraft):
             # Каждый файл задачи переводили своим ходом: задачу, после которой делать эту,
             # зовут так, как перевели её собственный файл.
-            texts |= aligned(self.state.notes, texts)
+            texts |= aligned(self.state.notes, texts, found.keys())
         notes = [settled(note.model_copy(update={"text": texts[note.key]}),
                          previous_of(note, self.previous), self.shelf)
                  for note in self.state.notes]
