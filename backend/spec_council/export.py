@@ -28,7 +28,8 @@ from dataclasses import dataclass, field, replace
 from itertools import groupby
 from pathlib import Path
 
-from markdown_it import MarkdownIt
+from markdown_it import MarkdownIt, rules_inline
+from markdown_it.rules_inline import StateInline
 
 from . import issue_files
 from .models import (
@@ -78,8 +79,10 @@ PAST_ADR = re.compile(r"ADR-0*([1-9]\d*)", re.IGNORECASE)
 # находки скана репозитория и макета. В документации они ничего не значат.
 LOCAL = re.compile(r"(?<![\w-])(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)(?![\w-])")
 # Блоки кода и HTML — строки, которые они занимают, на любой глубине (в цитате, в пункте
-# списка): их ищет разбор Markdown. Номера в них — не ссылки.
+# списка): их ищет разбор Markdown. Номера в них — не ссылки. Ссылку с любым адресом разбор
+# считает ссылкой, как CommonMark: javascript: — тоже.
 MARKDOWN = MarkdownIt("commonmark")
+MARKDOWN.validateLink = lambda url: True
 BLOCKS = ("fence", "code_block", "html_block")
 
 
@@ -92,28 +95,10 @@ RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
 RAW_TEXT = frozenset(("script", "style", "textarea"))
 # Открывающий и закрывающий тег такого элемента: его содержимое ищет raw_elements.
 RAW_TAG = re.compile(rf"(?i:<(?P<open>{RAW})\b{ATTRIBUTES}\s*>|</(?P<close>{RAW})\s*>)")
-# Что не трогают в строке текста — номера в нём не ссылки, а текст вокруг остаётся текстом.
-# Что прячет свой текст целиком: строка кода — `…`, ``…`` — до того же числа обратных кавычек,
-# и через перенос, но не пустую; комментарий, инструкция <?…?>, CDATA. «[» и тег внутри — не
-# начало ссылки и не элемент.
-HIDING = (
-    r"(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)",
-    r"<!--[\s\S]*?-->",
-    r"<\?[\s\S]*?\?>",
-    r"<!\[CDATA\[[\s\S]*?\]\]>",
-)
-HIDDEN = re.compile("|".join(HIDING))
-UNTOUCHED = re.compile("|".join((
-    *HIDING,
-    # <адрес> и <почта>, почта сама по себе
-    r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>",
+# Что не трогают в строке прозы сверх того, что находит её разбор (marking): почта сама по себе.
+UNTOUCHED = re.compile(
     r"<?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*>?",
-    # объявление <!…> и тег HTML с его атрибутами
-    r"<![A-Za-z][^>]*>",
-    rf"<[A-Za-z][A-Za-z0-9-]*{ATTRIBUTES}\s*/?>",
-    r"</[A-Za-z][A-Za-z0-9-]*\s*>",
-)), re.MULTILINE)
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*>?")
 # Начало адреса самого по себе: «https://».
 SCHEME = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
@@ -422,47 +407,85 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
-def blocks_of(text: str) -> tuple[set[int], dict[str, dict], dict[int, int]]:
+# Где в env разбора строк прозы копится то, что он нашёл (marking).
+SPANS = "spans"
+InlineRule = Callable[[StateInline, bool], bool]
+
+
+def marking(kind: str, rule: InlineRule) -> InlineRule:
+    """Правило разбора строк прозы, что отмечает найденное (SPANS в env): kind и где оно в
+    содержимом блока. У ссылки и картинки — только адрес «](…)» или метка «][…]»: текст ссылки —
+    проза; а если метка — сам текст ([Q1], [Q1][]), то весь «[Q1]»."""
+
+    def marked(state: StateInline, silent: bool) -> bool:
+        start = state.pos
+        if not rule(state, silent):
+            return False
+        spans = state.env.get(SPANS)
+        if silent or spans is None:
+            return True
+        if kind == "link":
+            image = state.src[start] == "!"
+            close = state.md.helpers.parseLinkLabel(state, start + image, not image)
+            if close >= 0 and state.src[close + 1:state.pos] not in ("", "[]"):
+                start = close
+        spans.append((kind, start, state.pos))
+        return True
+
+    return marked
+
+
+# Строки кода, теги HTML (с комментариями и <?…?>), адреса в <…>, ссылки и картинки.
+for name, kind, rule in (("backticks", "code", rules_inline.backtick),
+                         ("html_inline", "html", rules_inline.html_inline),
+                         ("autolink", "autolink", rules_inline.autolink),
+                         ("link", "link", rules_inline.link),
+                         ("image", "link", rules_inline.image)):
+    MARKDOWN.inline.ruler.at(name, marking(kind, rule))
+
+
+def placed(content: str, rows: Sequence[str]) -> Callable[[int], int]:
+    """Место в тексте блока (rows — его строки, от начала первой) по месту в содержимом, что
+    видит разбор строк прозы (content): там строки блока без отступа и знаков контейнеров
+    («>», «-»), а пробелы табуляции, что разбор дописал от себя, — в начале своей строки."""
+    marks: list[tuple[int, int, int]] = []
+    inner = outer = 0
+    for row, piece in zip(rows, content.split("\n"), strict=False):
+        bare = piece if piece in row else piece.lstrip(" ")
+        marks.append((inner, outer + max(row.rfind(bare), 0), len(piece) - len(bare)))
+        inner += len(piece) + 1
+        outer += len(row) + 1
+
+    def place(at: int) -> int:
+        start, mark, extra = next(mark for mark in reversed(marks) if mark[0] <= at)
+        return mark + max(at - start - extra, 0)
+
+    return place
+
+
+def blocks_of(text: str) -> tuple[set[int], dict[int, int], dict[int, list[tuple[str, int, int]]]]:
     """По разбору Markdown: строки текста (с нуля), что занимают блоки кода и HTML на любой
-    глубине и определения ссылок-сносок, — сами определения по метке и строки прозы (абзаца,
-    заголовка) с номером их блока."""
+    глубине и определения ссылок-сносок; строки прозы (абзаца, заголовка) с номером их блока; и
+    что разбор строк нашёл в каждом блоке прозы (marking) — с местом от начала первой его строки."""
     env: dict = {}
     tokens = MARKDOWN.parse(text, env)
-    references = env.get("references", {})
     lines = {n for token in tokens if token.type in BLOCKS and token.map
              for n in range(*token.map)}
-    lines |= {n for found in [*references.values(), *env.get("duplicate_refs", [])]
+    lines |= {n for found in [*env.get("references", {}).values(), *env.get("duplicate_refs", [])]
               if found.get("map") for n in range(*found["map"])}
-    prose = {n: block for block, token in enumerate(tokens) if token.type == "inline" and token.map
-             for n in range(*token.map)}
-    return lines, references, prose
-
-
-def destinations(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
-    r"""Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
-    в <…> или со скобками внутри любой вложенности, с экранированием «\», с заголовком в
-    "…", '…' или (…)."""
-    found: list[tuple[int, int]] = []
-    start = text.find("](")
-    while start != -1:
-        real = not escaped(text, start) and opened(text, start, hidden)
-        end = destination_end(text, start + 2) if real else None
-        if end is not None:
-            found.append((start, end))
-        start = text.find("](", end if end is not None else start + 2)
-    return found
-
-
-# Что «\» экранирует в CommonMark: знаки препинания ASCII, а перед пробелом и буквой «\» — знак.
-PUNCTUATION = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
-
-
-def escaped(text: str, at: int) -> bool:
-    r"""Знак на месте at экранирован: перед ним нечётное число «\»."""
-    run = 0
-    while at - run - 1 >= 0 and text[at - run - 1] == "\\":
-        run += 1
-    return run % 2 == 1
+    rows = text.split("\n")
+    prose: dict[int, int] = {}
+    marked: dict[int, list[tuple[str, int, int]]] = {}
+    for block, token in enumerate(tokens):
+        if token.type != "inline" or not token.map:
+            continue
+        first, last = token.map
+        prose.update(dict.fromkeys(range(first, last), block))
+        spans: list[tuple[str, int, int]] = []
+        MARKDOWN.inline.parse(token.content, MARKDOWN, {**env, SPANS: spans}, [])
+        place = placed(token.content, rows[first:last])
+        marked[block] = [(kind, place(start), place(end)) for kind, start, end in spans]
+    return lines, prose, marked
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
@@ -470,56 +493,40 @@ def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
     return any(start <= at < end for start, end in spans)
 
 
-def opened(text: str, close: int, hidden: Collection[tuple[int, int]] = ()) -> bool:
-    r"""У «]» на месте close есть парная «[» без экранирования и не в скрытом тексте (hidden: код,
-    комментарий): \[x](…) и `[x` ](…) — текст, а не ссылка. Текст — один блок прозы (in_prose):
-    «[» другого абзаца или заголовка сюда не попадает."""
-    depth = 0
-    for at in range(close - 1, -1, -1):
-        if text[at] not in "[]" or escaped(text, at) or inside(at, hidden):
-            continue
-        if text[at] == "]":
-            depth += 1
-        elif depth:
-            depth -= 1
-        else:
-            return True
-    return False
-
-
-def raw_elements(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
+def raw_elements(text: str, found: Iterable[tuple[str, int, int]]) -> list[tuple[int, int]]:
     """Где в тексте элемент HTML, чьё содержимое — код (RAW), — с вложенными в него такими же:
-    <code>…<code>…</code>…</code> — одно целое. Тег в скрытом тексте (hidden: `<code>` в строке
-    кода, комментарий) и в сыром (RAW_TEXT: <script>"<script>"</script>) — не тег; незакрытый
-    элемент — не элемент."""
-    found: list[tuple[int, int]] = []
+    <code>…<code>…</code>…</code> — одно целое. Теги — те, что нашёл разбор (found, «html»):
+    <code> в строке кода или в атрибуте — не тег; в сыром тексте (RAW_TEXT:
+    <script>"<script>"</script>) тег — текст; незакрытый элемент — не элемент."""
+    elements: list[tuple[int, int]] = []
     start = None
     names: list[str] = []
-    for tag in RAW_TAG.finditer(text):
-        if inside(tag.start(), hidden) or (names and names[-1] in RAW_TEXT and tag.group("open")):
+    for kind, begin, end in sorted(found, key=lambda span: span[1]):
+        tag = RAW_TAG.fullmatch(text, begin, end) if kind == "html" else None
+        if tag is None or (names and names[-1] in RAW_TEXT and tag.group("open")):
             continue
         if tag.group("open"):
             if not names:
-                start = tag.start()
+                start = begin
             names.append(tag.group("open").lower())
         elif names and tag.group("close").lower() == names[-1]:
             names.pop()
             if not names and start is not None:
-                found.append((start, tag.end()))
-    return found
+                elements.append((start, end))
+    return elements
 
 
 def addresses(text: str, opaque: Collection[tuple[int, int]] = (),
-              hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
+              parsed: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
     """Где в тексте адрес сам по себе («https://…»): до пробела или «<», «>», «]», со скобками
     внутри любой вложенности; «)» в конце, которой нет пары, и знак препинания в конце — не
-    адрес. Адрес, что начат в том, что не трогают (opaque: код, тег), — не адрес; скрытый текст
-    (hidden: код, комментарий) его обрывает: `https://host`/Q1."""
+    адрес. Адрес, что начат в том, что не трогают (opaque: код, тег), — не адрес; то, что нашёл
+    разбор (parsed: код, тег, ссылка), его обрывает: `https://host`/Q1."""
     found: list[tuple[int, int]] = []
     for scheme in SCHEME.finditer(text):
         if inside(scheme.start(), opaque):
             continue
-        stop = min((start for start, _ in hidden if start > scheme.start()), default=len(text))
+        stop = min((start for start, _ in parsed if start > scheme.start()), default=len(text))
         end = scheme.end()
         # Адрес узла IPv6 — в квадратных скобках сразу после «://»: «]» его не обрывает.
         close = text.find("]", end, stop) if text.startswith("[", end) else -1
@@ -538,95 +545,22 @@ def addresses(text: str, opaque: Collection[tuple[int, int]] = (),
     return found
 
 
-def destination_end(text: str, at: int) -> int | None:
-    """Конец «адрес "заголовок")» с позиции at (сразу после «](»): за «)»; не ссылка — None."""
-    size = len(text)
-
-    def blank(i: int) -> int:
-        """Пробелы и не больше одного переноса строки: пустая строка кончает абзац."""
-        breaks = 0
-        while i < size and text[i] in " \t\n":
-            breaks += text[i] == "\n"
-            if breaks > 1:
-                break
-            i += 1
-        return i
-
-    def step(i: int) -> int:
-        """Следующий знак: «\» и знак препинания за ним — одно целое."""
-        return i + 2 if text[i] == "\\" and text[i + 1:i + 2] in PUNCTUATION else i + 1
-
-    i = blank(at)
-    if i < size and text[i] == "<":
-        i += 1
-        while i < size and text[i] not in "<>\n":
-            i = step(i)
-        if i >= size or text[i] != ">":
-            return None
-        i += 1
-    else:
-        depth = 0
-        while i < size and not text[i].isspace():
-            if text[i] == "\\" and text[i + 1:i + 2] in PUNCTUATION:
-                i += 2
-                continue
-            if text[i] == ")" and depth == 0:
-                break
-            depth += {"(": 1, ")": -1}.get(text[i], 0)
-            i += 1
-        if depth:
-            return None
-    i = blank(i)
-    if i < size and text[i] in "\"'(":
-        close = ")" if text[i] == "(" else text[i]
-        i += 1
-        while i < size and text[i] != close:
-            i = step(i)
-        i = blank(i + 1)
-    return i + 1 if i < size and text[i] == ")" else None
-
-
 def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()) -> str:
     """Текст, где change — только в прозе: блоки кода и HTML на любой глубине и определения
-    ссылок-сносок (их строки — по разбору Markdown), строки кода, теги (UNTOUCHED), адреса
-    ссылок (destinations), метки сносок там, где ими пользуются, и сочетания keep («F1 score») —
-    как есть."""
-    code, references, prose = blocks_of(text)
+    ссылок-сносок (их строки — по разбору Markdown); в строках прозы — что нашёл их разбор
+    (marking: строки кода, теги, адреса и метки ссылок), почта (UNTOUCHED) и адреса сами по
+    себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть."""
+    code, prose, marked = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
-    # Метка сноски там, где ею пользуются: [..][Q1], [Q1][], [Q1]. Метки сравнивают, как
-    # CommonMark: без регистра и с любыми пробелами между словами. [Q1](…) и [Q1][метка] — не
-    # сноска Q1: там [Q1] — текст ссылки; \[Q1] — просто текст, а \\[Q1] — снова сноска.
-    spelled = {r"\s+".join(map(re.escape, label.split())) for label in references
-               if label.split()}
     extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
-    if spelled:
-        labels = "|".join(sorted(spelled))
-        # Вторая метка полной ссылки [текст][Q1] — сноска, что бы ни шло за ней.
-        extra.append(r"(?i:(?<=\])\[\s*(?:" + labels + r")\s*\])")
-    untouched = UNTOUCHED
-    if extra:
-        untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)
-    used = re.compile(r"(?i:(?<!\\)(?:\\\\)*\[\s*(?:" + "|".join(sorted(spelled))
-                      + r")\s*\](?!\[(?!\])))") if spelled else None
+    untouched = re.compile("|".join([UNTOUCHED.pattern, *extra])) if extra else UNTOUCHED
 
-    def uses(part: str) -> list[tuple[int, int]]:
-        """[Q1] сноской: за ней не настоящая встроенная ссылка «(адрес)» (destination_end)."""
-        if used is None:
-            return []
-        return [found.span() for found in used.finditer(part)
-                if not (part.startswith("(", found.end())
-                        and destination_end(part, found.end() + 1) is not None)]
-
-    def inline(part: str) -> str:
-        # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
-        # (addresses) — они могут пересекаться.
-        # «[» начала ссылки не ищут ни в чём, что не трогают (код, тег с атрибутами, адрес);
-        # теги элементов кода — только не в скрытом тексте: сами теги им нужны.
-        hidden = [kept.span() for kept in HIDDEN.finditer(part)]
-        opaque = [kept.span() for kept in untouched.finditer(part)]
-        spans = sorted(opaque + uses(part) + destinations(part, opaque)
-                       + addresses(part, opaque, hidden) + raw_elements(part, hidden))
+    def inline(part: str, found: list[tuple[str, int, int]]) -> str:
+        # Что не трогают — может пересекаться.
+        parsed = [(start, end) for _, start, end in found]
+        opaque = parsed + [kept.span() for kept in untouched.finditer(part)]
+        spans = sorted(opaque + addresses(part, opaque, parsed) + raw_elements(part, found))
         out: list[str] = []
         last = 0
         for start, end in spans:
@@ -645,7 +579,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         return None if item[0] in code else prose.get(item[0], -1)
 
     return "".join(
-        "".join(row for _, row in rows) if key is None else inline("".join(row for _, row in rows))
+        "".join(row for _, row in rows) if key is None
+        else inline("".join(row for _, row in rows), marked.get(key, []))
         for key, rows in groupby(enumerate(lines), key=block))
 
 

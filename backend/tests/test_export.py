@@ -357,6 +357,16 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         "[x\n# ](/questions/OQ-0002)")
     script = '<script>const tag = "<script>"; Q1</script>'
     assert renumbered(f"До {script} и Q1", {"Q1": "OQ-0002"}, {}) == f"До {script} и OQ-0002"
+    # Что ссылка, а что нет, — по разбору CommonMark: внешняя ссылка вокруг готовой — не
+    # ссылка; «]» в строке кода — не конец текста ссылки; <code> в атрибуте — не тег; пустая
+    # строка в заголовке ссылки и заголовок без пробела перед ним — не ссылка; перенос CRLF
+    # вокруг адреса — ссылка.
+    for literal in ("[outer [inner](/ok)](/questions/Q1)", "[x `](/inside`Q1)",
+                    'До <span title="<code>">x</span> Q1 </code>', '[x](/ok "title\n\nQ1")',
+                    '[x](</questions/Q1>"Q1")'):
+        assert renumbered(literal, {"Q1": "OQ-0002"}, {}) == literal.replace("Q1", "OQ-0002")
+    crlf = "[x](\r\n/questions/Q1\r\n)"
+    assert renumbered(f"{crlf} и Q1", {"Q1": "OQ-0002"}, {}) == f"{crlf} и OQ-0002"
     # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
     assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\\](/questions/OQ-0002)")
