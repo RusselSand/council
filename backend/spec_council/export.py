@@ -25,7 +25,10 @@ import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from itertools import groupby
 from pathlib import Path
+
+from markdown_it import MarkdownIt
 
 from . import issue_files
 from .models import (
@@ -70,21 +73,19 @@ NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
 # находки скана репозитория и макета. В документации они ничего не значат.
 LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
-# Что в тексте не трогают: номера в нём — не ссылки. Блок кода — ``` или ~~~ любой длины с начала
-# строки до такой же или длиннее (незакрытый — до конца) или строки с отступом в четыре пробела
-# (табуляцию) после пустой строки (в ней могут быть пробелы) или с начала текста — продолжение
-# пункта списка не код; строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через
-# перенос строки, но не через пустую; адрес ссылки [..](адрес) и адрес сам по себе — со скобками
-# внутри: подпись ссылки — текст.
+# Блоки кода и HTML — строки, которые они занимают, на любой глубине (в цитате, в пункте
+# списка): их ищет разбор Markdown. Номера в них — не ссылки.
+MARKDOWN = MarkdownIt("commonmark")
+BLOCKS = ("fence", "code_block", "html_block")
+# Что не трогают в строке текста: строка кода — `…`, ``…`` — до того же числа обратных кавычек, и
+# через перенос строки, но не через пустую; адрес ссылки [..](адрес), <адрес> и адрес сам по
+# себе — со скобками внутри: подпись ссылки — текст.
 UNTOUCHED = re.compile(r"""
-    (?:\A|(?<=\n)[ \t]*\n)(?:(?:[ ]{4}|\t)[^\n]*(?:\n|\Z))+
-    |^[ ]{0,3}(?P<fence>(?P<char>[`~])(?P=char){2,})[^\n]*(?:\n[\s\S]*?)?
-        (?:\n[ ]{0,3}(?P=fence)(?P=char)*[ \t]*(?=\n|\Z)|\Z)
-    |(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)
+    (?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)
     |\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)
     |<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>
     |\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^\s<>()\]]|\([^\s<>()]*\))+
-""", re.MULTILINE | re.VERBOSE)
+""", re.VERBOSE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
@@ -331,8 +332,8 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
-    (quote). Номера заметок и незнакомые — как есть; код, адреса ссылок (UNTOUCHED) и термины
-    исходных текстов (terms_of) — тоже."""
+    (quote). Номера заметок и незнакомые — как есть; блоки кода и HTML (BLOCKS), строки кода и
+    адреса ссылок (UNTOUCHED) и термины исходных текстов (terms_of) — тоже."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -363,13 +364,22 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
-    out: list[str] = []
-    last = 0
-    for kept in UNTOUCHED.finditer(text):
-        out += [prose(text[last:kept.start()]), kept.group(0)]
-        last = kept.end()
-    out.append(prose(text[last:]))
-    return "".join(out)
+    def inline(text: str) -> str:
+        out: list[str] = []
+        last = 0
+        for kept in UNTOUCHED.finditer(text):
+            out += [prose(text[last:kept.start()]), kept.group(0)]
+            last = kept.end()
+        out.append(prose(text[last:]))
+        return "".join(out)
+
+    code = {n for token in MARKDOWN.parse(text) if token.type in BLOCKS and token.map
+            for n in range(*token.map)}
+    lines = [f"{row}\n" for row in text.split("\n")]
+    lines[-1] = lines[-1][:-1]
+    return "".join(
+        "".join(row for _, row in rows) if inside else inline("".join(row for _, row in rows))
+        for inside, rows in groupby(enumerate(lines), key=lambda item: item[0] in code))
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],

@@ -304,6 +304,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered("текст\n \n    Q1\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
         "текст\n \n    Q1\n\nпо OQ-0002")
     assert renumbered("`first\nQ1` и Q1", {"Q1": "OQ-0002"}, {}) == "`first\nQ1` и OQ-0002"
+    # Блоки кода и HTML на любой глубине: в цитате, в пункте списка.
+    nested = "> ~~~yaml\n> Q1: 1\n> ~~~\n\n- пункт\n\n      Q1 = 2\n\n<pre>\nQ1\n</pre>\n\nпо Q1"
+    assert renumbered(nested, {"Q1": "OQ-0002"}, {}) == nested.replace("по Q1", "по OQ-0002")
     # Адрес — целиком, и со скобками внутри.
     assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
                       {"Q1": "OQ-0002"}, {}) == (
