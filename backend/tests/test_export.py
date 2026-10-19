@@ -133,7 +133,8 @@ def test_a_stream_becomes_linked_notes_with_numbers_after_the_catalog(root):
     # Имена совета — номерами заметок: так план задач называет итоги и решения, а тексты задач —
     # и всё остальное.
     assert refs_of(root) == {
-        "I1": "IDEA-0002", "Q1": "OQ-0002", "Q2": "OQ-0003", "Q3": "OQ-0004", "F3": "PRO-0002",
+        "I1": "IDEA-0002", "Q1": "OQ-0002", "F5": "OQ-0002", "Q2": "OQ-0003", "Q3": "OQ-0004",
+        "F3": "PRO-0002",
         "P1": "PRO-0003", "P2": "PRO-0004", "P3": "PRO-0005", "ADR-1": "ADR-0002",
         "ADR-3": "ADR-0003", "O1": "OUT-0002"}
     assert note["OQ-0002"].text == "Что запускает деплой?"            # формулировка заметки
@@ -285,6 +286,19 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Код в обратных кавычках — как есть: `Q1` там — не вопрос.
     assert renumbered("`Q1` и Q1 (`F4`)", {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
         "`Q1` и OQ-0002 (`F4`)")
+
+
+def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):
+    # «F1 score» — слово из текста группы: номером фрагмента F1 оно не становится.
+    term = LabeledFragment(id=1, text="Деплой ускоряет F1 score команды.", label="idea",
+                           reason="", council_label="idea")
+    stream = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"rationale": "это ответ на F5 (F5), и F1 score растёт"}),
+        *DECIDED[1:]]})
+    notes = by_id(drafted(stream, FRAGMENTS | {1: term}, shelf(root), None, WORDS, "Russian")[0])
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что это ответ на OQ-0002 (OQ-0002), и F1 score "
+        "растёт")
 
 
 def test_a_refined_option_is_named_by_its_refinement(root):

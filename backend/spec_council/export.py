@@ -259,6 +259,9 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
         questions.append(asked)
         proposals += offered
         named[question.id] = asked.key
+        if question.source == "user" and question.source_question_id is not None:
+            # Вопрос из текста группы называют и номером его фрагмента.
+            named.setdefault(f"F{question.source_question_id}", asked.key)
         for option, part in zip(options, offered, strict=True):
             named.setdefault(option["id"], part.key)
         if choice is not None and choice.based_on is not None and choice.proposal in named:
@@ -291,12 +294,28 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
     return texts
 
 
+def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
+             more: Iterable[str] = ()) -> frozenset[str]:
+    """Слова исходных текстов, похожие на номера потока: в тексте группы, находках скана
+    репозитория и макета (и в more) — «F1 score», «Cloudflare R2». Это термины, а не ссылки:
+    номера потока появились позже текста, и такое слово в нём — не номер."""
+    sources = [fragment.text for fragment in fragments.values()]
+    for scan in (stream.scan, stream.design_scan):
+        if scan is not None and scan.result is not None:
+            sources += [finding.statement for finding in scan.result.findings]
+    return frozenset(name for text in [*sources, *more] for name in LOCAL.findall(text))
+
+
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
-               quote: str = "«{}»") -> str:
+               quote: str = "«{}»", terms: Collection[str] = ()) -> str:
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
-    (quote). Номера заметок и незнакомые — как есть, код в `обратных кавычках` — тоже."""
+    (quote). Номера заметок и незнакомые — как есть, код в `обратных кавычках` — тоже, и
+    термины исходных текстов (terms_of) — тоже."""
+    numbers = {name: number for name, number in numbers.items() if name not in terms}
+    texts = {name: value for name, value in texts.items() if name not in terms}
+
     def number(match: re.Match[str]) -> str:
         return numbers.get(match.group(0), match.group(0))
 
@@ -429,11 +448,13 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
-    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words["quote"])),
+    terms = terms_of(stream, fragments)
+    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words["quote"],
+                                                   terms)),
                      ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
-    vanished =[VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
+    vanished = [VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
                              linked_from=sorted(note.id for note in catalog.notes.values()
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()

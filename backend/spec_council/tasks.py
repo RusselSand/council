@@ -16,7 +16,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from .export import renumbered, stream_texts
+from .export import renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -49,9 +49,11 @@ class Names:
 
     numbers: Mapping[str, str]
     texts: Mapping[str, str]
+    # Термины исходных текстов, похожие на номера: их не трогают (terms_of).
+    terms: frozenset[str] = frozenset()
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
-        return renumbered(text, self.numbers, self.texts, quote)
+        return renumbered(text, self.numbers, self.texts, quote, self.terms)
 
 
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -59,7 +61,8 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
     карту кода и описание макета, и тексты задач называют их находки, а не копии потока."""
     return Names(stream.notes.refs if stream.notes else {},
-                 stream_texts(stream, fragments) | dict(research or {}))
+                 stream_texts(stream, fragments) | dict(research or {}),
+                 terms_of(stream, fragments, (research or {}).values()))
 
 
 def research_texts(council: Council) -> dict[str, str]:

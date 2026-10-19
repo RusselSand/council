@@ -459,6 +459,10 @@ def test_stream_numbers_in_issue_files_and_plan_inputs_become_note_numbers():
     entry = outcome_entry(outcome, "OUT-0001", "C", {"ADR-1": "ADR-0001"}, names)
     assert (entry["title"], entry["behavior"], entry["acceptance_criteria"], entry["follows"]) == (
         "Итог по OQ-0001", "По OQ-0001.", ["OQ-0001 решён"], {"ADR-0001": "Следует из PRO-0002"})
+    # Слово из исходных текстов, похожее на номер (находка про бакет Cloudflare R2), — термин.
+    termed = Names({"Q1": "OQ-0001"}, {"R2": "Файлы лежат в Cloudflare R2."},
+                   frozenset({"R2"}))
+    assert termed("Хранить в R2 (R2), как в Q1") == "Хранить в R2 (R2), как в OQ-0001"
 
 
 class Translating(Agents):
