@@ -213,6 +213,95 @@ def test_an_own_option_is_exported_as_a_proposal_with_its_decision(root):
     assert adr.text == "Секреты лежат в переменных окружения, потому что так проще."
 
 
+def proposals_of(notes, question):
+    asked = next(n for n in notes if n.type == "open_question" and n.text == question)
+    return [n.text for n in notes if n.type == "proposal" and n.links == [asked.id]]
+
+
+def test_a_refinement_takes_the_place_of_the_option_it_refines(root):
+    own = "Деплой запускают по тегу релиза, а hotfix — по merge."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="P1"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": [Decision(question_id="Q1", proposal="P4", rationale="Так быстрее.",
+                               rationale_by="human"), *DECIDED[1:]]})
+    notes, _, _ = draft(root, stream)
+    # P1 вышел неполным, его никто не отклонял: заметки «отклонённого» P1 нет.
+    assert proposals_of(notes, "Что запускает деплой?") == [FRAGMENTS[3].text, own]
+
+    # Решили всё же исходным — остаются оба: правку тогда и правда отклонили.
+    kept = stream.model_copy(update={"decisions": [
+        Decision(question_id="Q1", proposal="P1", rationale="Так проще.", rationale_by="human"),
+        *DECIDED[1:]]})
+    notes, _, _ = draft(root, kept)
+    assert proposals_of(notes, "Что запускает деплой?") == [
+        FRAGMENTS[3].text, FOUND.options[0].proposals[0].text, own]
+
+
+def test_a_refinement_of_an_option_from_the_group_text_takes_its_place_too(root):
+    own = "Деплой запускает CI после merge в main."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": None})
+    notes, _, _ = draft(root, stream)
+    assert proposals_of(notes, "Что запускает деплой?") == [
+        own, FOUND.options[0].proposals[0].text]
+
+
+REFINED = "Ручной откат остаётся, но только по кнопке."
+
+
+def test_a_refinement_marked_after_an_export_continues_the_note_of_its_option(root):
+    first, _, _, _ = export(root)                                         # решили P3 как есть
+    refined = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P4", text=REFINED, based_on="P3")],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]})
+    notes, vanished, _ = draft(root, refined, previous=first)
+    note = by_id(notes)
+    # Тот же вариант, только дописанный, — та же заметка, и решение по нему — то же.
+    assert (note["PRO-0005"].text, note["PRO-0005"].action) == (REFINED, "update")
+    assert note["ADR-0003"].text.startswith(REFINED.rstrip("."))
+    assert note["ADR-0003"].links == ["PRO-0005"]
+    assert vanished == []
+
+
+def refined_q3(text, based_on="P3"):
+    """Поток, где по Q3 решили своим вариантом text — правкой based_on."""
+    return STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="F3"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P4", text=text, based_on=based_on)],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={"proposal": "P4"})]})
+
+
+def test_a_refinement_exported_as_its_own_option_before_the_mark_joins_its_option(root):
+    first, notes, _, _ = export(root, refined_q3(REFINED, based_on=None))
+    own = next(n for n in notes if n.type == "proposal" and n.text == REFINED)
+    base = next(n for n in notes if n.text == FOUND.options[2].proposals[0].text)
+    adr = next(n for n in notes if n.type == "adr" and n.links == [own.id])
+    notes, vanished, _ = draft(root, refined_q3(REFINED), previous=first)
+    # Отметили, что это правка P3: заметка P3 — уже с правкой, решение — то же, но о ней, а
+    # заметка, где правка лежала своим вариантом, уходит.
+    assert [(n.id, n.action) for n in notes if n.text == REFINED] == [(base.id, "update")]
+    assert by_id(notes)[adr.id].links == [base.id]
+    assert [v.id for v in vanished] == [own.id]
+
+
+def test_a_refinement_edited_again_stays_the_same_note(root):
+    first, notes, _, _ = export(root, refined_q3(REFINED))
+    before = {n.type: n.id for n in notes if n.text.startswith(REFINED.rstrip("."))}
+    again = "Ручной откат остаётся, но только по кнопке и с подтверждением."
+    notes, vanished, _ = draft(root, refined_q3(again), previous=first)
+    after = {n.type: n.id for n in notes if n.text.startswith(again.rstrip("."))}
+    assert after == before and set(after) == {"proposal", "adr"}
+    assert vanished == []
+
+
 def test_a_vanished_note_linked_from_outside_is_not_deleted(root):
     first, _, _, _ = export(root)
     outside = Note("OQ-0009", "open_question", "Пересмотреть?", ("ADR-0002",))

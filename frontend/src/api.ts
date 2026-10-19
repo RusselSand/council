@@ -243,8 +243,9 @@ export interface ProposalDiscovery {
 /**
  * Выбор по вопросу: Fn — вариант из текста, Pn — найденный советом или свой, null — пока не решает
  * (unresolved). text — свой вариант человека: на сервер — с proposal null, с сервера — с его номером Pn.
+ * based_on — свой вариант правит этот вариант вопроса: в заметках правка встанет на его место.
  */
-export interface Choice { question_id: string; proposal: string | null; text?: string | null }
+export interface Choice { question_id: string; proposal: string | null; text?: string | null; based_on?: string | null }
 /**
  * Что совет сказал по вопросу перед решением. validated — выбор человека проверен, проблем нет;
  * conflict — с ним проблема (решать всё равно человеку); recommended — для unresolved совет

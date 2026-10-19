@@ -322,7 +322,8 @@ def start_proposals(participants: list[str], judge: str, scope: list[OpenQuestio
 
 
 def choice_entry(choice: Choice) -> str:
-    """Выбор по вопросу, как его помнит проверка: «Q1: P2», свой — и с текстом."""
+    """Выбор по вопросу, как его помнит проверка: «Q1: P2», свой — и с текстом. Чью правку он
+    делает (based_on), проверке не важно: она смотрит на сам текст."""
     return (f"{choice.question_id}: {choice.proposal or '-'}"
             + (f": {choice.text}" if choice.text is not None else ""))
 

@@ -851,6 +851,8 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
         anew = analyzes_anew(stream, choices)
         if anew and below_running(stream, "analysis"):
             raise HTTPException(423, "Совет ещё работает с прежним выбором — дождитесь его")
+        if not anew and refines_anew(stream, choices) and below_running(stream, "notes_draft"):
+            raise HTTPException(423, "Совет ещё переводит заметки потока — дождитесь его")
         if anew:
             expired(store, council, stream, changed_choice(notes_of(council), stream))
         # Модели нужны, только если есть что проверять: проверка того же выбора переносится.
@@ -876,6 +878,12 @@ def approve_choices(council_id: str, group: str, edit: ApproveChoices, store: St
                 analysis = runs[0].state.model_copy(deep=True)
             changes |= {"analysis": analysis, "decisions": None, "outcomes": None,
                         "earlier": kept_work(stream), **remembered(stream)}
+        elif refines_anew(stream, choices):
+            # Проверка и итоги те же, а заметки легли бы иначе: черновика выгрузки нет, прежняя
+            # выгрузка — уже не к этим итогам (по ней повторная узнает свои заметки).
+            changes["notes_draft"] = None
+            if stream.notes is not None:
+                changes["notes"] = stream.notes.model_copy(update={"outcomes": ""})
         return store.update_council(council_id, {
             "streams": replaced(council, stream.model_copy(update=changes))}), runs
 
@@ -901,6 +909,13 @@ def analyzes_anew(stream: Stream, choices: list[Choice]) -> bool:
     return stream.analysis is None or stream.analysis.choices != choices_key(choices)
 
 
+def refines_anew(stream: Stream, choices: list[Choice]) -> bool:
+    """Свои варианты правят другие варианты не так, как при прежнем выборе: проверке это не
+    важно, а заметки ложатся иначе — правка встаёт на место исходного."""
+    before = {choice.question_id: choice.based_on for choice in stream.choices or []}
+    return {choice.question_id: choice.based_on for choice in choices} != before
+
+
 def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
            fragments: list[LabeledFragment], choices: list[Choice],
            before: dict[str, Choice] | None = None, taken: int = 0) -> list[Choice]:
@@ -909,7 +924,8 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
     текст. Свой вариант получает номер дальше найденных советом и всех, какие поток уже давал
     (taken), по порядку отбора; совпавший с вариантом вопроса — это он и есть. Тот же свой
     вариант по тому же вопросу, что и прежде (before), сохраняет прежний номер: на нём стоят его
-    проверка и решение, которые переносятся."""
+    проверка и решение, которые переносятся. Правка (based_on) — только варианта этого вопроса;
+    правка, оставившая текст как был, — сам вариант."""
     given = per_question(scope, choices, "выбора")
     found = found_by_question(search)
     texts = {fragment.id: fragment.text for fragment in fragments}
@@ -920,12 +936,16 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
     for question in scope:
         choice = given[question.id]
         if choice.text is None:
+            if choice.based_on is not None:
+                raise HTTPException(422, f"Правка {choice.based_on} по {question.id} без текста")
             if choice.proposal is not None and choice.proposal not in offered_for(question, found):
                 raise HTTPException(422, f"У вопроса {question.id} нет варианта {choice.proposal}")
             result.append(Choice(question_id=question.id, proposal=choice.proposal))
             continue
         if choice.proposal is not None:
             raise HTTPException(422, f"По вопросу {question.id} и вариант, и свой текст")
+        if choice.based_on is not None and choice.based_on not in offered_for(question, found):
+            raise HTTPException(422, f"У вопроса {question.id} нет варианта {choice.based_on}")
         text = " ".join(choice.text.split())
         if not text:
             raise HTTPException(422, f"Свой вариант по {question.id} пуст")
@@ -938,7 +958,7 @@ def chosen(scope: list[OpenQuestion], search: ProposalDiscovery,
         result.append(Choice(question_id=question.id, proposal=same) if same is not None
                       else Choice(question_id=question.id,
                                   proposal=kept.get(question.id) or f"P{next(numbers)}",
-                                  text=text))
+                                  text=text, based_on=choice.based_on))
     return result
 
 

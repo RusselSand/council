@@ -22,8 +22,12 @@ from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.projects import Projects
 from tests.test_project import put
 from tests.test_streams import (
+    OWN,
+    WHY,
     Agents,
     approves,
+    chose,
+    chosen_c,
     client,
     confirm,
     decide,
@@ -102,6 +106,25 @@ def test_an_approved_stream_is_drafted_then_written_as_linked_notes(agents, note
     again = streams_of(council_id)["C"].notes_draft
     assert {n.action for n in again.notes} == {"same"}
     assert again.notes[0].text == "Полезные треды не теряются."    # правка человека осталась
+
+
+def test_marking_what_an_own_option_refines_leaves_the_export_stale(agents, notes_dir):
+    council_id = grouped()
+    confirm(council_id)
+    chosen_c(council_id, (("Q1", None, OWN), ("Q2", "P2")))
+    assert decide(council_id, "C", [("Q1", "P3", WHY), ("Q2", "P2", WHY)]).status_code == 200
+    assert approves(council_id, "C").status_code == 200
+    drafts(council_id)
+    assert writes(council_id).status_code == 200
+    drafts(council_id)
+    assert chose(council_id, "C", [("Q1", None, OWN, "P1"), ("Q2", "P2")]).status_code == 200
+    stream = streams_of(council_id)["C"]
+    # Проверка и итоги те же, а заметки легли бы иначе: правка встаёт в заметку P1.
+    assert stream.decisions is not None and stream.outcomes.approved
+    assert stream.notes_draft is None and stream.notes.outcomes == ""
+    drafts(council_id)
+    vanished = streams_of(council_id)["C"].notes_draft.vanished
+    assert [(v.type, v.text) for v in vanished] == [("proposal", OWN)]
 
 
 def test_without_a_notes_folder_there_is_nothing_to_draft(agents):

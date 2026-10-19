@@ -560,10 +560,11 @@ def test_no_scope_before_the_idea(agents):
 
 # --- варианты и выбор
 
-def choice_of(question, proposal, text=None):
-    """Выбор по вопросу; text — свой вариант человека."""
+def choice_of(question, proposal, text=None, based_on=None):
+    """Выбор по вопросу; text — свой вариант человека, based_on — чью правку он делает."""
     return {"question_id": question, "proposal": proposal} | (
-        {"text": text} if text is not None else {})
+        {"text": text} if text is not None else {}) | (
+        {"based_on": based_on} if based_on is not None else {})
 
 
 def chose(council_id, group, choices, revision=0, proposals_run=None):
@@ -696,10 +697,24 @@ def test_an_own_option_like_one_of_the_question_is_that_option(agents):
         ("Q1", "P1", None), ("Q2", "P3", OWN)]
 
 
+def test_an_own_option_remembers_which_option_of_the_question_it_refines(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    assert chose(council_id, "C", [("Q1", None, f"{OPTION}, но раз в месяц", "P1"),
+                                   ("Q2", None, OPTION.upper(), "P2")]).status_code == 200
+    choices = streams_of(council_id)["C"].choices
+    # Правка, оставившая текст как был, — сам вариант.
+    assert [(c.question_id, c.proposal, c.text, c.based_on) for c in choices] == [
+        ("Q1", "P3", f"{OPTION}, но раз в месяц", "P1"), ("Q2", "P2", None, None)]
+
+
 @pytest.mark.parametrize(("own", "problem"), [
     (("Q1", None, "  "), "Свой вариант по Q1 пуст"),
     (("Q1", None, "x" * 601), "Свой вариант по Q1 длиннее 600 знаков"),
     (("Q1", "P1", OWN), "По вопросу Q1 и вариант, и свой текст"),
+    (("Q1", None, None, "P1"), "Правка P1 по Q1 без текста"),
+    (("Q1", None, OWN, "P2"), "У вопроса Q1 нет варианта P2"),
 ])
 def test_a_senseless_own_option_is_refused(agents, own, problem):
     council_id = grouped()
@@ -891,6 +906,19 @@ def test_another_own_option_checks_again_and_the_same_one_does_not(agents):
     stream = streams_of(council_id)["C"]
     assert stream.analysis.run != first and stream.decisions is None
     assert stream.choices[1].text == "Другое мерило"
+
+
+def test_marking_an_own_option_as_a_refinement_does_not_check_it_again(agents):
+    council_id = grouped()
+    confirm(council_id)
+    scoped_c(council_id)
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, OWN)])
+    first = streams_of(council_id)["C"].analysis.run
+    decide(council_id, "C", [("Q1", "P1", WHY), ("Q2", "P3", WHY)])
+    chose(council_id, "C", [("Q1", "P1"), ("Q2", None, OWN, "P2")])
+    stream = streams_of(council_id)["C"]
+    assert stream.analysis.run == first and stream.decisions is not None
+    assert (stream.choices[1].proposal, stream.choices[1].based_on) == ("P3", "P2")
 
 
 def test_another_scope_or_idea_drops_the_check_and_the_decisions(agents):
