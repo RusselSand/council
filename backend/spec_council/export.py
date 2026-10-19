@@ -11,9 +11,10 @@
 Повторная выгрузка узнаёт свои прежние заметки по ключу части потока: вопрос из текста — по
 фрагменту, остальные — по формулировке; вариант — по вопросу и фрагменту или формулировке;
 решение — по вопросу и выбранному варианту (выбрали другой — это другое решение и новая
-заметка); итог — по названию. Совет написал бы то же, что в прошлый раз, — остаётся то, что
-тогда записали, с правками человека. Файл, который правили руками после выгрузки, совет не
-трогает. Исчезнувшее само не удаляется.
+заметка); итог — по названию. Правка варианта, которой своей заметки ещё не было, продолжает
+заметку исходного, и её решение — решение исходного. Совет написал бы то же, что в прошлый
+раз, — остаётся то, что тогда записали, с правками человека. Файл, который правили руками после
+выгрузки, совет не трогает. Исчезнувшее само не удаляется.
 """
 
 import hashlib
@@ -126,12 +127,15 @@ def unique(key: str, taken: set[str]) -> str:
 @dataclass(frozen=True)
 class Part:
     """Часть потока, которая станет заметкой. links — ключи других частей или номера заметок
-    каталога (у вопроса, который пересматривает прошлое решение, — этот ADR)."""
+    каталога (у вопроса, который пересматривает прошлое решение, — этот ADR). was — под каким
+    ключом часть могла лечь в прошлый раз, если не под своим: правка варианта — под ключом
+    исходного, и её решение — тоже."""
 
     key: str
     type: str
     text: str
     links: tuple[str, ...]
+    was: str | None = None
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,8 @@ def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
                decision: Decision | None = None) -> list[dict[str, str]]:
     """Варианты вопроса: из текста группы, найденные советом и свой вариант человека. Свой
     вариант — правка другого — встаёт на его место: тот лишь вышел неполным, его никто не
-    отклонял. Решили всё же исходным — остаются оба."""
+    отклонял. У правки base — ключ исходного (option_key): его заметку она и продолжит. Решили
+    всё же исходным — остаются оба."""
     options = ([{"id": f"F{i}", "text": fragments[i].text} for i in question.proposal_ids
                 if i in fragments]
                + [{"id": p.id, "text": p.text} for p in found.get(question.id, [])])
@@ -185,10 +190,11 @@ def options_of(question: OpenQuestion, fragments: Mapping[int, LabeledFragment],
         return options
     base = choice.based_on
     own = next((option for option in options if option["id"] == choice.proposal), None)
-    if (own is None or all(option["id"] != base for option in options)
-            or (decision is not None and decision.proposal == base)):
+    was = next((option for option in options if option["id"] == base), None)
+    if own is None or was is None or (decision is not None and decision.proposal == base):
         return options
-    return [own if option["id"] == base else option for option in options if option is not own]
+    refined = own | {"base": option_key(was)}
+    return [refined if option is was else option for option in options if option is not own]
 
 
 def because(decision: str, rationale: str | None, words: Mapping[str, str]) -> str:
@@ -266,10 +272,13 @@ def question_parts(question: OpenQuestion, options: list[dict[str, str]],
     adr = None
     for option in options:
         option_part = unique(f"p:{key[2:]}:{option_key(option)}", taken)
-        offered.append(Part(option_part, "proposal", option["text"], (key,)))
+        # Правка, что встала на место исходного: прежде, чем её отметили, выгрузили исходный.
+        was = f"p:{key[2:]}:{option['base']}" if "base" in option else None
+        offered.append(Part(option_part, "proposal", option["text"], (key,), was))
         if decision is not None and decision.proposal == option["id"]:
             adr = Part(f"a:{option_part[2:]}", "adr",
-                       because(option["text"], decision.rationale, words), (option_part,))
+                       because(option["text"], decision.rationale, words), (option_part,),
+                       f"a:{was[2:]}" if was else None)
     return asked, offered, adr
 
 
@@ -322,6 +331,13 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     parts, skipped, refs = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
+    # Правка, которой прежде не было своей заметкой, продолжает заметку исходного варианта: тот
+    # же вариант, только дописанный, — тот же номер.
+    claimed = set(alias.values())
+    for part in parts:
+        if part.key not in alias and part.was in before and part.was not in claimed:
+            alias[part.key] = part.was
+            claimed.add(part.was)
     olds = {key: before[was] for key, was in alias.items()}
     reuse = previous is not None and previous.language == language
     ids: dict[str, str] = {}
@@ -340,8 +356,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     notes = [planned(part, ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
-    claimed = set(alias.values())
-    vanished = [VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
+    vanished =[VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
                              linked_from=sorted(note.id for note in catalog.notes.values()
                                                 if old.id in note.links and note.id not in ours))
                 for key, old in before.items()
