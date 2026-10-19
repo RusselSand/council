@@ -69,11 +69,14 @@ class Names:
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              research: Mapping[str, str] | None = None) -> Names:
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
-    карту кода и описание макета, и тексты задач называют их находки, а не копии потока."""
+    карту кода и описание макета, и тексты задач называют их находки, а не копии потока.
+    Сочетания — и из выгруженных заметок потока: модели плана видят их тексты, а человек мог
+    дописать туда своё «Q1 reporting»."""
     found = dict(research or {})
+    written = [note.written for note in stream.notes.notes] if stream.notes else []
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found, terms_of(stream),
-                 phrases_of(stream, fragments, found.values()))
+                 phrases_of(stream, fragments, [*found.values(), *written]))
 
 
 def research_texts(council: Council) -> dict[str, str]:

@@ -23,6 +23,7 @@ from .export import (
     NUMBER,
     Part,
     Shelf,
+    blocks_of,
     in_prose,
     keyed,
     matched,
@@ -311,7 +312,9 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
     узнать — текст как есть."""
     lines = text.split("\n")
-    heads = [n for n, row in enumerate(lines) if SECTION.match(row)]
+    # Пример кода в задаче — не её разделы: «##» в нём не заголовок, а строка — не пункт.
+    code, _ = blocks_of(text)
+    heads = [n for n, row in enumerate(lines) if n not in code and SECTION.match(row)]
     if not heads:
         return text
     filled = [n for n, row in enumerate(lines) if row.strip()]
@@ -319,7 +322,8 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     found: list[tuple[int, list[tuple[int, re.Match[str]]]]] = []
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
         rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
-        items = [(n, match) for n in rows if (match := AFTER.match(lines[n])) is not None]
+        items = [(n, match) for n in rows
+                 if n not in code and (match := AFTER.match(lines[n])) is not None]
         # Список — все задачи, которых ждут, и только они: пункт об одной из них — ещё не он.
         if rows and len(items) == len(rows) and {m.group(2) for _, m in items} == set(waits):
             found.append((place, items))

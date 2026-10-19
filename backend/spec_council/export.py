@@ -394,6 +394,19 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return frozenset(found)
 
 
+def blocks_of(text: str) -> tuple[set[int], dict[str, dict]]:
+    """По разбору Markdown: строки текста (с нуля), что занимают блоки кода и HTML на любой
+    глубине и определения ссылок-сносок, — и сами определения по метке."""
+    env: dict = {}
+    tokens = MARKDOWN.parse(text, env)
+    references = env.get("references", {})
+    lines = {n for token in tokens if token.type in BLOCKS and token.map
+             for n in range(*token.map)}
+    lines |= {n for found in [*references.values(), *env.get("duplicate_refs", [])]
+              if found.get("map") for n in range(*found["map"])}
+    return lines, references
+
+
 def destinations(text: str) -> list[tuple[int, int]]:
     r"""Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
     в <…> или со скобками внутри любой вложенности, с экранированием «\», с заголовком в
@@ -401,7 +414,8 @@ def destinations(text: str) -> list[tuple[int, int]]:
     found: list[tuple[int, int]] = []
     start = text.find("](")
     while start != -1:
-        end = destination_end(text, start + 2) if opened(text, start) else None
+        real = not escaped(text, start) and opened(text, start)
+        end = destination_end(text, start + 2) if real else None
         if end is not None:
             found.append((start, end))
         start = text.find("](", end if end is not None else start + 2)
@@ -495,13 +509,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     ссылок-сносок (их строки — по разбору Markdown), строки кода, теги (UNTOUCHED), адреса
     ссылок (destinations), метки сносок там, где ими пользуются, и сочетания keep («F1 score») —
     как есть."""
-    env: dict = {}
-    tokens = MARKDOWN.parse(text, env)
-    references = env.get("references", {})
-    code = {n for token in tokens if token.type in BLOCKS and token.map
-            for n in range(*token.map)}
-    code |= {n for found in [*references.values(), *env.get("duplicate_refs", [])]
-             if found.get("map") for n in range(*found["map"])}
+    code, references = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
     # Метка сноски там, где ею пользуются: [..][Q1], [Q1][], [Q1]. Метки сравнивают, как

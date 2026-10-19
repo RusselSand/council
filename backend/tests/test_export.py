@@ -326,6 +326,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{bare} и Q1.", {"Q1": "OQ-0002"}, {}) == f"{bare} и OQ-0002."
     twice = "[Q1]: /a/Q1\n\n[q1]: /backup/Q1"
     assert renumbered(f"{twice}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{twice}\n\nпо OQ-0002"
+    # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
+    assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x\\](/questions/OQ-0002)")
     # Скобки в адресе ссылки — любой вложенности.
     deep_link = "[x](https://host/a((((((Q1)))))))"
     assert renumbered(f"{deep_link} и Q1", {"Q1": "OQ-0002"}, {}) == f"{deep_link} и OQ-0002"

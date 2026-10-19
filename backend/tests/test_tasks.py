@@ -16,8 +16,10 @@ from spec_council.groups import arranged
 from spec_council.issue_files import rendered as issue_rendered
 from spec_council.models import (
     CouncilStatus,
+    ExportedNote,
     Issue,
     NotePlan,
+    NotesExport,
     OpenQuestion,
     Outcome,
     RepositoryFinding,
@@ -800,3 +802,25 @@ def test_a_dependency_list_under_an_indented_heading_is_found():
                       generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
                       links=["OUT-0001", "ISS-0001"], action="create")
     assert aligned([first, second]) == {second.key: second.text.replace("Index v2", "Index v1")}
+
+
+def test_a_phrase_written_into_an_exported_note_is_a_stream_phrase():
+    # При выгрузке человек дописал «Q1 reporting» в решение: модели плана его видят, и в задачах
+    # это его слово, а не вопрос Q1.
+    note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
+                        written="Считать по Q1 reporting", digest="d")
+    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
+                                                 refs={"I1": "IDEA-0001", "Q1": "OQ-0001"}))
+    names = names_of(stream, {})
+    assert "Q1 reporting" in names.phrases
+    assert names("Q1 reporting и Q1") == "Q1 reporting и OQ-0001"
+
+
+def test_an_example_in_a_code_block_is_not_a_dependency_list():
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v1",
+                     generated="# Индекс", action="create")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Search\n\n```md\n## After\n- ISS-0001: Index v2\n## End\n```\n",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {}
