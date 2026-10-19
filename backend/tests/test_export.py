@@ -311,6 +311,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Тег HTML с атрибутами — не текст, а то, что между тегами, — текст.
     assert renumbered('<a href="/questions/Q1">Q1</a> <!-- Q1 --> и Q1', {"Q1": "OQ-0002"},
                       {}) == '<a href="/questions/Q1">OQ-0002</a> <!-- Q1 --> и OQ-0002'
+    # Адрес в определении ссылки-сноски — тоже адрес.
+    assert renumbered("[вопрос Q1][q]\n\n[q]: /questions/Q1 \"Q1\"", {"Q1": "OQ-0002"}, {}) == (
+        "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"OQ-0002\"")
     # Адрес — целиком, и со скобками внутри.
     assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
                       {"Q1": "OQ-0002"}, {}) == (
@@ -323,14 +326,17 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
 
 def test_an_adr_number_a_past_decision_shares_stays_as_it_is(root):
     # Решение проекта ADR-0001, отобранное для потока, каталог зовёт и «ADR-1»: «ADR-1» в тексте —
-    # не обязательно первое решение потока, и номером его заметки оно не становится.
+    # не обязательно первое решение потока, и номером его заметки оно не становится. И слова из
+    # текста этого решения («P1 incidents») — термины, хоть в потоке и есть свой P1.
     stream = STREAM.model_copy(update={
-        "project_decisions": [ProjectDecision(adr_id="ADR-0001")],
+        "project_decisions": [ProjectDecision(adr_id="ADR-0001",
+                                              decision="P1 incidents разбирают первыми")],
         "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={
-            "rationale": "так велит ADR-1, а Q2 открыт"})]})
+            "rationale": "так велит ADR-1: P1 incidents — первыми, а Q2 открыт"})]})
     notes = by_id(draft(root, stream)[0])
     assert notes["ADR-0003"].text == (
-        "Ручной откат остаётся, потому что так велит ADR-1, а OQ-0003 открыт")
+        "Ручной откат остаётся, потому что так велит ADR-1: P1 incidents — первыми, а OQ-0003 "
+        "открыт")
 
 
 def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):

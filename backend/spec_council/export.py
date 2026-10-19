@@ -81,16 +81,17 @@ MARKDOWN = MarkdownIt("commonmark")
 BLOCKS = ("fence", "code_block", "html_block")
 # Что не трогают в строке текста: строка кода — `…`, ``…`` — до того же числа обратных кавычек, и
 # через перенос строки, но не через пустую; адрес ссылки [..](адрес), <адрес> и адрес сам по
-# себе — со скобками внутри: подпись ссылки — текст; тег HTML с его атрибутами и комментарий —
-# текст между тегами остаётся текстом.
+# себе — со скобками внутри, и адрес в определении ссылки-сноски «[метка]: адрес»: подпись
+# ссылки — текст; тег HTML с его атрибутами и комментарий — текст между тегами остаётся текстом.
 UNTOUCHED = re.compile(r"""
     (?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)
     |\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)
+    |^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(?:<[^>\n]*>|\S+)
     |<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>
     |<!--[\s\S]*?-->
     |</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>
     |\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^\s<>()\]]|\([^\s<>()]*\))+
-""", re.VERBOSE)
+""", re.MULTILINE | re.VERBOSE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
@@ -326,8 +327,11 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     репозитория и макета (и в more) — «F1 score», «Cloudflare R2». Это термины, а не ссылки:
     номера потока появились позже текста, и такое слово в нём — не номер. И решение проекта,
     отобранное для потока, без нулей в номере (ADR-0001 — «ADR-1»): каталог зовёт его и так, и
-    «ADR-1» в тексте — не обязательно первое решение потока."""
+    «ADR-1» в тексте — не обязательно первое решение потока. Тексты этих решений — тоже
+    исходные: модели их видели и могли переписать «P1 incidents» как есть."""
     sources = [fragment.text for fragment in fragments.values()]
+    sources += [text for decision in stream.project_decisions or []
+                for text in (decision.idea, decision.question, decision.decision)]
     for scan in (stream.scan, stream.design_scan):
         if scan is not None and scan.result is not None:
             sources += [finding.statement for finding in scan.result.findings]
