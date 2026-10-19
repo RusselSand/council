@@ -30,7 +30,7 @@ from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, path_of, rendered
 from spec_council.pipeline import start_tasks
 from spec_council.tasks import Names, outcome_entry, outcome_names, research_texts
-from spec_council.tasks_export import issue_text
+from spec_council.tasks_export import decisions_of, issue_text
 from tests.test_streams import (
     ALL_DECIDED,
     LABELS,
@@ -453,14 +453,19 @@ def test_stream_numbers_in_issue_files_and_plan_inputs_become_note_numbers():
     issue = Issue(id="I2", title="Выдача по Q1", user_story="As a team, I want answers.",
                   outcome_id="OUT-0001", scope=["Учесть F4 и `Q1` (F4)."],
                   open_questions=["Хватит ли P2?"])
-    text = issue_text(issue, "ISS-0008", ("OUT-0001", "Итог по ADR-1"),
-                      [("ADR-0001", "Решение (F4)")], [], [], [], words_for("Russian"),
-                      {"I2": "ISS-0008"}, names)
+    text = issue_text(issue, "ISS-0008", ("OUT-0001", "Итог по ADR-1"), [], [], [], [],
+                      words_for("Russian"), {"I2": "ISS-0008"}, names)
     assert text.startswith("# Выдача по OQ-0001")
     assert "- Учесть «Секреты не уходят в репозиторий» и `Q1`." in text    # код — как есть
     assert "- OUT-0001: Итог по ADR-0001" in text
-    assert "- ADR-0001: Решение\n" in text
     assert "- Хватит ли PRO-0002?" in text
+    # Решение своего потока — с номерами заметок, а прошлое решение проекта — как в каталоге:
+    # его Q1 — вопрос другого потока.
+    catalog = Catalog({"ADR-0001": Note("ADR-0001", "adr", "Решение (F4) по Q1"),
+                       "ADR-0007": Note("ADR-0007", "adr", "Прошлое решение по Q1")})
+    done = issue.model_copy(update={"adr_ids": ["ADR-0001", "ADR-0007"]})
+    assert decisions_of(done, catalog, names, "«{}»") == [
+        ("ADR-0001", "Решение по OQ-0001"), ("ADR-0007", "Прошлое решение по Q1")]
     # Что модели прочтут, то и перепишут в задачи: им — тоже номера заметок.
     outcome = Outcome(id="O1", title="Итог по Q1", behavior="По Q1 (F4).", adr_ids=["ADR-1"],
                       adr_notes={"ADR-1": "Следует из P2"}, acceptance_criteria=["Q1 решён"])

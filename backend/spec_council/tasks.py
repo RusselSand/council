@@ -55,6 +55,11 @@ class Names:
     def __call__(self, text: str, quote: str = "«{}»") -> str:
         return renumbered(text, self.numbers, self.texts, quote, self.terms)
 
+    def owns(self, note: str) -> bool:
+        """Заметка — этого потока: прошлое решение проекта называет свои вопросы своими
+        номерами, и номера этого потока к нему не подходят."""
+        return note in self.numbers.values()
+
 
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              research: Mapping[str, str] | None = None) -> Names:

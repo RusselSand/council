@@ -70,9 +70,17 @@ NUMBER = re.compile(r"\b(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+\b")
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
 # находки скана репозитория и макета. В документации они ничего не значат.
 LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
-# Код в тексте: блок ```…``` или ~~~…~~~ (незакрытый — до конца) и `строка`. В нём номера — не
-# ссылки.
-CODE = re.compile(r"(```[\s\S]*?(?:```|\Z)|~~~[\s\S]*?(?:~~~|\Z)|`[^`\n]*`)")
+# Что в тексте не трогают: номера в нём — не ссылки. Блок кода — ``` или ~~~ любой длины с начала
+# строки до такой же или длиннее (незакрытый — до конца); строка кода — `…`, ``…`` — до того же
+# числа обратных кавычек; адрес ссылки [..](адрес) и адрес сам по себе: подпись ссылки — текст.
+UNTOUCHED = re.compile(r"""
+    ^[ ]{0,3}(?P<fence>(?P<char>[`~])(?P=char){2,})[^\n]*(?:\n[\s\S]*?)?
+        (?:\n[ ]{0,3}(?P=fence)(?P=char)*[ \t]*(?=\n|\Z)|\Z)
+    |(?<!`)(?P<tick>`+)(?!`).+?(?<!`)(?P=tick)(?!`)
+    |\]\([^)\s]*(?:\s+"[^"]*")?\)
+    |<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>
+    |\b[A-Za-z][A-Za-z0-9+.-]*://[^\s<>()\]]+
+""", re.MULTILINE | re.VERBOSE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
@@ -319,8 +327,8 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
     """Номера потока в тексте — номерами заметок: в документации Q1, P11 и F3 ничего не
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
-    (quote). Номера заметок и незнакомые — как есть, код в `обратных кавычках` и в блоках
-    ```…``` и ~~~…~~~ — тоже, и термины исходных текстов (terms_of) — тоже."""
+    (quote). Номера заметок и незнакомые — как есть; код, адреса ссылок (UNTOUCHED) и термины
+    исходных текстов (terms_of) — тоже."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -351,8 +359,13 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         out.append(text[last:])
         return LOCAL.sub(quoted, "".join(out))
 
-    return "".join(part if part.startswith(("`", "~~~")) else prose(part)
-                   for part in CODE.split(text))
+    out: list[str] = []
+    last = 0
+    for kept in UNTOUCHED.finditer(text):
+        out += [prose(text[last:kept.start()]), kept.group(0)]
+        last = kept.end()
+    out.append(prose(text[last:]))
+    return "".join(out)
 
 
 def question_parts(question: OpenQuestion, options: list[dict[str, str]],

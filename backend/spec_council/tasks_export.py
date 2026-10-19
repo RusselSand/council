@@ -90,7 +90,8 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     """Задача для coding agent: кому и зачем, где менять и что там сейчас, что сделать, на чём
     стоит, что соблюдать, что неясно и после каких задач (after — с названиями из issue_title), —
     и номер для финального коммита. Задачи плана текст называет I-n, а агент найдёт их по
-    номерам на весь проект: names. Номера потока своего итога — номерами заметок: renumber."""
+    номерам на весь проект: names. Номера потока своего итога — номерами заметок: renumber (в
+    тексте решений — уже: decisions_of)."""
     names = names or {}
 
     def fixed(value: str) -> str:
@@ -111,13 +112,22 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     section(words["now"], [named(now)] if now else [])
     section(words["scope"], (f"- {line(named(item))}" for item in issue.scope))
     section(words["outcomes"], [f"- {outcome[0]}: {line(fixed(outcome[1]))}"])
-    section(words["decisions"], (f"- {name}: {line(fixed(text))}" for name, text in adrs))
+    section(words["decisions"], (f"- {name}: {line(text)}" for name, text in adrs))
     section(words["keep"], (f"- {line(text)}" for text in keep))
     section(words["risks"], (f"- {line(text)}" for text in risks))
     section(words["open"], (f"- {line(named(item))}" for item in issue.open_questions))
     section(words["after"], (f"- {name}: {line(text)}" for name, text in after))
     lines += ["", words["commit"].format(id=number)]
     return "\n".join(lines)
+
+
+def decisions_of(issue: Issue, catalog: Catalog, names: Names | None,
+                 quote: str) -> list[tuple[str, str]]:
+    """Решения задачи с текстом из каталога. Номера потока — номерами заметок только в решениях
+    её потока: прошлое решение проекта называет свои вопросы своими номерами."""
+    return [(name, names(body, quote) if names is not None and names.owns(name) else body)
+            for name in issue.adr_ids if name in catalog.notes
+            for body in [catalog.notes[name].body.strip()]]
 
 
 def title_of(catalog: Catalog, note_id: str) -> str:
@@ -159,8 +169,8 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     for issue in plan.issues:
         number = by_issue[issue.id]
         outcome = (issue.outcome_id, title_of(catalog, issue.outcome_id))
-        adrs = [(name, catalog.notes[name].body.strip()) for name in issue.adr_ids
-                if name in catalog.notes]
+        adrs = decisions_of(issue, catalog, (streams or {}).get(issue.outcome_id),
+                            words["quote"])
         after = [(by_issue[name].id, titles[name]) for name in issue.depends_on
                  if name in by_issue]
         text = issue_text(issue, number.id, outcome, adrs, after,

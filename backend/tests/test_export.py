@@ -292,6 +292,14 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо OQ-0002")
     assert renumbered("~~~\nQ1: 1\n~~~\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
         "~~~\nQ1: 1\n~~~\nпо OQ-0002")
+    # Разделители любой длины: ``Q1`` — код, а блок ```` не закрыть тремя кавычками внутри.
+    assert renumbered("``Q1`` и Q1", {"Q1": "OQ-0002"}, {}) == "``Q1`` и OQ-0002"
+    long = "````md\n```\nQ1\n```\n````\nпо Q1"
+    assert renumbered(long, {"Q1": "OQ-0002"}, {}) == long.replace("по Q1", "по OQ-0002")
+    # Адрес ссылки — не текст: подпись получает номер заметки, адрес остаётся.
+    assert renumbered("[вопрос Q1](https://tracker.local/Q1), см. https://x.local/Q1",
+                      {"Q1": "OQ-0002"}, {}) == (
+        "[вопрос OQ-0002](https://tracker.local/Q1), см. https://x.local/Q1")
 
 
 def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):
