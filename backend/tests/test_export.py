@@ -327,6 +327,12 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Адрес сноски — и на следующей строке; инструкция, CDATA и объявление HTML — не текст.
     wrapped = "[q]:\n  /questions/Q1\n\nтекст <?check Q1?> <![CDATA[Q1]]> <!DOCTYPE Q1>"
     assert renumbered(f"{wrapped} и Q1", {"Q1": "OQ-0002"}, {}) == f"{wrapped} и OQ-0002"
+    # Метка сноски — как в CommonMark, без регистра и лишних пробелов; заголовок ссылки — и с
+    # экранированной кавычкой.
+    spaced = "[вопрос][Q1 ref] и [q1\nREF]\n\n[Q1  ref]: /questions/1"
+    assert renumbered(f"{spaced}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{spaced}\n\nпо OQ-0002"
+    titled = '[x](/questions/Q1 "say \\"hi\\"")'
+    assert renumbered(f"{titled} и Q1", {"Q1": "OQ-0002"}, {}) == f"{titled} и OQ-0002"
     # Определение в блоке кода — пример, а не определение: [Q1] в тексте — номер.
     assert renumbered("```\n[Q1]: /x\n```\n\nсм. [Q1]", {"Q1": "OQ-0002"}, {}) == (
         "```\n[Q1]: /x\n```\n\nсм. [OQ-0002]")

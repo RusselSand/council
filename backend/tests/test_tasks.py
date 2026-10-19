@@ -684,3 +684,31 @@ def test_a_section_with_more_than_dependencies_is_not_their_list():
                       generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит ISS-0002.",
                       links=["OUT-0001", "ISS-0001"], action="create")
     assert aligned([first, second]) == {}
+
+
+def test_only_the_commit_line_of_the_draft_may_follow_a_dependency_list():
+    def file(number, text, links=()):
+        return NotePlan(key=f"i:{number}", id=number, type="issue", text=text,
+                        generated="# Задача\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                        links=list(links), action="create")
+
+    # Строка о коммите у файлов одна и та же; «Notes for ISS-0002» — не она, и раздел с ней —
+    # не список зависимостей.
+    first = file("ISS-0001", "# Index v1\n\nAs a team.\n\nCommit ISS-0001.")
+    third = file("ISS-0003", "# Other\n\nAs a team.\n\nCommit ISS-0003.")
+    second = file("ISS-0002", "# Search\n\n## Notes\n- ISS-0001: reuse it\n\nNotes for ISS-0002",
+                  ["OUT-0001", "ISS-0001"])
+    assert aligned([first, second, third]) == {}
+
+
+def test_a_note_number_that_is_a_stream_term_is_not_a_dead_reference(tmp_path):
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    source = Fragment(id=1, text="Прогонять на ADR-9999 fixture.", label="constraint",
+                      reason="", council_label="constraint")
+    names = names_of(Stream(group="C"), {1: source})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Прогнать на ADR-9999 fixture."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                 words_for("Russian"), "Russian", (), {"OUT-0001": names})
+    assert "- Прогнать на ADR-9999 fixture." in file.text

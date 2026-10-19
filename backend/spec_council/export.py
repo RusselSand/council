@@ -108,7 +108,7 @@ UNTOUCHED = re.compile("|".join((
     # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри, и с
     # экранированными «\(»
     rf"\]\(\s*(?:<[^<>\n]*>|{balanced(r'(?:\\.|[^()\s\\])')}*)"
-    r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)""",
+    r"""(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)""",
     # адрес в определении ссылки-сноски «[метка]: адрес» — и в цитате, и в пункте списка, и
     # на следующей строке
     CONTAINER + r"\[[^\]\n]+\]:[ \t]*(?:\n[ \t>]*)?(?:<[^>\n]*>|\S+)",
@@ -363,11 +363,12 @@ def terms_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     номера потока появились позже текста, и такое слово в нём — не номер. И решение проекта,
     отобранное для потока, без нулей в номере (ADR-0001 — «ADR-1»): каталог зовёт его и так, и
     «ADR-1» в тексте — не обязательно первое решение потока. Тексты этих решений — тоже
-    исходные: модели их видели и могли переписать «P1 incidents» как есть."""
+    исходные: модели их видели и могли переписать «P1 incidents» как есть. И номер заметки в
+    исходном тексте («ADR-9999 fixture») — слово этого текста."""
     past = {f"ADR-{int(found.group(1))}" for decision in stream.project_decisions or []
             if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None}
     return frozenset(past | {name for text in sources_of(stream, fragments, more)
-                             for name in LOCAL.findall(text)})
+                             for name in (*LOCAL.findall(text), *NUMBER.findall(text))})
 
 
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -411,8 +412,10 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
     # Метка ссылки-сноски, определённой в тексте (не в блоке кода), — и там, где ссылкой
     # пользуются: [..][Q1], [Q1].
     labels = DEFINED.findall("".join(row for n, row in enumerate(lines) if n not in code))
-    untouched = UNTOUCHED if not labels else re.compile(
-        UNTOUCHED.pattern + r"|(?i:\[(?:" + "|".join(map(re.escape, labels)) + r")\])",
+    # Метки сравнивают, как CommonMark: без регистра и с любыми пробелами между словами.
+    spelled = {r"\s+".join(map(re.escape, label.split())) for label in labels if label.split()}
+    untouched = UNTOUCHED if not spelled else re.compile(
+        UNTOUCHED.pattern + r"|(?i:\[\s*(?:" + "|".join(sorted(spelled)) + r")\s*\])",
         UNTOUCHED.flags)
 
     def inline(part: str) -> str:

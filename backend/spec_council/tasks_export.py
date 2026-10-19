@@ -192,9 +192,15 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     # Модели плана видели номера заметок и писали их в текст задач: какую с тех пор удалили, на
     # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
     known = {numbered_key(note_id) for note_id in catalog.notes}
+    def terms(issue: Issue) -> frozenset[str]:
+        names = (streams or {}).get(issue.outcome_id)
+        return names.terms if names is not None else frozenset()
+
+    # Номер, что в исходных текстах потока — слово («ADR-9999 fixture»), — не ссылка.
     dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
                    for found in numbers_in_prose(text)
-                   if not found.startswith("ISS-") and numbered_key(found) not in known})
+                   if not found.startswith("ISS-") and numbered_key(found) not in known
+                   and found not in terms(issue)})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
                          "называют: верните заметки или выгрузите потоки заново и спланируйте "
@@ -261,6 +267,7 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
 
     titles = {note.id: found.group(1) for note in notes
               if (found := TITLE.match(current(note))) is not None}
+    commit = commit_line(notes, current)
     changed: dict[str, str] = {}
     for note in notes:
         if note.action == "edited":
@@ -269,7 +276,8 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
         # Список задач, после которых делать эту, issue_text кладёт последним разделом.
         section = sum(row.startswith("## ") for row in note.generated.split("\n")) - 1
         new = retitled(text, {link: titles[link] for link in note.links
-                              if link != note.id and link in titles}, section, note.id)
+                              if link != note.id and link in titles}, section,
+                       commit.format(id=note.id) if commit else None)
         # Название с номером заметки или задачи (правили руками) принесло бы его в чужой файл
         # без ссылки во frontmatter: такой файл — как был.
         if new != text and numbering_problem(text, new) is None:
@@ -277,10 +285,25 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None) -
     return changed
 
 
-def retitled(text: str, titles: Mapping[str, str], section: int, own: str) -> str:
+def commit_line(notes: Sequence[NotePlan], current: Callable[[NotePlan], str]) -> str | None:
+    """Строка о номере для коммита, как она во всех файлах задач, — с «{id}» на месте номера:
+    последняя строка файла с его номером — та, что у большинства файлов. Поровну — не узнать."""
+    seen: dict[str, int] = {}
+    for note in notes:
+        rows = [row.strip() for row in current(note).split("\n") if row.strip()]
+        if rows and note.id in rows[-1]:
+            shape = rows[-1].replace("{", "{{").replace("}", "}}").replace(note.id, "{id}")
+            seen[shape] = seen.get(shape, 0) + 1
+    ranked = sorted(seen.items(), key=lambda item: -item[1])
+    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+        return None
+    return ranked[0][0]
+
+
+def retitled(text: str, titles: Mapping[str, str], section: int, commit: str | None) -> str:
     """Список задач, после которых делать эту, — с названиями из их файлов (titles). Это раздел
     «## …», где, кроме пустых, только строки «- ISS-…: …» задач, которых ждут (titles), — и
-    последняя строка файла о его номере (own) для коммита: issue_text ставит её после списка.
+    последняя строка файла о номере для коммита (commit): issue_text ставит её после списка.
     Таких разделов несколько (человек дописал похожий) — тот, что под тем же номером (section,
     с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
     узнать — текст как есть."""
@@ -289,7 +312,7 @@ def retitled(text: str, titles: Mapping[str, str], section: int, own: str) -> st
     if not heads:
         return text
     filled = [n for n, row in enumerate(lines) if row.strip()]
-    closing = filled[-1] if filled and own in lines[filled[-1]] else None
+    closing = filled[-1] if filled and lines[filled[-1]].strip() == commit else None
     found: list[tuple[int, list[tuple[int, re.Match[str]]]]] = []
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
         rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
