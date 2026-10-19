@@ -27,6 +27,7 @@ from .export import (
     in_prose,
     keyed,
     matched,
+    note_key,
     numbering_problem,
     planned,
 )
@@ -45,9 +46,9 @@ from .tasks import Names, relabeled
 
 # Название задачи — заголовок её файла: первая строка «# …» (без закрывающих «#»). Первая
 # строка не заголовок (файл правили руками) — названия нет.
-TITLE = re.compile(r"[ ]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*(?=\n|\Z)")
+TITLE = re.compile(r"[ ]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t\r]*(?=\n|\Z)")
 # Заголовок раздела файла задачи «## …» — и с отступом до трёх пробелов, и с табуляцией.
-SECTION = re.compile(r"[ ]{0,3}##(?:[ \t]|$)")
+SECTION = re.compile(r"[ ]{0,3}##(?:[ \t\r]|$)")
 # Пункт списка задач, после которых делать эту: «- ISS-0012: название».
 AFTER = re.compile(r"^([ \t]*-[ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
 
@@ -159,12 +160,6 @@ def numbers_in_prose(text: str, keep: Collection[str] = ()) -> list[str]:
     return found
 
 
-def numbered_key(note_id: str) -> tuple[str, int] | str:
-    """Номер заметки без нулей: ADR-7 и ADR-0007 — одна заметка."""
-    found = re.fullmatch(r"([A-Za-z]+)-0*(\d+)", note_id)
-    return (found.group(1).upper(), int(found.group(2))) if found else note_id
-
-
 def title_of(catalog: Catalog, note_id: str) -> str:
     """Заметка коротко — её первая строка: у итога это название."""
     note = catalog.notes.get(note_id)
@@ -195,14 +190,14 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                          "верните заметки или выгрузите потоки заново и спланируйте снова")
     # Модели плана видели номера заметок и писали их в текст задач: какую с тех пор удалили, на
     # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
-    known = {numbered_key(note_id) for note_id in catalog.notes}
+    known = {note_key(note_id) for note_id in catalog.notes}
     def own_names(issue: Issue) -> Names:
         return (streams or {}).get(issue.outcome_id) or Names({}, {})
 
     # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
     dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
                    for found in numbers_in_prose(text, own_names(issue).phrases)
-                   if not found.startswith("ISS-") and numbered_key(found) not in known
+                   if not found.startswith("ISS-") and note_key(found) not in known
                    and found not in own_names(issue).terms})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
@@ -335,5 +330,6 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
         return text
     for n, match in chosen:
         if match.group(2) in titles:
-            lines[n] = match.group(1) + titles[match.group(2)]
+            ending = "\r" if lines[n].endswith("\r") else ""
+            lines[n] = match.group(1) + titles[match.group(2)] + ending
     return "\n".join(lines)

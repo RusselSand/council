@@ -847,3 +847,22 @@ def test_a_section_repeating_a_prerequisite_is_not_the_list():
                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n- ISS-0002: Кэш\n",
                      links=["OUT-0001", "ISS-0001", "ISS-0002"], action="create")
     assert aligned([first, second, third]) == {}
+
+
+def test_a_known_note_number_without_zeros_stays_a_reference():
+    note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
+                        written="Проверить по ADR-2 validation", digest="d")
+    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
+                                                 refs={"I1": "IDEA-0001", "ADR-2": "ADR-0002"}))
+    assert not any("ADR-2" in phrase for phrase in names_of(stream, {}).phrases)
+
+
+def test_titles_and_sections_with_crlf_are_recognized():
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v1 #\r\n\r\nText.",
+                     generated="# Индекс", action="create")
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue",
+                      text="# Search\r\n\r\n##\r\n- ISS-0001: Index v2\r\n",
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    assert aligned([first, second]) == {
+        second.key: "# Search\r\n\r\n##\r\n- ISS-0001: Index v1\r\n"}

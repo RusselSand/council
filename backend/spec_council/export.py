@@ -88,6 +88,8 @@ BLOCKS = ("fence", "code_block", "html_block")
 ATTRIBUTES = (r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*"""
               r"""(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*""")
 RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
+# Открывающий и закрывающий тег такого элемента: его содержимое ищет raw_elements.
+RAW_TAG = re.compile(rf"(?i:<(?P<open>{RAW})\b{ATTRIBUTES}\s*>|</(?P<close>{RAW})\s*>)")
 # Что не трогают в строке текста — номера в нём не ссылки, а текст вокруг остаётся текстом.
 UNTOUCHED = re.compile("|".join((
     # строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через перенос, но не пустую
@@ -101,7 +103,6 @@ UNTOUCHED = re.compile("|".join((
     r"<\?[\s\S]*?\?>",
     r"<!\[CDATA\[[\s\S]*?\]\]>",
     r"<![A-Za-z][^>]*>",
-    rf"(?i:<(?P<raw>{RAW})\b{ATTRIBUTES}\s*>[\s\S]*?</(?P=raw)\s*>)",
     rf"<[A-Za-z][A-Za-z0-9-]*{ATTRIBUTES}\s*/?>",
     r"</[A-Za-z][A-Za-z0-9-]*\s*>",
 )), re.MULTILINE)
@@ -354,6 +355,12 @@ def terms_of(stream: Stream) -> frozenset[str]:
                      if (found := PAST_ADR.fullmatch(decision.adr_id)) is not None)
 
 
+def note_key(note_id: str) -> tuple[str, int] | str:
+    """Номер заметки без нулей: ADR-7 и ADR-0007 — одна заметка."""
+    found = re.fullmatch(r"([A-Za-z]+)-0*(\d+)", note_id)
+    return (found.group(1).upper(), int(found.group(2))) if found else note_id
+
+
 def prose_of(text: str) -> str:
     """Только проза текста — без кода, адресов и меток ссылок (in_prose): сочетание исходного
     текста — его слово, только если оно в прозе; `Q1` в коде — не его слово."""
@@ -392,12 +399,13 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     текста совета — ссылка. notes — тексты заметок: в них номер известной заметки (known) —
     настоящая ссылка, и его сочетание словом не становится."""
     found: set[str] = set()
-    sources = [(text, ()) for text in sources_of(stream, fragments, more)]
-    sources += [(text, known) for text in notes]
+    sources: list[tuple[str, Collection[object]]] = [
+        (text, ()) for text in sources_of(stream, fragments, more)]
+    sources += [(text, {note_key(note_id) for note_id in known}) for text in notes]
     for source, skip in sources:
         text = prose_of(source)
         for match in WORDLIKE.finditer(text):
-            if match.group(0) in skip:
+            if note_key(match.group(0)) in skip:
                 continue
             if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
                 found.add(text[match.start():match.end() + after.end()])
@@ -461,6 +469,26 @@ def opened(text: str, close: int) -> bool:
     return False
 
 
+def raw_elements(text: str) -> list[tuple[int, int]]:
+    """Где в тексте элемент HTML, чьё содержимое — код (RAW), — с вложенными в него такими же:
+    <code>…<code>…</code>…</code> — одно целое."""
+    found: list[tuple[int, int]] = []
+    start = None
+    names: list[str] = []
+    for tag in RAW_TAG.finditer(text):
+        if tag.group("open"):
+            if not names:
+                start = tag.start()
+            names.append(tag.group("open").lower())
+        elif names and tag.group("close").lower() == names[-1]:
+            names.pop()
+            if not names and start is not None:
+                found.append((start, tag.end()))
+    if names and start is not None:
+        found.append((start, len(text)))
+    return found
+
+
 def addresses(text: str) -> list[tuple[int, int]]:
     """Где в тексте адрес сам по себе («https://…»): до пробела или «<», «>», «]», со скобками
     внутри любой вложенности; «)» в конце, которой нет пары, и знак препинания в конце — не
@@ -468,6 +496,10 @@ def addresses(text: str) -> list[tuple[int, int]]:
     found: list[tuple[int, int]] = []
     for scheme in SCHEME.finditer(text):
         end = scheme.end()
+        # Адрес узла IPv6 — в квадратных скобках сразу после «://»: «]» его не обрывает.
+        close = text.find("]", end) if text.startswith("[", end) else -1
+        if close != -1 and not any(sign.isspace() for sign in text[end:close]):
+            end = close + 1
         while end < len(text) and not text[end].isspace() and text[end] not in "<>]":
             end += 1
         while end > scheme.end() and (
@@ -560,7 +592,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
         # (addresses) — они могут пересекаться.
         spans = sorted([kept.span() for kept in untouched.finditer(part)]
-                       + uses(part) + destinations(part) + addresses(part))
+                       + uses(part) + destinations(part) + addresses(part) + raw_elements(part))
         out: list[str] = []
         last = 0
         for start, end in spans:
