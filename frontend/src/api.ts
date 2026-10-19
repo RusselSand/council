@@ -816,9 +816,10 @@ export const tasksWaitFor = (council: Council, notes: string | null): TasksWait[
   (council.streams ?? []).flatMap((stream): TasksWait[] => {
     const outcomes = stream.outcomes
     if (!outcomes?.approved) return [{ group: stream.group, why: 'outcomes' }]
-    // Выгружен, когда совет ещё не помнил номера заметок (refs), — выгрузить заново.
+    // Выгружен, когда совет ещё не помнил номера заметок (refs) или помнил только у решений и итогов, — выгрузить
+    // заново. Идея ложится всегда: её I1 есть в каждой нынешней выгрузке.
     if (!stream.notes || notes === null || stream.notes.root !== notes || stream.notes.outcomes !== outcomes.run
-        || Object.keys(stream.notes.refs ?? {}).length === 0) {
+        || !('I1' in (stream.notes.refs ?? {}))) {
       return [{ group: stream.group, why: 'notes' }]
     }
     return []

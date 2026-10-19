@@ -196,11 +196,14 @@ def test_a_stream_exported_before_note_numbers_were_kept_is_exported_again_first
                                                                                  folders):
     council_id = ready()
     store = get_store()
-    store.update_council(council_id, {"streams": [
-        s.model_copy(update={"notes": s.notes.model_copy(update={"refs": {}})})
-        for s in council(council_id).streams]})
-    res = plans(council_id)
-    assert res.status_code == 409 and "выгрузите его заново" in res.json()["detail"]
+    # Не помнил номеров вовсе — или помнил только у решений и итогов: тексты задач назвали бы
+    # вопросы и варианты не номерами заметок.
+    for refs in ({}, {"O1": "OUT-0001", "ADR-1": "ADR-0001"}):
+        store.update_council(council_id, {"streams": [
+            s.model_copy(update={"notes": s.notes.model_copy(update={"refs": refs})})
+            for s in council(council_id).streams]})
+        res = plans(council_id)
+        assert res.status_code == 409 and "выгрузите его заново" in res.json()["detail"]
 
 
 def test_approved_outcomes_not_yet_exported_are_not_planned(agents, folders):

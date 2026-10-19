@@ -286,6 +286,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # Код в обратных кавычках — как есть: `Q1` там — не вопрос.
     assert renumbered("`Q1` и Q1 (`F4`)", {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
         "`Q1` и OQ-0002 (`F4`)")
+    # И в блоке ```…```: там пример кода или настроек.
+    fenced = "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо Q1"
+    assert renumbered(fenced, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо OQ-0002")
 
 
 def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):

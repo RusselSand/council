@@ -119,8 +119,10 @@ def basis_of(council: Council) -> dict[str, str]:
 
 def not_ready(council: Council, notes: str | None) -> list[str]:
     """Почему план строить рано: какой поток не утвердил итоги или не выгружен к ним в нынешний
-    каталог заметок — или выгружен, когда совет ещё не помнил номера заметок (`refs`): тогда
-    модели не узнали бы, как зовут его итоги. Пусто — можно."""
+    каталог заметок — или выгружен, когда совет ещё не помнил номера заметок (`refs`) или помнил
+    только у решений и итогов: тогда модели не узнали бы, как зовут его итоги, а тексты — его
+    вопросы и варианты. Идея ложится всегда, так что её I1 есть в каждой нынешней выгрузке.
+    Пусто — можно."""
     if not council.streams:
         return ["Группы ещё не подтверждены"]
     problems = []
@@ -131,7 +133,7 @@ def not_ready(council: Council, notes: str | None) -> list[str]:
         elif (stream.notes is None or notes is None or stream.notes.root != notes
               or stream.notes.outcomes != outcomes.run):
             problems.append(f"Поток {stream.group}: не выгружен в заметки к утверждённым итогам")
-        elif not stream.notes.refs:
+        elif "I1" not in stream.notes.refs:
             problems.append(f"Поток {stream.group}: выгружен до того, как совет стал помнить "
                             "номера заметок, — выгрузите его заново")
     return problems

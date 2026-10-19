@@ -1960,13 +1960,13 @@ describe('Задачи', () => {
                  blocked_by: [], gaps: [] }],
   }
   const EXPORTED: NotesExport = {
-    run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', refs: { O1: 'OUT-0001', 'ADR-1': 'ADR-0005' },
+    run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', refs: { I1: 'IDEA-0001', O1: 'OUT-0001', 'ADR-1': 'ADR-0005' },
     notes: [{ key: 'a:x', id: 'ADR-0005', type: 'adr', generated: '…', written: 'Файлы, потому что проще.', links: [],
               digest: 'd', kept: false }],
   }
   /** Поток утверждён и выгружен; у второго — свои номера заметок. */
   const through: Partial<Stream> = { outcomes: OUTCOMES, notes: EXPORTED }
-  const throughB: Partial<Stream> = { outcomes: OUTCOMES, notes: { ...EXPORTED, refs: { O1: 'OUT-0002', 'ADR-1': 'ADR-0006' },
+  const throughB: Partial<Stream> = { outcomes: OUTCOMES, notes: { ...EXPORTED, refs: { I1: 'IDEA-0002', O1: 'OUT-0002', 'ADR-1': 'ADR-0006' },
                                                                      notes: [{ ...EXPORTED.notes[0], id: 'ADR-0006' }] } }
   const PLAN: TaskPlan = {
     state: 'done', run: 't1', basis: { A: 'o1:n1', B: 'o1:n1', research: '|' }, code: false, sources: [], steps: [], uncovered: [],
