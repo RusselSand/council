@@ -319,7 +319,8 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
         rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
         items = [(n, match) for n in rows if (match := AFTER.match(lines[n])) is not None]
-        if rows and len(items) == len(rows) and all(m.group(2) in waits for _, m in items):
+        # Список — все задачи, которых ждут, и только они: пункт об одной из них — ещё не он.
+        if rows and len(items) == len(rows) and {m.group(2) for _, m in items} == set(waits):
             found.append((place, items))
     chosen = found[0][1] if len(found) == 1 else next(
         (items for place, items in found if place == section), None)

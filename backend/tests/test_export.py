@@ -333,6 +333,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{spaced}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{spaced}\n\nпо OQ-0002"
     titled = '[x](/questions/Q1 "say \\"hi\\"")'
     assert renumbered(f"{titled} и Q1", {"Q1": "OQ-0002"}, {}) == f"{titled} и OQ-0002"
+    # Метка со скобкой, экранированной «\»: и определение, и ссылка на него — как есть.
+    escaped_label = "[текст][q1\\]]\n\n[Q1\\]]: /questions/1"
+    assert renumbered(f"{escaped_label}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        f"{escaped_label}\n\nпо OQ-0002")
     # [Q1](…) — встроенная ссылка, а не сноска Q1: её текст — номер заметки.
     inline = "[Q1](/docs) и [Q1]\n\n[Q1]: /questions/1"
     assert renumbered(inline, {"Q1": "OQ-0002"}, {}) == inline.replace("[Q1](", "[OQ-0002](")

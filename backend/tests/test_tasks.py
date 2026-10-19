@@ -737,3 +737,17 @@ def test_a_source_word_in_code_is_not_a_term():
     names = names_of(Stream(group="C"), {1: source})
     assert "F1 score" in names.phrases
     assert not any("Q1" in phrase for phrase in names.phrases)
+
+
+def test_a_section_naming_only_some_prerequisites_is_not_their_list():
+    def file(number, text, links=()):
+        return NotePlan(key=f"i:{number}", id=number, type="issue", text=text,
+                        generated="# Задача\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит.",
+                        links=list(links), action="create")
+
+    first = file("ISS-0001", "# Index v2\n\nAs a team.\n\nCommit ISS-0001.")
+    second = file("ISS-0002", "# Cache\n\nAs a team.\n\nCommit ISS-0002.")
+    # ISS-0003 ждёт обеих, а список зависимостей убрали: «Notes» с пунктом об одной — не он.
+    third = file("ISS-0003", "# Search\n\n## Notes\n- ISS-0001: reuse its tokenizer\n\n"
+                             "Commit ISS-0003.", ["OUT-0001", "ISS-0001", "ISS-0002"])
+    assert aligned([first, second, third]) == {}
