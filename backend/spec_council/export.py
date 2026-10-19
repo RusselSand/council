@@ -76,7 +76,7 @@ WORDLIKE = re.compile(r"(?<![\w-])(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1
 PAST_ADR = re.compile(r"ADR-0*([1-9]\d*)", re.IGNORECASE)
 # Номера внутри потока: идея, вопрос, вариант (и фрагмент текста группы), решение, итог,
 # находки скана репозитория и макета. В документации они ничего не значат.
-LOCAL = re.compile(r"\b(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)\b")
+LOCAL = re.compile(r"(?<![\w-])(?:ADR-[1-9]\d*|[IQPFORD][1-9]\d*)(?![\w-])")
 # Блоки кода и HTML — строки, которые они занимают, на любой глубине (в цитате, в пункте
 # списка): их ищет разбор Markdown. Номера в них — не ссылки.
 MARKDOWN = MarkdownIt("commonmark")
@@ -102,16 +102,16 @@ ATTRIBUTES = (r"""(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*"""
               r"""(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*""")
 RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
 # Что не трогают в строке текста — номера в нём не ссылки, а текст вокруг остаётся текстом.
-UNTOUCHED = re.compile("|".join((
+# Адрес в определении ссылки-сноски «[метка]: адрес» — и в цитате, и в пункте списка, и на
+# следующей строке.
+REFERENCE = CONTAINER + r"\[(?:\\.|[^\]\\\n])+\]:[ \t]*(?:\n[ \t>]*)?(?:<[^>\n]*>|\S+)"
+OPAQUE = re.compile("|".join((
     # строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через перенос, но не пустую
     r"(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)",
     # адрес ссылки и картинки [..](адрес "заголовок") — и в <…>, и со скобками внутри, и с
     # экранированными «\(»
     rf"\]\(\s*(?:<[^<>\n]*>|{balanced(r'(?:\\.|[^()\s\\])')}*)"
     r"""(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)""",
-    # адрес в определении ссылки-сноски «[метка]: адрес» — и в цитате, и в пункте списка, и
-    # на следующей строке
-    CONTAINER + r"\[(?:\\.|[^\]\\\n])+\]:[ \t]*(?:\n[ \t>]*)?(?:<[^>\n]*>|\S+)",
     # <адрес> и <почта>, почта сама по себе
     r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>",
     r"<?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
@@ -127,8 +127,9 @@ UNTOUCHED = re.compile("|".join((
     # адрес сам по себе — и со скобками внутри
     rf"\b[A-Za-z][A-Za-z0-9+.-]*://{balanced(r'(?:\\.|[^\s<>()\]\\])')}+",
 )), re.MULTILINE)
+UNTOUCHED = re.compile(f"{OPAQUE.pattern}|{REFERENCE}", re.MULTILINE)
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
-CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)\b"
+CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)(?![\w-])"
 CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
 # Критерий, что начинается как строка задачи: «ISS-0042: …».
 ISSUE_START = re.compile(r"\s*(ISS-\d+)\s*:")
@@ -351,6 +352,11 @@ def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> di
     texts |= {proposal.id: proposal.text
               for options in found_by_question(stream.proposals, stream.choices).values()
               for proposal in options}
+    # Правка встала на место исходного (options_of): за номером исходного — уже её текст.
+    decided = {decision.question_id: decision.proposal for decision in stream.decisions or []}
+    texts |= {choice.based_on: choice.text for choice in stream.choices or []
+              if choice.text is not None and choice.based_on is not None
+              and decided.get(choice.question_id) != choice.based_on}
     texts |= {outcome.id: outcome.title
               for outcome in (stream.outcomes.outcomes if stream.outcomes else [])}
     return texts
@@ -419,13 +425,17 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     lines[-1] = lines[-1][:-1]
     # Метка ссылки-сноски, определённой в тексте (не в блоке кода), — и там, где ссылкой
     # пользуются: [..][Q1], [Q1].
-    labels = DEFINED.findall("".join(row for n, row in enumerate(lines) if n not in code))
+    # Определение — только в прозе: строка внутри кода или комментария, хоть и похожа, — нет.
+    prose = OPAQUE.sub(lambda found: re.sub(r"[^\n]", " ", found.group(0)),
+                       "".join(row for n, row in enumerate(lines) if n not in code))
+    labels = DEFINED.findall(prose)
     # Метки сравнивают, как CommonMark: без регистра и с любыми пробелами между словами. [Q1](…)
-    # и [Q1][метка] — не сноска Q1: там [Q1] — текст ссылки.
+    # и [Q1][метка] — не сноска Q1: там [Q1] — текст ссылки; \[Q1] — просто текст.
     spelled = {r"\s+".join(map(re.escape, label.split())) for label in labels if label.split()}
     extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
     if spelled:
-        extra.append(r"(?i:\[\s*(?:" + "|".join(sorted(spelled)) + r")\s*\](?!\(|\[(?!\])))")
+        extra.append(r"(?i:(?<!\\)\[\s*(?:" + "|".join(sorted(spelled))
+                     + r")\s*\](?!\(|\[(?!\])))")
     untouched = UNTOUCHED
     if extra:
         untouched = re.compile("|".join([UNTOUCHED.pattern, *extra]), UNTOUCHED.flags)

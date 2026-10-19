@@ -12,6 +12,7 @@ from spec_council.export import (
     graph_problems,
     outcome_text,
     renumbered,
+    stream_texts,
     translations,
     untranslated,
     words_for,
@@ -333,6 +334,14 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{spaced}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{spaced}\n\nпо OQ-0002"
     titled = '[x](/questions/Q1 "say \\"hi\\"")'
     assert renumbered(f"{titled} и Q1", {"Q1": "OQ-0002"}, {}) == f"{titled} и OQ-0002"
+    # «R2-D2» — одно слово, а не две находки; \[Q1] — текст, а не ссылка на сноску; строка в
+    # многострочном коде — не определение сноски.
+    assert renumbered("Робот R2-D2 и R2", {}, {"R2": "Находка", "D2": "Экран"}) == (
+        "Робот R2-D2 и «Находка»")
+    assert renumbered("см. \\[Q1] и [Q1]\n\n[Q1]: /questions/1", {"Q1": "OQ-0002"}, {}) == (
+        "см. \\[OQ-0002] и [Q1]\n\n[Q1]: /questions/1")
+    assert renumbered("`пример\n[Q1]: /x` и см. [Q1]", {"Q1": "OQ-0002"}, {}) == (
+        "`пример\n[Q1]: /x` и см. [OQ-0002]")
     # Метка со скобкой, экранированной «\»: и определение, и ссылка на него — как есть.
     escaped_label = "[текст][q1\\]]\n\n[Q1\\]]: /questions/1"
     assert renumbered(f"{escaped_label}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
@@ -432,6 +441,8 @@ def test_a_refined_option_is_named_by_its_refinement(root):
     refined = next(n for n in notes if n.type == "proposal" and n.text == own)
     adr = next(n for n in notes if n.type == "adr" and n.text.startswith("Ручной откат"))
     assert adr.text == f"Ручной откат остаётся, потому что откат нужен и при {refined.id}"
+    # Заметки нет (удалили) — за номером исходного уже текст правки, а не прежний.
+    assert stream_texts(stream, FRAGMENTS)["P1"] == own
 
 
 REFINED = "Ручной откат остаётся, но только по кнопке."
