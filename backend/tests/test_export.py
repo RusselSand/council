@@ -367,6 +367,9 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         assert renumbered(literal, {"Q1": "OQ-0002"}, {}) == literal.replace("Q1", "OQ-0002")
     crlf = "[x](\r\n/questions/Q1\r\n)"
     assert renumbered(f"{crlf} и Q1", {"Q1": "OQ-0002"}, {}) == f"{crlf} и OQ-0002"
+    # <script> — до </script>, и через пустую строку.
+    across = "До <script>const q = 'Q1';\n\nuse('Q1');</script>"
+    assert renumbered(f"{across} и Q1", {"Q1": "OQ-0002"}, {}) == f"{across} и OQ-0002"
     # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
     assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\\](/questions/OQ-0002)")
@@ -492,6 +495,24 @@ def test_a_source_phrase_stays_but_the_same_number_elsewhere_is_a_reference(root
     assert notes["ADR-0002"].text == (
         "Деплой запускает CI после merge, потому что лучше выбрать PRO-0003 для OQ-0003, а "
         "P1 incidents — первыми")
+
+
+def test_a_fragment_offered_to_two_questions_is_named_by_each_ones_own_option(root):
+    # F3 — вариант и Q1, и Q2: «F3» в решении Q2 — его вариант, а не вариант Q1. Вне вопросов
+    # «F3» ничей: там встанет текст фрагмента.
+    stream = STREAM.model_copy(update={
+        "scope": [SCOPE[0], SCOPE[1].model_copy(update={"proposal_ids": [3]}), SCOPE[2]],
+        "decisions": [DECIDED[0].model_copy(update={"rationale": "так проще: F3"}),
+                      Decision(question_id="Q2", proposal="F3", rationale="и тут подходит F3",
+                               rationale_by="human"), DECIDED[2]]})
+    notes, _, _ = draft(root, stream)
+    refs = refs_of(root, stream)
+    assert "F3" not in refs
+    for question, reason in (("Q1", "проще: {}"), ("Q2", "подходит {}")):
+        own = next(n for n in notes if n.type == "proposal" and n.links == [refs[question]]
+                   and n.text == FRAGMENTS[3].text)
+        adr = next(n for n in notes if n.type == "adr" and n.links == [own.id])
+        assert adr.text.endswith(reason.format(own.id))
 
 
 def test_a_refined_option_is_named_by_its_refinement(root):

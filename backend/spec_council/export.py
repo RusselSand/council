@@ -22,10 +22,11 @@
 
 import hashlib
 import re
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from itertools import groupby
+from itertools import accumulate, groupby
 from pathlib import Path
 
 from markdown_it import MarkdownIt, rules_inline
@@ -272,11 +273,15 @@ def criterion(item: str) -> str:
 
 
 def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: Catalog,
-             words: Mapping[str, str]) -> tuple[list[Part], list[str], dict[str, str]]:
+             words: Mapping[str, str]
+             ) -> tuple[list[Part], list[str], dict[str, str], dict[str, dict[str, str]]]:
     """Части потока в порядке заметок: идея, вопросы, варианты, решения, итоги. И что не
     выгружается — с причиной, и какой частью ложится всё, что тексты потока называют его
     номерами: идея (I1), вопрос, вариант (Pn и Fn), решение (ADR-n), итог (O1). По ним план
-    задач называет итоги и решения номерами заметок, а тексты заметок и задач — всё остальное."""
+    задач называет итоги и решения номерами заметок, а тексты заметок и задач — всё остальное.
+    Фрагмент текста группы бывает вариантом нескольких вопросов: «F3» в решении вопроса — его
+    вариант, а вне вопросов такой номер ничей. Потому и номера вариантов у частей каждого
+    вопроса — по ключу части."""
     found = found_by_question(stream.proposals, stream.choices)
     choices = {choice.question_id: choice for choice in stream.choices or []}
     decisions = {decision.question_id: decision for decision in stream.decisions or []}
@@ -285,6 +290,8 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
     adrs: list[Part] = []
     adr_of: dict[str, str] = {}          # ADR-n потока → ключ части
     named: dict[str, str] = {"I1": "idea"}
+    local: dict[str, dict[str, str]] = {}  # ключ части → номера вариантов её вопроса
+    offered_in: Counter[str] = Counter()   # у скольких вопросов такой вариант
     external: set[str] = set()           # решения вопросов, что растут из прошлых решений
     taken: set[str] = set()
     for n, question in enumerate(stream.scope or [], 1):
@@ -298,19 +305,26 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
         if question.source == "user" and question.source_question_id is not None:
             # Вопрос из текста группы называют и номером его фрагмента.
             named.setdefault(f"F{question.source_question_id}", asked.key)
-        for option, part in zip(options, offered, strict=True):
-            named.setdefault(option["id"], part.key)
-        if choice is not None and choice.based_on is not None and choice.proposal in named:
+        own = {option["id"]: part.key for option, part in zip(options, offered, strict=True)}
+        if choice is not None and choice.based_on is not None and choice.proposal in own:
             # Правка встала на место исходного: текст, что называет исходный, — о ней.
-            named.setdefault(choice.based_on, named[choice.proposal])
+            own.setdefault(choice.based_on, own[choice.proposal])
+        offered_in.update(own.keys())
+        for name, key in own.items():
+            named.setdefault(name, key)
+        for part in (asked, *offered, *([adr] if adr is not None else [])):
+            local[part.key] = own
         if adr is not None:
             adrs.append(adr)
             adr_of[f"ADR-{n}"] = adr.key
             if asked.links != ("idea",):
                 external.add(adr.key)
+    for name, count in offered_in.items():
+        if count > 1:
+            named.pop(name, None)
     outcomes, skipped, outcome_of = outcome_parts(stream, adr_of, external, words, taken)
     return ([Part("idea", "idea", stream.idea.text, ()), *questions, *proposals, *adrs,
-             *outcomes], skipped, named | adr_of | outcome_of)
+             *outcomes], skipped, named | adr_of | outcome_of, local)
 
 
 def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> dict[str, str]:
@@ -572,11 +586,29 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
     untouched = re.compile("|".join([UNTOUCHED.pattern, *extra])) if extra else UNTOUCHED
 
-    def inline(part: str, found: list[tuple[str, int, int]]) -> str:
+    def block(item: tuple[int, str]) -> int | None:
+        """Строка кода — None, прозы — номер её блока (абзаца, заголовка), прочие — -1: ссылка
+        и строка кода не выходят за свой блок, «[» абзаца над заголовком — не начало ссылки в
+        нём."""
+        return None if item[0] in code else prose.get(item[0], -1)
+
+    groups = [(key, "".join(row for _, row in rows))
+              for key, rows in groupby(enumerate(lines), key=block)]
+    starts = list(accumulate((len(part) for _, part in groups), initial=0))
+    # Элемент кода HTML идёт и через пустую строку — <script> до </script>: его ищут по тегам
+    # всего текста.
+    elements = raw_elements(text, [(kind, start + begin, start + end)
+                                   for (key, _), start in zip(groups, starts, strict=False)
+                                   if key is not None
+                                   for kind, begin, end in marked.get(key, [])])
+
+    def inline(part: str, found: list[tuple[str, int, int]], at: int) -> str:
         # Что не трогают — может пересекаться.
         parsed = [(start, end) for _, start, end in found]
         opaque = parsed + [kept.span() for kept in untouched.finditer(part)]
-        spans = sorted(opaque + addresses(part, opaque, parsed) + raw_elements(part, found))
+        raw = [(max(start, at) - at, min(end, at + len(part)) - at)
+               for start, end in elements if start < at + len(part) and end > at]
+        spans = sorted(opaque + addresses(part, opaque, parsed) + raw)
         out: list[str] = []
         last = 0
         for start, end in spans:
@@ -588,16 +620,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         out.append(change(part[last:]))
         return "".join(out)
 
-    def block(item: tuple[int, str]) -> int | None:
-        """Строка кода — None, прозы — номер её блока (абзаца, заголовка), прочие — -1: ссылка
-        и строка кода не выходят за свой блок, «[» абзаца над заголовком — не начало ссылки в
-        нём."""
-        return None if item[0] in code else prose.get(item[0], -1)
-
-    return "".join(
-        "".join(row for _, row in rows) if key is None
-        else inline("".join(row for _, row in rows), marked.get(key, []))
-        for key, rows in groupby(enumerate(lines), key=block))
+    return "".join(part if key is None else inline(part, marked.get(key, []), start)
+                   for (key, part), start in zip(groups, starts, strict=False))
 
 
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
@@ -715,7 +739,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     новой заметке его не дают, а прежний номер потока, который записан и за другим, — уже не
     его."""
     catalog = shelf.catalog
-    parts, skipped, named = parts_of(stream, fragments, catalog, words)
+    parts, skipped, named, local = parts_of(stream, fragments, catalog, words)
     before = {note.key: note for note in previous.notes if note.type != "issue"} if previous else {}
     alias = matched([part.key for part in parts], before)
     # Правка, которую выгрузили своим вариантом до пометки, а заметки исходного уже нет, —
@@ -743,8 +767,13 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
     terms, phrases = terms_of(stream), phrases_of(stream, fragments)
-    notes = [planned(replace(part, text=renumbered(part.text, numbers, texts, words["quote"],
-                                                   terms, phrases)),
+
+    def numbered(part: Part) -> dict[str, str]:
+        """Номера для текста части: в вопросе — и варианты этого вопроса (parts_of)."""
+        return numbers | {name: ids[key] for name, key in local.get(part.key, {}).items()}
+
+    notes = [planned(replace(part, text=renumbered(part.text, numbered(part), texts,
+                                                   words["quote"], terms, phrases)),
                      ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
              for part in parts]
     ours = {note.id for note in notes} | {note.id for note in before.values()}

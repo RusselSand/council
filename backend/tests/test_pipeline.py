@@ -1221,6 +1221,16 @@ def test_a_plan_keeps_only_what_the_data_has():
     assert found[1].open_questions == ["Ждать ли I1?"]
 
 
+def test_a_source_term_keeps_its_number_when_tasks_are_renumbered():
+    # «I1 cache» — слово исходных текстов итога: план отдал задачи как I2, I1, и номера в тексте
+    # меняются местами, а слово «I2 cache» не становится.
+    context = Context(PLAN_CONTEXT.outcomes, {"OUT-0001": frozenset({"I1 cache"})})
+    found = plan_of({"issues": [task("I2", "Индекс"),
+                                task("I1", "Прогрев", scope=["Греть I1 cache после I2."])]},
+                    context)
+    assert found[1].scope == ["Греть I1 cache после I1."]
+
+
 def test_a_task_refers_only_to_what_its_own_outcome_has():
     """ADR-0003, F5 и F7 — у OUT-0001; задача OUT-0002 сослаться на них не может."""
     [other] = plan_of({"issues": [task("A1", "Хранение", outcome="OUT-0002", constraint_ids=[5],

@@ -14,7 +14,7 @@
 import json
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .export import in_prose, phrases_of, renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
@@ -36,9 +36,12 @@ class Allowed:
 
 @dataclass(frozen=True)
 class Context:
-    """Итоги плана — номерами заметок — и на что может сослаться задача каждого из них."""
+    """Итоги плана — номерами заметок — и на что может сослаться задача каждого из них. И
+    сочетания исходных текстов у потока каждого итога (Names.phrases): номер задачи в «I1
+    cache» — слово, и новым номером он не становится."""
 
     outcomes: Mapping[str, Allowed]
+    phrases: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -220,7 +223,8 @@ def inputs_of(council: Council) -> Inputs:
     values = {"ideas": ideas_text(council), "outcomes": as_json(outcomes),
               "decisions": as_json(list(decisions.values())),
               "constraints_and_risks": as_json(limits_prompt(fragments, constraints | risks))}
-    context = Context(allowed)
+    context = Context(allowed, {note: names.phrases
+                                for note, names in outcome_names(council, fragments).items()})
     return Inputs(values, context, [o["id"] for o in outcomes], skipped, basis_of(council))
 
 
@@ -320,8 +324,10 @@ def plan_of(data: dict, context: Context) -> list[Issue]:
             raise BadAnswer(f"{issue_id} ждёт задачи после себя: {', '.join(later)} — порядок "
                             "плана и есть порядок работы")
         own = context.outcomes[item["outcome_id"]]
-        def text(value: str) -> str:
-            return relabeled(value, renamed)
+        keep = context.phrases.get(item["outcome_id"], frozenset())
+
+        def text(value: str, keep: frozenset[str] = keep) -> str:
+            return relabeled(value, renamed, keep)
 
         issues.append(Issue(
             id=issue_id, title=text(text_of(item.get("title"), "названия")),
