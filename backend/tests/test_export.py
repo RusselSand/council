@@ -331,6 +331,12 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered("[x](foo\\ Q1)", {"Q1": "OQ-0002"}, {}) == "[x](foo\\ OQ-0002)"
     shortcut = "[Q1](не адрес)\n\n[Q1]: /q/1"
     assert renumbered(f"{shortcut}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{shortcut}\n\nи OQ-0002"
+    # «[» и «<code>» в строке кода — не начало ссылки и не элемент; незакрытый <code> — не
+    # элемент.
+    assert renumbered("`[x` ](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "`[x` ](/questions/OQ-0002)")
+    assert renumbered("Use `<code>` then Q1", {"Q1": "OQ-0002"}, {}) == (
+        "Use `<code>` then OQ-0002")
     # Узел IPv6 в адресе — часть адреса; вложенные элементы кода — одно целое.
     ipv6 = "http://[::1]/Q1"
     assert renumbered(f"{ipv6} и Q1", {"Q1": "OQ-0002"}, {}) == f"{ipv6} и OQ-0002"

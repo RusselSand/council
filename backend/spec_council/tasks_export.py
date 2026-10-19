@@ -197,8 +197,7 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
     dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
                    for found in numbers_in_prose(text, own_names(issue).phrases)
-                   if not found.startswith("ISS-") and note_key(found) not in known
-                   and found not in own_names(issue).terms})
+                   if not found.startswith("ISS-") and note_key(found) not in known})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
                          "называют: верните заметки или выгрузите потоки заново и спланируйте "

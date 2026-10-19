@@ -849,6 +849,19 @@ def test_a_section_repeating_a_prerequisite_is_not_the_list():
     assert aligned([first, second, third]) == {}
 
 
+def test_a_deleted_past_decision_named_without_zeros_is_a_dead_reference(tmp_path):
+    # «ADR-1» — двусмысленный номер (решение проекта ADR-0001): номером заметки потока он не
+    # становится, но по каталогу проверяется, и удалённое решение не проскочит.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Следовать ADR-1."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    names = Names({}, {}, frozenset({"ADR-1"}))
+    with pytest.raises(NotesError, match="больше нет ADR-1"):
+        drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian", (), {"OUT-0001": names})
+
+
 def test_a_known_note_number_without_zeros_stays_a_reference():
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
                         written="Проверить по ADR-2 validation", digest="d")

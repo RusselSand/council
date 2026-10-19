@@ -91,17 +91,23 @@ RAW = "code|pre|kbd|samp|tt|var|script|style|textarea"
 # Открывающий и закрывающий тег такого элемента: его содержимое ищет raw_elements.
 RAW_TAG = re.compile(rf"(?i:<(?P<open>{RAW})\b{ATTRIBUTES}\s*>|</(?P<close>{RAW})\s*>)")
 # Что не трогают в строке текста — номера в нём не ссылки, а текст вокруг остаётся текстом.
-UNTOUCHED = re.compile("|".join((
-    # строка кода — `…`, ``…`` — до того же числа обратных кавычек, и через перенос, но не пустую
+# Что прячет свой текст целиком: строка кода — `…`, ``…`` — до того же числа обратных кавычек,
+# и через перенос, но не пустую; комментарий, инструкция <?…?>, CDATA. «[» и тег внутри — не
+# начало ссылки и не элемент.
+HIDING = (
     r"(?<!`)(?P<tick>`+)(?!`)(?:[^\n]|\n(?![ \t]*(?:\n|\Z)))+?(?<!`)(?P=tick)(?!`)",
+    r"<!--[\s\S]*?-->",
+    r"<\?[\s\S]*?\?>",
+    r"<!\[CDATA\[[\s\S]*?\]\]>",
+)
+HIDDEN = re.compile("|".join(HIDING))
+UNTOUCHED = re.compile("|".join((
+    *HIDING,
     # <адрес> и <почта>, почта сама по себе
     r"<[A-Za-z][A-Za-z0-9+.-]*:[^>\s]*>",
     r"<?[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*>?",
-    # комментарий, инструкция <?…?>, CDATA, объявление <!…> и тег HTML с его атрибутами
-    r"<!--[\s\S]*?-->",
-    r"<\?[\s\S]*?\?>",
-    r"<!\[CDATA\[[\s\S]*?\]\]>",
+    # объявление <!…> и тег HTML с его атрибутами
     r"<![A-Za-z][^>]*>",
     rf"<[A-Za-z][A-Za-z0-9-]*{ATTRIBUTES}\s*/?>",
     r"</[A-Za-z][A-Za-z0-9-]*\s*>",
@@ -427,14 +433,14 @@ def blocks_of(text: str) -> tuple[set[int], dict[str, dict]]:
     return lines, references
 
 
-def destinations(text: str) -> list[tuple[int, int]]:
+def destinations(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
     r"""Где в тексте адрес ссылки и картинки «](адрес "заголовок")»: по правилам CommonMark —
     в <…> или со скобками внутри любой вложенности, с экранированием «\», с заголовком в
     "…", '…' или (…)."""
     found: list[tuple[int, int]] = []
     start = text.find("](")
     while start != -1:
-        real = not escaped(text, start) and opened(text, start)
+        real = not escaped(text, start) and opened(text, start, hidden)
         end = destination_end(text, start + 2) if real else None
         if end is not None:
             found.append((start, end))
@@ -454,11 +460,17 @@ def escaped(text: str, at: int) -> bool:
     return run % 2 == 1
 
 
-def opened(text: str, close: int) -> bool:
-    r"""У «]» на месте close есть парная «[» без экранирования: \[x](…) — текст, а не ссылка."""
+def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
+    """Место at — внутри одного из spans."""
+    return any(start <= at < end for start, end in spans)
+
+
+def opened(text: str, close: int, hidden: Collection[tuple[int, int]] = ()) -> bool:
+    r"""У «]» на месте close есть парная «[» без экранирования и не в скрытом тексте (hidden: код,
+    комментарий): \[x](…) и `[x` ](…) — текст, а не ссылка."""
     depth = 0
     for at in range(close - 1, -1, -1):
-        if text[at] not in "[]" or escaped(text, at):
+        if text[at] not in "[]" or escaped(text, at) or inside(at, hidden):
             continue
         if text[at] == "]":
             depth += 1
@@ -469,13 +481,16 @@ def opened(text: str, close: int) -> bool:
     return False
 
 
-def raw_elements(text: str) -> list[tuple[int, int]]:
+def raw_elements(text: str, hidden: Collection[tuple[int, int]] = ()) -> list[tuple[int, int]]:
     """Где в тексте элемент HTML, чьё содержимое — код (RAW), — с вложенными в него такими же:
-    <code>…<code>…</code>…</code> — одно целое."""
+    <code>…<code>…</code>…</code> — одно целое. Тег в скрытом тексте (hidden: `<code>` в строке
+    кода, комментарий) — не тег; незакрытый элемент — не элемент."""
     found: list[tuple[int, int]] = []
     start = None
     names: list[str] = []
     for tag in RAW_TAG.finditer(text):
+        if inside(tag.start(), hidden):
+            continue
         if tag.group("open"):
             if not names:
                 start = tag.start()
@@ -484,8 +499,6 @@ def raw_elements(text: str) -> list[tuple[int, int]]:
             names.pop()
             if not names and start is not None:
                 found.append((start, tag.end()))
-    if names and start is not None:
-        found.append((start, len(text)))
     return found
 
 
@@ -591,8 +604,10 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     def inline(part: str) -> str:
         # Что не трогают: по выражению, адреса ссылок (destinations) и адреса сами по себе
         # (addresses) — они могут пересекаться.
-        spans = sorted([kept.span() for kept in untouched.finditer(part)]
-                       + uses(part) + destinations(part) + addresses(part) + raw_elements(part))
+        hidden = [kept.span() for kept in HIDDEN.finditer(part)]
+        spans = sorted([kept.span() for kept in untouched.finditer(part)] + uses(part)
+                       + destinations(part, hidden) + addresses(part)
+                       + raw_elements(part, hidden))
         out: list[str] = []
         last = 0
         for start, end in spans:
