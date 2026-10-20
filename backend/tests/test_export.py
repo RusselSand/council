@@ -376,6 +376,13 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # <script> — до </script>, и через пустую строку.
     across = "До <script>const q = 'Q1';\n\nuse('Q1');</script>"
     assert renumbered(f"{across} и Q1", {"Q1": "OQ-0002"}, {}) == f"{across} и OQ-0002"
+    # «</script>» после пустой строки — блок HTML, и он закрывает элемент абзаца выше.
+    closed = "До <script>const q = 'Q1';\n\n</script>"
+    assert renumbered(f"{closed}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{closed}\n\nи OQ-0002"
+    # Текст за номером без заметки — и в нём номера потока становятся номерами заметок; номер,
+    # что ссылается сам на себя, — как есть.
+    assert renumbered("Сделать F4", {"Q1": "OQ-0001"}, {"F4": "Ответить на Q1 и F4."}) == (
+        "Сделать «Ответить на OQ-0001 и F4»")
     # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
     assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x\\](/questions/OQ-0002)")
@@ -536,15 +543,33 @@ def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(
 
 
 def test_a_legacy_export_migrates_an_edit_where_the_council_text_had_no_numbers(root):
-    # Выгрузка до номеров заметок (в refs нет I1): «Q2» дописал человек, а текст совета номеров
-    # не имел и не изменился, — правка всё равно переходит на номера заметок. В нынешней
-    # выгрузке «Q2» в правке — слово человека, как он написал.
+    # Запись выгрузки до номеров заметок (note_numbers нет): «Q2» дописал человек, а текст
+    # совета номеров не имел и не изменился, — правка всё равно переходит на номера заметок.
+    # В нынешней записи «Q2» в правке — слово человека, как он написал.
     first, _, _, _ = export(root, edits={"idea": "Деплой требует меньше ручной работы, см. Q2."})
-    legacy = first.model_copy(update={"refs": {}})
+    assert all(note.note_numbers for note in first.notes)
+    legacy = first.model_copy(update={"notes": [note.model_copy(update={"note_numbers": False})
+                                                for note in first.notes]})
     assert by_id(draft(root, previous=legacy)[0])["IDEA-0002"].text == (
         "Деплой требует меньше ручной работы, см. OQ-0003.")
     assert by_id(draft(root, previous=first)[0])["IDEA-0002"].text == (
         "Деплой требует меньше ручной работы, см. Q2.")
+
+
+def test_a_legacy_record_kept_for_a_hand_edited_file_stays_legacy(root):
+    # Файл правили руками после выгрузки до номеров заметок: его запись остаётся прежней — и
+    # прежней по номерам, — пока правку не вернут и её не переведут.
+    first, _, _, _ = export(root, edits={"idea": "Деплой требует меньше ручной работы, см. Q2."})
+    legacy = first.model_copy(update={"notes": [note.model_copy(update={"note_numbers": False})
+                                                for note in first.notes]})
+    path = root / "ideas" / "IDEA-0002.md"
+    before = path.read_text(encoding="utf-8")
+    path.write_text(before + "Дописали руками.\n", encoding="utf-8")
+    record, _, _, _ = export(root, previous=legacy)
+    assert not by_id(record.notes)["IDEA-0002"].note_numbers
+    path.write_text(before, encoding="utf-8")
+    assert by_id(draft(root, previous=record)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. OQ-0003.")
 
 
 def test_a_fragment_offered_to_two_questions_is_named_by_each_ones_own_option(root):

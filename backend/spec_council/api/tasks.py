@@ -367,8 +367,7 @@ def write_tasks(council_id: str, edit: WriteNotes, store: StoreDep, notes_of: No
 
         def keep(exported: list[ExportedNote]) -> None:
             record = TasksExport(run=draft.run, plan=draft.plan, language=draft.language,
-                                 root=str(issues), notes=exported, numbers=draft.numbers,
-                                 note_numbers=True)
+                                 root=str(issues), notes=exported, numbers=draft.numbers)
             saved.append(store.update_council(council_id, {"tasks_export": record}))
 
         # Название задачи человек поправил в её файле — так её зовут и строки других файлов.

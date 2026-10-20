@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from itertools import accumulate, groupby
 from pathlib import Path
+from typing import NamedTuple
 
 from markdown_it import MarkdownIt, rules_inline
 from markdown_it.rules_inline import StateInline
@@ -535,17 +536,34 @@ def placed(content: str, rows: Sequence[str]) -> Callable[[int], int]:
 
 Marked = dict[int, list[tuple[str, int, int]]]
 Seen = dict[int, list[tuple[int, str]]]
+# Строки блока HTML в in_prose — как есть, а их теги ищет raw_elements.
+HTML = -2
 
 
-def blocks_of(text: str) -> tuple[set[int], dict[int, int], Marked, Seen]:
-    """По разбору Markdown: строки текста (с нуля), что занимают блоки кода и HTML на любой
-    глубине и определения ссылок-сносок; строки прозы (абзаца, заголовка) с номером их блока; и
-    что разбор строк нашёл в каждом блоке прозы (marking): что не трогать и видимый текст — по
-    знаку с его местом («\n» — граница). Место — от начала первой строки блока."""
+class Blocks(NamedTuple):
+    """Текст по разбору Markdown (blocks_of)."""
+
+    # Строки (с нуля), что занимают блоки кода и HTML на любой глубине и определения
+    # ссылок-сносок.
+    code: set[int]
+    # Строки прозы (абзаца, заголовка) — с номером их блока.
+    prose: dict[int, int]
+    # Что разбор строк нашёл в каждом блоке прозы (marking): что не трогать и видимый текст —
+    # по знаку с его местом («\n» — граница). Место — от начала первой строки блока.
+    marked: Marked
+    seen: Seen
+    # Из строк кода — строки блоков HTML: их теги — настоящие.
+    html: set[int]
+
+
+def blocks_of(text: str) -> Blocks:
+    """Разбор текста как Markdown: где код, где проза и что в ней (Blocks)."""
     env: dict = {}
     tokens = MARKDOWN.parse(text, env)
     lines = {n for token in tokens if token.type in BLOCKS and token.map
              for n in range(*token.map)}
+    html = {n for token in tokens if token.type == "html_block" and token.map
+            for n in range(*token.map)}
     lines |= {n for found in [*env.get("references", {}).values(), *env.get("duplicate_refs", [])]
               if found.get("map") for n in range(*found["map"])}
     rows = text.split("\n")
@@ -566,14 +584,14 @@ def blocks_of(text: str) -> tuple[set[int], dict[int, int], Marked, Seen]:
         seen[block] = [pair for start, end, visible in sorted(shown)
                        for pair in ([(place(at), token.content[at]) for at in range(start, end)]
                                     if visible else [(place(start), "\n")])]
-    return lines, prose, marked, seen
+    return Blocks(lines, prose, marked, seen, html)
 
 
 def visible_of(text: str) -> str:
     """Видимый текст прозы (blocks_of): без кода, адресов, тегов и разметки ссылок и выделения;
     блоки и строки кода — через перенос строки. В нём сочетание исходного текста — его слово:
     `Q1` в коде — не его слово, а «Cloudflare [R2](…)» — «Cloudflare R2»."""
-    return "\n".join("".join(sign for _, sign in signs) for signs in blocks_of(text)[3].values())
+    return "\n".join("".join(sign for _, sign in signs) for signs in blocks_of(text).seen.values())
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
@@ -638,7 +656,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     ссылок-сносок (их строки — по разбору Markdown); в строках прозы — что нашёл их разбор
     (marking: строки кода, теги, адреса и метки ссылок), почта (UNTOUCHED) и адреса сами по
     себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть."""
-    code, prose, marked, seen = blocks_of(text)
+    code, prose, marked, seen, html = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
     # Сочетание — его слова через пробелы в видимом тексте прозы: разметка ссылок и выделения
@@ -656,20 +674,25 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                 for found in phrases.finditer(shown) if found.end() > found.start()]
 
     def block(item: tuple[int, str]) -> int | None:
-        """Строка кода — None, прозы — номер её блока (абзаца, заголовка), прочие — -1: ссылка
-        и строка кода не выходят за свой блок, «[» абзаца над заголовком — не начало ссылки в
-        нём."""
+        """Строка блока HTML — HTML, прочего кода — None, прозы — номер её блока (абзаца,
+        заголовка), прочие — -1: ссылка и строка кода не выходят за свой блок, «[» абзаца над
+        заголовком — не начало ссылки в нём."""
+        if item[0] in html:
+            return HTML
         return None if item[0] in code else prose.get(item[0], -1)
 
     groups = [(key, "".join(row for _, row in rows))
               for key, rows in groupby(enumerate(lines), key=block)]
     starts = list(accumulate((len(part) for _, part in groups), initial=0))
     # Элемент кода HTML идёт и через пустую строку — <script> до </script>: его ищут по тегам
-    # всего текста.
-    elements = raw_elements(text, [(kind, start + begin, start + end)
-                                   for (key, _), start in zip(groups, starts, strict=False)
-                                   if key is not None
-                                   for kind, begin, end in marked.get(key, [])])
+    # всего текста, и в блоках HTML тоже: «</script>» там закрывает элемент абзаца выше.
+    tags = [(kind, start + begin, start + end)
+            for (key, _), start in zip(groups, starts, strict=False) if key not in (None, HTML)
+            for kind, begin, end in marked.get(key, [])]
+    tags += [("html", start + tag.start(), start + tag.end())
+             for (key, part), start in zip(groups, starts, strict=False) if key == HTML
+             for tag in RAW_TAG.finditer(part)]
+    elements = raw_elements(text, tags)
 
     def inline(part: str, key: int, at: int) -> str:
         # Что не трогают — может пересекаться.
@@ -690,7 +713,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         out.append(change(part[last:]))
         return "".join(out)
 
-    return "".join(part if key is None else inline(part, key, start)
+    return "".join(part if key in (None, HTML) else inline(part, key, start)
                    for (key, part), start in zip(groups, starts, strict=False))
 
 
@@ -701,7 +724,9 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
     значат. У чего заметки нет (ограничение из текста группы, находка скана), номер в скобках
     выпадает — фраза его и так пересказывает, — а посреди фразы встаёт сам текст в кавычках
     (quote). Номера заметок и незнакомые — как есть; код, адреса и метки ссылок (in_prose),
-    сочетания исходных текстов (phrases_of) и двусмысленные номера (terms_of) — тоже."""
+    сочетания исходных текстов (phrases_of) и двусмысленные номера (terms_of) — тоже. Текст за
+    номером — и сам с номерами заметок; номер в своём же тексте (и в тексте, что его назвал) — как
+    есть: ссылки по кругу не размотать."""
     numbers = {name: number for name, number in numbers.items() if name not in terms}
     texts = {name: value for name, value in texts.items() if name not in terms}
 
@@ -712,7 +737,9 @@ def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
         name = match.group(0)
         if name in numbers or name not in texts:
             return numbers.get(name, name)
-        return quote.format(" ".join(texts[name].split()).rstrip(".!"))
+        rest = {other: value for other, value in texts.items() if other != name}
+        inner = renumbered(texts[name], numbers, rest, quote, terms, phrases)
+        return quote.format(" ".join(inner.split()).rstrip(".!"))
 
     def prose(text: str) -> str:
         out: list[str] = []
@@ -845,11 +872,8 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     def renumber(part: Part, text: str) -> str:
         return renumbered(text, numbered(part), texts, words["quote"], terms, phrases)
 
-    # Выгрузка, после которой совет не помнил номер идеи (I1), — до номеров заметок.
-    legacy = previous is not None and "I1" not in previous.refs
     notes = [planned(numbered_part, ids,
-                     migrated(olds.get(part.key), numbered_part.text, partial(renumber, part),
-                              legacy),
+                     migrated(olds.get(part.key), numbered_part.text, partial(renumber, part)),
                      alias.get(part.key), shelf, reuse)
              for part in parts
              for numbered_part in [replace(part, text=renumber(part, part.text))]]
@@ -862,17 +886,17 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     return notes, vanished, skipped, numbers
 
 
-def migrated(old: ExportedNote | None, text: str, renumber: Callable[[str], str] | None,
-             legacy: bool = False) -> ExportedNote | None:
-    """Прежняя выгрузка — как её сделали бы сейчас, если совет написал бы то же (text): выгрузка
-    до номеров заметок (legacy) оставила в текстах номера потока (Q1), и правку человека
+def migrated(old: ExportedNote | None, text: str,
+             renumber: Callable[[str], str] | None) -> ExportedNote | None:
+    """Прежняя запись — как её сделали бы сейчас, если совет написал бы то же (text): запись до
+    номеров заметок (без note_numbers) хранит в текстах номера потока (Q1), и правку человека
     повторная выгрузка терять не должна. Номер потока в правке — тоже номером заметки
-    (renumber), и тогда, когда в тексте совета его не было. В нынешней выгрузке «Q1» в правке —
+    (renumber), и тогда, когда в тексте совета его не было. В нынешней записи «Q1» в правке —
     слово человека."""
     if old is None or renumber is None:
         return old
     same = old.generated == text
-    if (same and not legacy) or (not same and renumber(old.generated) != text):
+    if (same and old.note_numbers) or (not same and renumber(old.generated) != text):
         return old
     return old.model_copy(update={"generated": text, "written": renumber(old.written)})
 
@@ -962,7 +986,8 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
             exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
                                          generated=plan.generated, written=texts[plan.key],
                                          links=plan.links,
-                                         digest=digest_of(where(plan.id, plan.type))))
+                                         digest=digest_of(where(plan.id, plan.type)),
+                                         note_numbers=True))
         exported += [old.model_copy(update={"kept": True}) for old in before.values()
                      if old.id in gone and old.id not in delete]
         if keep is not None:

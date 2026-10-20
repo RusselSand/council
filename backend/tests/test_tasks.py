@@ -645,19 +645,39 @@ def test_a_legacy_task_file_keeps_its_human_edits_when_numbers_become_note_numbe
     previous = TasksExport(run="t0", language="Russian", numbers=numbers, notes=[ExportedNote(
         key=fresh.key, id=fresh.id, type="issue", generated=old,
         written=old + "\nДописал человек про Q1.\n", digest="d")])
+    assert fresh.text == fresh.generated
     [again], _, _ = drafted_tasks(plan, {}, shelf, previous, words, "Russian", (),
                                   {"OUT-0001": names})
     assert again.text == fresh.generated + "\nДописал человек про OQ-0001.\n"
-    # Номер потока — только в правке, текст совета тот же: в прежней выгрузке и он — номер
+    # Номер потока — только в правке, текст совета тот же: в прежней записи и он — номер
     # потока, а в нынешней (note_numbers) — слово человека.
-    plain = TasksExport(run="t0", language="Russian", numbers=numbers, notes=[ExportedNote(
-        key=fresh.key, id=fresh.id, type="issue", generated=fresh.generated,
-        written=fresh.generated + "\nСм. Q1.\n", digest="d")])
-    for record, seen in ((plain, "OQ-0001"), (plain.model_copy(update={"note_numbers": True}),
-                                              "Q1")):
+    for numbered, seen in ((False, "OQ-0001"), (True, "Q1")):
+        record = TasksExport(run="t0", language="Russian", numbers=numbers, notes=[ExportedNote(
+            key=fresh.key, id=fresh.id, type="issue", generated=fresh.generated,
+            written=fresh.generated + "\nСм. Q1.\n", digest="d", note_numbers=numbered)])
         [again], _, _ = drafted_tasks(plan, {}, shelf, record, words, "Russian", (),
                                       {"OUT-0001": names})
         assert again.text == fresh.generated + f"\nСм. {seen}.\n"
+
+
+def test_a_multiline_task_item_is_flattened_before_its_numbers_are_checked(tmp_path):
+    # Пункт списка ляжет одной строкой: «Пример:\n\n    Q1» в нём — уже не блок кода, а проза,
+    # и номер потока в нём — номер заметки; удалённая заметка так проверку не обходит.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов"),
+                       "OQ-0001": Note("OQ-0001", "open_question", "Где хранить кэш?")})
+    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001"}, {})
+    shelf = Shelf(catalog, tmp_path, tmp_path / "issues")
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Пример:\n\n    Q1"])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, shelf, None, words_for("Russian"), "Russian", (),
+                                 {"OUT-0001": names})
+    assert "- Пример: OQ-0001" in file.text
+    dead = plan.model_copy(update={"issues": [issue.model_copy(
+        update={"scope": ["Пример:\n\n    OQ-0099"]})]})
+    with pytest.raises(NotesError, match="OQ-0099"):
+        drafted_tasks(dead, {}, shelf, None, words_for("Russian"), "Russian", (),
+                      {"OUT-0001": names})
 
 
 def test_stream_mappings_survive_another_spelling_of_the_note_number():

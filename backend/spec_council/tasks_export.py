@@ -95,9 +95,10 @@ def line(text: str) -> str:
 
 def issue_title(issue: Issue, names: Mapping[str, str],
                 renumber: Callable[[str], str] | None = None, keep: Collection[str] = ()) -> str:
-    """Название задачи, как оно ляжет и в её файл, и в строку «- ISS-…: …» задач, что ждут её."""
-    title = relabeled(issue.title, names, keep)
-    return line(renumber(title) if renumber else title)
+    """Название задачи, как оно ляжет и в её файл, и в строку «- ISS-…: …» задач, что ждут её:
+    одной строкой — и номера в ней по ней же."""
+    title = relabeled(line(issue.title), names, keep)
+    return renumber(title) if renumber else title
 
 
 def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
@@ -130,12 +131,14 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     now = issue.current_state.strip()
     section(words["entry"], (f"- {line(item)}" for item in issue.main_entry_points))
     section(words["now"], [named(now)] if now else [])
-    section(words["scope"], (f"- {line(named(item))}" for item in issue.scope))
+    # Пункт ляжет одной строкой — номера в нём ищут уже в ней: «Пример:\n\n    Q1» станет
+    # прозой, а не блоком кода.
+    section(words["scope"], (f"- {named(line(item))}" for item in issue.scope))
     section(words["outcomes"], [f"- {outcome[0]}: {line(outcome[1])}"])
     section(words["decisions"], (f"- {name}: {line(text)}" for name, text in adrs))
     section(words["keep"], (f"- {line(text)}" for text in keep))
     section(words["risks"], (f"- {line(text)}" for text in risks))
-    section(words["open"], (f"- {line(named(item))}" for item in issue.open_questions))
+    section(words["open"], (f"- {named(line(item))}" for item in issue.open_questions))
     section(words["after"], (f"- {name}: {line(text)}" for name, text in after))
     lines += ["", words["commit"].format(id=number)]
     return "\n".join(lines)
@@ -143,9 +146,9 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
 
 def written_by_plan(issue: Issue) -> list[str]:
     """Что в задаче написала модель плана: название, история, что там сейчас, что сделать,
-    что неясно."""
-    return [issue.title, issue.user_story, issue.current_state, *issue.scope,
-            *issue.open_questions]
+    что неясно, — как это ляжет в файл: название и пункты списков — одной строкой."""
+    return [line(issue.title), issue.user_story, issue.current_state,
+            *map(line, issue.scope), *map(line, issue.open_questions)]
 
 
 def numbers_in_prose(text: str, keep: Collection[str] = ()) -> list[str]:
@@ -182,7 +185,6 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     by_issue = {number.issue_id: number for number in numbers}
     filed = {note.id: note for note in previous.notes} if previous else {}
     reuse = previous is not None and previous.language == language
-    legacy = previous is not None and not previous.note_numbers
     # Итог и решения задачи — заметки каталога: какую с тех пор удалили, на ту файл задачи
     # сослался бы впустую.
     gone = sorted({name for issue in plan.issues for name in (issue.outcome_id, *issue.adr_ids)
@@ -237,8 +239,8 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
-                             migrated(old, text, renumber(issue), legacy),
-                             old.key if old else None, shelf, reuse))
+                             migrated(old, text, renumber(issue)), old.key if old else None,
+                             shelf, reuse))
     current = {number.id for number in numbers}
     # Файлы, что останутся в папке как есть: не из плана или правленные руками. Исчезнувшую
     # задачу, на которую они ссылаются, удалить нельзя.
@@ -310,7 +312,7 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     узнать — текст как есть."""
     lines = text.split("\n")
     # Пример кода в задаче — не её разделы: «##» в нём не заголовок, а строка — не пункт.
-    code, *_ = blocks_of(text)
+    code = blocks_of(text).code
     heads = [n for n, row in enumerate(lines) if n not in code and SECTION.match(row)]
     if not heads:
         return text
