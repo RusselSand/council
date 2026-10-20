@@ -209,7 +209,7 @@ describe('светофор', () => {
   it('документация: выгружена к утверждённым итогам в нынешний каталог — поток готов', () => {
     const ready = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                          assembled('done', [result()]), true)
-    const written = { ...ready, notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: { O1: 'OUT-0001' } } }
+    const written = { ...ready, notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: { I1: 'IDEA-0001', O1: 'OUT-0001' } } }
     expect(streamLight(written, NOTES)).toBe('done')
     expect(streamLight({ ...written, notes: { ...written.notes, outcomes: 'o0' } }, NOTES)).toBe('yours')   // к прежним итогам
     expect(chainLight({ ...ready, notes_draft: { state: 'running', run: 'n2', outcomes: 'o1', language: 'English', root: ROOT,
@@ -232,7 +232,7 @@ describe('светофор', () => {
   it('задачи: ждут потоков; строит ИИ, упал; построен — ход за вами, пока не выгружен; устарел — ваш ход', () => {
     const ready = stream(null, true, asked('done'), true, offered('done'), true, checked('done'), true,
                          assembled('done', [result()]), true)
-    const written = { ...ready, notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: { O1: 'OUT-0001' } } }
+    const written = { ...ready, notes: { run: 'n1', outcomes: 'o1', language: 'Russian', root: '/notes', notes: [], refs: { I1: 'IDEA-0001', O1: 'OUT-0001' } } }
     const plan = (state: TaskPlan['state'], basis: Record<string, string> = { A: 'o1:n1', research: 'skipped:|skipped:' }): TaskPlan => ({
       state, run: 't1', basis, code: false, sources: [], steps: [], issues: [], uncovered: [], skipped: [], error: null })
     const on = (more: Partial<Council>, s: Stream = written) =>
@@ -241,6 +241,9 @@ describe('светофор', () => {
     expect(stageLight(on({}), 'tasks', NOTES)).toBe('yours')
     // Выгружен, когда совет ещё не помнил номера заметок, — выгрузить заново: план ещё ждёт.
     expect(stageLight(on({}, { ...written, notes: { ...written.notes, refs: {} } }), 'tasks', NOTES)).toBe('idle')
+    // Или помнил только у решений и итогов: вопросы и варианты в текстах задач остались бы без номеров заметок.
+    expect(stageLight(on({}, { ...written, notes: { ...written.notes, refs: { O1: 'OUT-0001' } } }), 'tasks', NOTES))
+      .toBe('idle')
     expect([plan('running'), plan('failed'), plan('done')].map(p => stageLight(on({ tasks: p }), 'tasks', NOTES)))
       .toEqual(['running', 'failed', 'yours'])
     expect(attention(on({ tasks: plan('failed') }), NOTES)).toEqual([

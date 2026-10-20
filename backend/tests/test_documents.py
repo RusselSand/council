@@ -108,6 +108,26 @@ def test_an_approved_stream_is_drafted_then_written_as_linked_notes(agents, note
     assert again.notes[0].text == "Полезные треды не теряются."    # правка человека осталась
 
 
+def test_catalog_notes_the_group_text_cites_are_kept_from_draft_to_write(agents, notes_dir):
+    # Текст группы называет IDEA-0099, что есть в каталоге: черновик это запоминает, и запись о
+    # выгрузке тоже — номер в нём ссылка, а не слово, и после того, как заметку удалят.
+    council_id = approved_c()
+    council = get_store().get_council(council_id)
+    group = next(g for g in council.structure.groups if g.id == "C")
+    fragments = [f.model_copy(update={"text": f.text + " Как в IDEA-0099 validation."})
+                 if f.id == group.fragment_ids[0] else f for f in council.slicing.fragments]
+    get_store().update_council(council_id, {"slicing": council.slicing.model_copy(
+        update={"fragments": fragments})})
+    cited = Note("IDEA-0099", "idea", "Прошлая идея.")
+    path = path_of(notes_dir, cited)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered(cited), encoding="utf-8")
+    assert drafts(council_id).status_code == 202
+    assert streams_of(council_id)["C"].notes_draft.cited == ["IDEA-0099"]
+    assert writes(council_id).status_code == 200
+    assert streams_of(council_id)["C"].notes.cited == ["IDEA-0099"]
+
+
 def test_marking_what_an_own_option_refines_leaves_the_export_stale(agents, notes_dir):
     council_id = grouped()
     confirm(council_id)

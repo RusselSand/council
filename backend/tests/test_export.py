@@ -7,10 +7,14 @@ import pytest
 from spec_council.export import WORDS as LANGUAGES
 from spec_council.export import (
     Shelf,
+    cited_in,
     drafted,
     export_in,
     graph_problems,
     outcome_text,
+    phrases_of,
+    renumbered,
+    stream_texts,
     translations,
     untranslated,
     words_for,
@@ -28,6 +32,7 @@ from spec_council.models import (
     OpenQuestion,
     Outcome,
     OutcomeDiscovery,
+    ProjectDecision,
     Proposal,
     ProposalDiscovery,
     QuestionOptions,
@@ -106,11 +111,12 @@ def refs_of(root, stream=STREAM, previous=None):
 
 
 def export(root, stream=STREAM, previous=None, edits=None, delete=()):
-    notes, vanished, skipped = draft(root, stream, previous)
+    notes, vanished, skipped, refs = drafted(stream, FRAGMENTS, shelf(root), previous, WORDS,
+                                             "Russian")
     graph_problems(Catalog.load(root), notes, vanished, edits or {}, delete)
     done = written(notes, vanished, edits or {}, delete, shelf(root), previous)
     return NotesExport(run="r", outcomes=stream.outcomes.run, language="Russian",
-                       root=str(root), notes=done), notes, vanished, skipped
+                       root=str(root), notes=done, refs=refs), notes, vanished, skipped
 
 
 def by_id(notes):
@@ -129,10 +135,13 @@ def test_a_stream_becomes_linked_notes_with_numbers_after_the_catalog(root):
         ("ADR-0002", "adr", "create"), ("ADR-0003", "adr", "create"),
         ("OUT-0002", "outcome", "create")]
     note = by_id(notes)
-    # Имена совета — номерами заметок: так план задач называет итоги и решения.
-    assert {name: ref for name, ref in refs_of(root).items()
-            if name.startswith(("O", "ADR-"))} == {
-        "ADR-1": "ADR-0002", "ADR-3": "ADR-0003", "O1": "OUT-0002"}
+    # Имена совета — номерами заметок: так план задач называет итоги и решения, а тексты задач —
+    # и всё остальное.
+    assert refs_of(root) == {
+        "I1": "IDEA-0002", "Q1": "OQ-0002", "F5": "OQ-0002", "Q2": "OQ-0003", "Q3": "OQ-0004",
+        "F3": "PRO-0002",
+        "P1": "PRO-0003", "P2": "PRO-0004", "P3": "PRO-0005", "ADR-1": "ADR-0002",
+        "ADR-3": "ADR-0003", "O1": "OUT-0002"}
     assert note["OQ-0002"].text == "Что запускает деплой?"            # формулировка заметки
     assert note["OQ-0002"].links == ["IDEA-0002"]
     assert note["OQ-0004"].links == ["ADR-0001"]                       # пересматривает прошлое
@@ -249,6 +258,458 @@ def test_a_refinement_of_an_option_from_the_group_text_takes_its_place_too(root)
     notes, _, _ = draft(root, stream)
     assert proposals_of(notes, "Что запускает деплой?") == [
         own, FOUND.options[0].proposals[0].text]
+
+
+LIMIT = LabeledFragment(id=4, text="Секреты не уходят в репозиторий.", label="constraint",
+                        reason="", council_label="constraint")
+
+
+def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
+    stream = STREAM.model_copy(update={
+        "decisions": [
+            DECIDED[0].model_copy(update={
+                "rationale": "рутина не требует ручной работы (F4), а тег (P1) нужен лишь по Q2"}),
+            DECIDED[1],
+            DECIDED[2].model_copy(update={
+                "rationale": "так велит F4, как и ADR-1 (Q2, F4), а P9 и ADR-0001 — чужие"})],
+        "outcomes": OUTCOMES.model_copy(update={"outcomes": [
+            OUTCOMES.outcomes[0].model_copy(update={
+                "behavior": "CI выкладывает сам (I1), секреты — в O2 (R7)."}),
+            *OUTCOMES.outcomes[1:]]})})
+    notes = by_id(drafted(stream, FRAGMENTS | {4: LIMIT}, shelf(root), None, WORDS, "Russian")[0])
+    # Номер с заметкой — её номером; ограничение без заметки в скобках выпадает: фраза его
+    # пересказывает, — а посреди фразы встаёт его текст. Номера заметок и незнакомые — как есть.
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что рутина не требует ручной работы, а тег "
+        "(PRO-0003) нужен лишь по OQ-0003")
+    assert notes["ADR-0003"].text == (
+        "Ручной откат остаётся, потому что так велит «Секреты не уходят в репозиторий», как и "
+        "ADR-0002 (OQ-0003), а P9 и ADR-0001 — чужие")
+    # Итог, который не выгружается, — своим названием; незнакомая находка R7 — как есть.
+    assert notes["OUT-0002"].text.splitlines()[2] == (
+        "CI выкладывает сам (IDEA-0002), секреты — в «Хранение секретов» (R7).")
+    # Код в обратных кавычках — как есть: `Q1` там — не вопрос.
+    assert renumbered("`Q1` и Q1 (`F4`)", {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "`Q1` и OQ-0002 (`F4`)")
+    # И в блоке ```…```: там пример кода или настроек.
+    fenced = "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо Q1"
+    assert renumbered(fenced, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "Пример:\n```yaml\nQ1: 1\nlimit: (F4)\n```\nпо OQ-0002")
+    assert renumbered("~~~\nQ1: 1\n~~~\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        "~~~\nQ1: 1\n~~~\nпо OQ-0002")
+    # Разделители любой длины: ``Q1`` — код, а блок ```` не закрыть тремя кавычками внутри.
+    assert renumbered("``Q1`` и Q1", {"Q1": "OQ-0002"}, {}) == "``Q1`` и OQ-0002"
+    long = "````md\n```\nQ1\n```\n````\nпо Q1"
+    assert renumbered(long, {"Q1": "OQ-0002"}, {}) == long.replace("по Q1", "по OQ-0002")
+    # Блок с отступом в четыре пробела — код; продолжение пункта списка — нет.
+    indented = "Пример:\n\n    Q1 = F4\n    F4 = Q1\n\n- по Q1\n    и Q1"
+    assert renumbered(indented, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "Пример:\n\n    Q1 = F4\n    F4 = Q1\n\n- по OQ-0002\n    и OQ-0002")
+    # Пустая строка с пробелами перед блоком — тоже пустая; строка кода — и через перенос.
+    assert renumbered("текст\n \n    Q1\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        "текст\n \n    Q1\n\nпо OQ-0002")
+    assert renumbered("`first\nQ1` и Q1", {"Q1": "OQ-0002"}, {}) == "`first\nQ1` и OQ-0002"
+    # Блоки кода и HTML на любой глубине: в цитате, в пункте списка.
+    nested = "> ~~~yaml\n> Q1: 1\n> ~~~\n\n- пункт\n\n      Q1 = 2\n\n<pre>\nQ1\n</pre>\n\nпо Q1"
+    assert renumbered(nested, {"Q1": "OQ-0002"}, {}) == nested.replace("по Q1", "по OQ-0002")
+    # Тег HTML с атрибутами — не текст, а то, что между тегами, — текст.
+    assert renumbered('<a href="/questions/Q1">Q1</a> <!-- Q1 --> и Q1', {"Q1": "OQ-0002"},
+                      {}) == '<a href="/questions/Q1">OQ-0002</a> <!-- Q1 --> и OQ-0002'
+    # Определение ссылки-сноски — по разбору Markdown — как есть целиком, а похожая строка
+    # посреди абзаца — не определение: там Q1 — номер.
+    assert renumbered("[вопрос Q1][q]\n\n[q]: /questions/Q1 \"Q1\"", {"Q1": "OQ-0002"}, {}) == (
+        "[вопрос OQ-0002][q]\n\n[q]: /questions/Q1 \"Q1\"")
+    assert renumbered("Абзац\n[Q1]: /questions/Q1\n\nсм. [Q1]", {"Q1": "OQ-0002"}, {}) == (
+        "Абзац\n[OQ-0002]: /questions/OQ-0002\n\nсм. [OQ-0002]")
+    # \[x](…) — текст, а не ссылка: «адрес» в нём — текст; голый адрес — со скобками любой
+    # вложенности; повторное определение сноски — тоже определение.
+    assert renumbered("\\[пример](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "\\[пример](/questions/OQ-0002)")
+    bare = "https://host/a((((((Q1))))))"
+    assert renumbered(f"{bare} и Q1.", {"Q1": "OQ-0002"}, {}) == f"{bare} и OQ-0002."
+    twice = "[Q1]: /a/Q1\n\n[q1]: /backup/Q1"
+    assert renumbered(f"{twice}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{twice}\n\nпо OQ-0002"
+    # «\» перед пробелом — не экранирование: [x](foo\ Q1) — не ссылка; [Q1](не адрес) — не
+    # встроенная ссылка, и [Q1] — сноска.
+    assert renumbered("[x](foo\\ Q1)", {"Q1": "OQ-0002"}, {}) == "[x](foo\\ OQ-0002)"
+    shortcut = "[Q1](не адрес)\n\n[Q1]: /q/1"
+    assert renumbered(f"{shortcut}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{shortcut}\n\nи OQ-0002"
+    # «[» в атрибуте тега — не начало ссылки.
+    tagged = '<span title="[">x</span> ](/questions/Q1)'
+    assert renumbered(tagged, {"Q1": "OQ-0002"}, {}) == tagged.replace("/Q1", "/OQ-0002")
+    # «[» из прошлого абзаца — не начало ссылки, и пустая строка внутри «](…)» — тоже не ссылка.
+    assert renumbered("[x\n\n](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x\n\n](/questions/OQ-0002)")
+    assert renumbered("[x](\n\n/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x](\n\n/questions/OQ-0002)")
+    # «[» и «<code>» в строке кода — не начало ссылки и не элемент. А незакрытый элемент кода —
+    # код до конца текста, как его прочтёт браузер.
+    assert renumbered("`[x` ](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "`[x` ](/questions/OQ-0002)")
+    assert renumbered("Use `<code>` then Q1", {"Q1": "OQ-0002"}, {}) == (
+        "Use `<code>` then OQ-0002")
+    unclosed = "Q1 до <script>const id = 'Q1'\n\nи Q1"
+    assert renumbered(unclosed, {"Q1": "OQ-0002"}, {}) == unclosed.replace("Q1 до", "OQ-0002 до")
+    # Узел IPv6 в адресе — часть адреса; вложенные элементы кода — одно целое.
+    ipv6 = "http://[::1]/Q1"
+    assert renumbered(f"{ipv6} и Q1", {"Q1": "OQ-0002"}, {}) == f"{ipv6} и OQ-0002"
+    nested_code = "<code>outer <code>Q1</code> Q1</code>"
+    assert renumbered(f"{nested_code} и Q1", {"Q1": "OQ-0002"}, {}) == f"{nested_code} и OQ-0002"
+    # Адрес в строке кода кончается с ней; «[» абзаца над заголовком — не начало ссылки в нём;
+    # в <script> тег — текст до </script>.
+    assert renumbered("`https://host`/Q1", {"Q1": "OQ-0002"}, {}) == "`https://host`/OQ-0002"
+    assert renumbered("[x\n# ](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x\n# ](/questions/OQ-0002)")
+    script = '<script>const tag = "<script>"; Q1</script>'
+    assert renumbered(f"До {script} и Q1", {"Q1": "OQ-0002"}, {}) == f"До {script} и OQ-0002"
+    # Что ссылка, а что нет, — по разбору CommonMark: внешняя ссылка вокруг готовой — не
+    # ссылка; «]» в строке кода — не конец текста ссылки; <code> в атрибуте — не тег; пустая
+    # строка в заголовке ссылки и заголовок без пробела перед ним — не ссылка; перенос CRLF
+    # вокруг адреса — ссылка.
+    for literal in ("[outer [inner](/ok)](/questions/Q1)", "[x `](/inside`Q1)",
+                    'До <span title="<code>">x</span> Q1 </code>', '[x](/ok "title\n\nQ1")',
+                    '[x](</questions/Q1>"Q1")'):
+        assert renumbered(literal, {"Q1": "OQ-0002"}, {}) == literal.replace("Q1", "OQ-0002")
+    crlf = "[x](\r\n/questions/Q1\r\n)"
+    assert renumbered(f"{crlf} и Q1", {"Q1": "OQ-0002"}, {}) == f"{crlf} и OQ-0002"
+    # Что разбор нашёл в подписи картинки, — на своём месте: «`Q1`» в ней — код, а Q1 перед
+    # картинкой — номер.
+    assert renumbered("Q1 ![`Q1` и Q1](/x)", {"Q1": "OQ-0002"}, {}) == (
+        "OQ-0002 ![`Q1` и OQ-0002](/x)")
+    # <script> — до </script>, и через пустую строку.
+    across = "До <script>const q = 'Q1';\n\nuse('Q1');</script>"
+    assert renumbered(f"{across} и Q1", {"Q1": "OQ-0002"}, {}) == f"{across} и OQ-0002"
+    # «</script>» после пустой строки — блок HTML, и он закрывает элемент абзаца выше; «<code>» в
+    # комментарии блока HTML — не тег.
+    closed = "До <script>const q = 'Q1';\n\n</script>"
+    assert renumbered(f"{closed}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{closed}\n\nи OQ-0002"
+    assert renumbered("<!-- <code> -->\n\nВидно Q1 </code>", {"Q1": "OQ-0002"}, {}) == (
+        "<!-- <code> -->\n\nВидно OQ-0002 </code>")
+    # Скобки с одними номерами — и с разметкой вокруг номера, и ссылкой: без заметки выпадают
+    # целиком, с заметкой — номер заметки на месте.
+    assert renumbered("В CI (**F4**). Так ([F4](/details)), и (*Q1*)", {"Q1": "OQ-0002"},
+                      {"F4": LIMIT.text}) == "В CI. Так, и (*OQ-0002*)"
+    assert renumbered("В CI (<strong>F4</strong>). И (<b>Q1</b>)", {"Q1": "OQ-0002"},
+                      {"F4": LIMIT.text}) == "В CI. И (<b>OQ-0002</b>)"
+    # Текст за номером без заметки — и в нём номера потока становятся номерами заметок; номер,
+    # что ссылается сам на себя, — как есть.
+    assert renumbered("Сделать F4", {"Q1": "OQ-0001"}, {"F4": "Ответить на Q1 и F4."}) == (
+        "Сделать «Ответить на OQ-0001 и F4»")
+    # [x\](…) — «]» экранирована, ссылки нет: Q1 — номер.
+    assert renumbered("[x\\](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
+        "[x\\](/questions/OQ-0002)")
+    # Скобки в адресе ссылки — любой вложенности.
+    deep_link = "[x](https://host/a((((((Q1)))))))"
+    assert renumbered(f"{deep_link} и Q1", {"Q1": "OQ-0002"}, {}) == f"{deep_link} и OQ-0002"
+    # Вторая метка полной ссылки — сноска, хоть за ней и скобка.
+    full = "[текст][Q1](пояснение)\n\n[Q1]: /questions/1"
+    assert renumbered(full, {"Q1": "OQ-0002"}, {}) == full
+    # \\[Q1] — экранирован сам «\», а [Q1] — снова ссылка на сноску; адрес в <…> — и с «\>».
+    assert renumbered("см. \\\\[Q1] и Q1\n\n[Q1]: /q/1", {"Q1": "OQ-0002"}, {}) == (
+        "см. \\\\[Q1] и OQ-0002\n\n[Q1]: /q/1")
+    angled = "[x](</docs/a\\>/Q1>)"
+    assert renumbered(f"{angled} и Q1", {"Q1": "OQ-0002"}, {}) == f"{angled} и OQ-0002"
+    # Экранированная скобка в адресе — часть адреса; определение сноски — и в продолжении
+    # вложенного пункта списка.
+    escaped = "[x](https://host/a\\(/Q1)"
+    assert renumbered(f"{escaped} и Q1", {"Q1": "OQ-0002"}, {}) == f"{escaped} и OQ-0002"
+    listed = "- outer\n  - inner\n\n    [Q1]: /questions/Q1\n\n[t][Q1] и Q1"
+    assert renumbered(listed, {"Q1": "OQ-0002"}, {}) == listed.replace("и Q1", "и OQ-0002")
+    # Определение сноски — и в цитате, и в пункте списка.
+    nested = "> [вопрос][Q1]\n>\n> [Q1]: /questions/Q1\n\n- [Q2]: /q/Q2\n\nпо Q1"
+    assert renumbered(nested, {"Q1": "OQ-0002", "Q2": "OQ-0003"}, {}) == nested.replace(
+        "по Q1", "по OQ-0002")
+    # Адрес сноски — и на следующей строке; инструкция, CDATA и объявление HTML — не текст.
+    wrapped = "[q]:\n  /questions/Q1\n\nтекст <?check Q1?> <![CDATA[Q1]]> <!DOCTYPE Q1>"
+    assert renumbered(f"{wrapped} и Q1", {"Q1": "OQ-0002"}, {}) == f"{wrapped} и OQ-0002"
+    # Метка сноски — как в CommonMark, без регистра и лишних пробелов; заголовок ссылки — и с
+    # экранированной кавычкой.
+    spaced = "[вопрос][Q1 ref] и [q1\nREF]\n\n[Q1  ref]: /questions/1"
+    assert renumbered(f"{spaced}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == f"{spaced}\n\nпо OQ-0002"
+    titled = '[x](/questions/Q1 "say \\"hi\\"")'
+    assert renumbered(f"{titled} и Q1", {"Q1": "OQ-0002"}, {}) == f"{titled} и OQ-0002"
+    # «R2-D2» — одно слово, а не две находки; \[Q1] — текст, а не ссылка на сноску; строка в
+    # многострочном коде — не определение сноски.
+    assert renumbered("Робот R2-D2 и R2", {}, {"R2": "Находка", "D2": "Экран"}) == (
+        "Робот R2-D2 и «Находка»")
+    assert renumbered("см. \\[Q1] и [Q1]\n\n[Q1]: /questions/1", {"Q1": "OQ-0002"}, {}) == (
+        "см. \\[OQ-0002] и [Q1]\n\n[Q1]: /questions/1")
+    assert renumbered("`пример\n[Q1]: /x` и см. [Q1]", {"Q1": "OQ-0002"}, {}) == (
+        "`пример\n[Q1]: /x` и см. [OQ-0002]")
+    # Метка со скобкой, экранированной «\»: и определение, и ссылка на него — как есть.
+    escaped_label = "[текст][q1\\]]\n\n[Q1\\]]: /questions/1"
+    assert renumbered(f"{escaped_label}\n\nпо Q1", {"Q1": "OQ-0002"}, {}) == (
+        f"{escaped_label}\n\nпо OQ-0002")
+    # [Q1](…) — встроенная ссылка, а не сноска Q1: её текст — номер заметки.
+    inline = "[Q1](/docs) и [Q1]\n\n[Q1]: /questions/1"
+    assert renumbered(inline, {"Q1": "OQ-0002"}, {}) == inline.replace("[Q1](", "[OQ-0002](")
+    # Определение в блоке кода — пример, а не определение: [Q1] в тексте — номер.
+    assert renumbered("```\n[Q1]: /x\n```\n\nсм. [Q1]", {"Q1": "OQ-0002"}, {}) == (
+        "```\n[Q1]: /x\n```\n\nсм. [OQ-0002]")
+    # Метка сноски — не текст ни в определении, ни там, где ссылкой пользуются.
+    assert renumbered("[вопрос][Q1], [q1] и Q1\n\n[Q1]: /questions/1", {"Q1": "OQ-0002"},
+                      {}) == "[вопрос][Q1], [q1] и OQ-0002\n\n[Q1]: /questions/1"
+    # Заголовок ссылки — в любых кавычках CommonMark или в скобках; адрес — и в <…>.
+    for link in ("[x](/questions/Q1 'Q1')", "[x](/questions/Q1 (Q1))", "[x](</questions/Q1>)",
+                 '[x]( /questions/Q1 "Q1" )'):
+        assert renumbered(f"{link} и Q1", {"Q1": "OQ-0002"}, {}) == f"{link} и OQ-0002"
+    # Код в HTML — целиком, а обычный текст между тегами — текст.
+    raw = "<code>Q1</code> <PRE class=\"x\">Q1\nF4</pre> <b>Q1</b>"
+    assert renumbered(raw, {"Q1": "OQ-0002"}, {"F4": LIMIT.text}) == (
+        "<code>Q1</code> <PRE class=\"x\">Q1\nF4</pre> <b>OQ-0002</b>")
+    # Атрибут тега в кавычках — целиком, и с «>» внутри.
+    tag = "<a title=\"x > Q1\" data-q='Q1' hidden>"
+    assert renumbered(f"{tag}Q1</a>", {"Q1": "OQ-0002"}, {}) == f"{tag}OQ-0002</a>"
+    # Скобки в адресе — и вложенные; почта — и в <…>, и сама по себе.
+    deep = "[x](https://host/a_(b_(c))/Q1) <foo.Q1@example.com> foo.Q1@example.com"
+    assert renumbered(f"{deep} и Q1", {"Q1": "OQ-0002"}, {}) == f"{deep} и OQ-0002"
+    # Адрес — целиком, и со скобками внутри.
+    assert renumbered("[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 Q1",
+                      {"Q1": "OQ-0002"}, {}) == (
+        "[x](https://host/a_(b)/Q1) https://host/a_(b)/Q1 OQ-0002")
+    # Адрес ссылки — не текст: подпись получает номер заметки, адрес остаётся.
+    assert renumbered("[вопрос Q1](https://tracker.local/Q1), см. https://x.local/Q1",
+                      {"Q1": "OQ-0002"}, {}) == (
+        "[вопрос OQ-0002](https://tracker.local/Q1), см. https://x.local/Q1")
+
+
+def test_a_term_of_the_approved_idea_stays_in_its_note(root):
+    # Идею написал человек раньше, чем у потока появились номера: «P1 incidents» в ней — слово.
+    stream = STREAM.model_copy(update={"idea": StreamIdea(text="Разбирать P1 incidents быстрее.",
+                                                         by="human")})
+    assert by_id(draft(root, stream)[0])["IDEA-0002"].text == "Разбирать P1 incidents быстрее."
+
+
+def test_an_adr_number_a_past_decision_shares_stays_as_it_is(root):
+    # Решение проекта ADR-0001, отобранное для потока, каталог зовёт и «ADR-1»: «ADR-1» в тексте —
+    # не обязательно первое решение потока, и номером его заметки оно не становится. И слова из
+    # текста этого решения («P1 incidents») — термины, хоть в потоке и есть свой P1.
+    stream = STREAM.model_copy(update={
+        "project_decisions": [ProjectDecision(adr_id="ADR-0001",
+                                              decision="P1 incidents разбирают первыми")],
+        "decisions": [*DECIDED[:2], DECIDED[2].model_copy(update={
+            "rationale": "так велит ADR-1: P1 incidents — первыми, а Q2 открыт"})]})
+    notes = by_id(draft(root, stream)[0])
+    assert notes["ADR-0003"].text == (
+        "Ручной откат остаётся, потому что так велит ADR-1: P1 incidents — первыми, а OQ-0003 "
+        "открыт")
+
+
+def test_a_question_from_the_group_text_is_named_by_its_fragment_too_and_terms_stay(root):
+    # «F1 score» — слово из текста группы: номером фрагмента F1 оно не становится.
+    term = LabeledFragment(id=1, text="Деплой ускоряет F1 score команды.", label="idea",
+                           reason="", council_label="idea")
+    stream = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"rationale": "это ответ на F5 (F5), и F1 score растёт"}),
+        *DECIDED[1:]]})
+    notes = by_id(drafted(stream, FRAGMENTS | {1: term}, shelf(root), None, WORDS, "Russian")[0])
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что это ответ на OQ-0002 (OQ-0002), и F1 score "
+        "растёт")
+
+
+def test_a_source_phrase_stays_but_the_same_number_elsewhere_is_a_reference(root):
+    # «P1 incidents» — слово текста группы, а «выбрать P1» в обосновании — вариант P1.
+    term = LabeledFragment(id=1, text="Разбирать P1 incidents первыми.", label="idea",
+                           reason="", council_label="idea")
+    stream = STREAM.model_copy(update={"decisions": [
+        DECIDED[0].model_copy(update={"rationale": "лучше выбрать P1 для Q2, а P1 incidents — "
+                                                   "первыми"}),
+        *DECIDED[1:]]})
+    notes = by_id(drafted(stream, FRAGMENTS | {1: term}, shelf(root), None, WORDS, "Russian")[0])
+    assert notes["ADR-0002"].text == (
+        "Деплой запускает CI после merge, потому что лучше выбрать PRO-0003 для OQ-0003, а "
+        "P1 incidents — первыми")
+
+
+def test_a_source_phrase_is_found_and_kept_through_markup():
+    # «Cloudflare [**R2**](…) storage»: сочетание — по видимому тексту, без разметки ссылки и
+    # выделения, и узнаётся в тексте и с ней, и без. В строке кода слово — не сосед.
+    fragment = LabeledFragment(id=1, text="Храним в Cloudflare [**R2**](https://r2.example) "
+                                          "storage, а `code` R3 — нет.", label="idea",
+                               reason="", council_label="idea")
+    phrases = phrases_of(STREAM, {1: fragment})
+    assert {"Cloudflare R2", "R2 storage"} <= phrases
+    assert not any(phrase.startswith("code") for phrase in phrases)
+    # Мягкий перенос строки — пробел, а жёсткий («  » в конце строки) — граница; текст блока
+    # HTML — тоже видимый текст, а код в нём (<pre>) — нет.
+    wrapped = LabeledFragment(id=3, text="Храним в Cloudflare\nR4, а R5  \nstorage.\n\n"
+                                         "<div>Храним в Cloudflare R6</div>\n\n<pre>R7 x</pre>",
+                              label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {3: wrapped})
+    assert {"Cloudflare R4", "Cloudflare R6"} <= found
+    assert not any(phrase in found for phrase in ("R5 storage", "R7 x"))
+    # Элемент кода в строке — тоже не видимый текст: «<code>R8 cache</code>» — не сочетание.
+    inline = LabeledFragment(id=4, text="Ключ <code>R8 cache</code> и R9 storage.",
+                             label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {4: inline})
+    assert "R9 storage" in found and "R8 cache" not in found
+    # Элемент кода в блоке HTML — граница, хоть его тег и разобран раньше; неразрывный пробел
+    # (и любой пробел Юникода) — пробел.
+    nbsp = chr(0xA0)
+    split = LabeledFragment(id=5, text="<div>Cloudflare</div><code>x</code><div> R10</div>\n\n"
+                                       f"Храним в Cloudflare{nbsp}R11 storage.",
+                            label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {5: split})
+    assert "Cloudflare R10" not in found and "Cloudflare R11" in found
+    # Тег переноса строки и блочный тег — граница, хоть за ними и мягкий перенос.
+    broken = LabeledFragment(id=6, text="Cloudflare<br>\nR12 storage, Cloudflare</p>R13 x.",
+                             label="idea", reason="", council_label="idea")
+    found_broken = phrases_of(STREAM, {6: broken})
+    assert "R12 storage" in found_broken
+    assert not any(phrase in found_broken for phrase in ("Cloudflare R12", "Cloudflare R13"))
+    # Любой блочный элемент CommonMark — граница, и <address> тоже.
+    blocks = LabeledFragment(id=7, text="<address>Cloudflare</address><address> R14</address>",
+                             label="idea", reason="", council_label="idea")
+    assert "Cloudflare R14" not in phrases_of(STREAM, {7: blocks})
+    # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
+    spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
+                             reason="", council_label="idea")
+    assert "Cloudflare R3" in phrases_of(STREAM, {2: spaced})
+    assert renumbered("Cloudflare&nbsp;R3 и R3", {"R3": "OQ-0009"}, {},
+                      phrases={"Cloudflare R3"}) == "Cloudflare&nbsp;R3 и OQ-0009"
+    text = "Cloudflare [R2](https://x), *R2* storage, <b>R2</b> storage и R2"
+    assert renumbered(text, {"R2": "OQ-0009"}, {}, phrases=phrases) == (
+        text[:-2] + "OQ-0009")
+    assert renumbered(f"Cloudflare{nbsp}R11 и R11", {"R11": "OQ-0009"}, {},
+                      phrases=found) == f"Cloudflare{nbsp}R11 и OQ-0009"
+
+
+def test_catalog_notes_the_original_sources_cite_are_references():
+    # Каталог старше совета: «ADR-0042 validation» в тексте группы при ADR-0042 в каталоге —
+    # ссылка, а не слово; «ADR-9999 fixture», которого в каталоге не было, — слово.
+    fragment = LabeledFragment(id=1, text="Следовать ADR-0042 validation, ADR-9999 fixture.",
+                               label="idea", reason="", council_label="idea")
+    assert cited_in(STREAM, {1: fragment}, {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+    # Прошлая выгрузка запомнила ADR-0042, а заметку с тех пор удалили: номер всё ещё ссылка,
+    # пока его называет текст; ADR-0077 текст уже не называет — его нет.
+    assert cited_in(STREAM, {1: fragment}, {"OQ-0001"}, ["ADR-0042", "ADR-0077"]) == [
+        "ADR-0042"]
+    phrases = phrases_of(STREAM, {1: fragment}, cited=["ADR-0042"])
+    assert "ADR-9999 fixture" in phrases
+    assert not any("ADR-0042" in phrase for phrase in phrases)
+
+
+def test_visible_text_of_an_html_block_is_renumbered():
+    # Текст в блоке HTML — проза: номер потока в нём — номер заметки; теги, комментарии и
+    # элементы кода — как есть.
+    block = "<div class=\"Q1\">Ответ на Q1 <!-- Q1 --> <code>Q1</code></div>"
+    assert renumbered(f"{block}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == (
+        "<div class=\"Q1\">Ответ на OQ-0002 <!-- Q1 --> <code>Q1</code></div>\n\nи OQ-0002")
+    # Мнемоника в блоке HTML — тем, что она значит: «Cloudflare&nbsp;R2» — сочетание.
+    assert renumbered("<div>Cloudflare&nbsp;R2 и R2</div>", {"R2": "OQ-0002"}, {},
+                      phrases={"Cloudflare R2"}) == "<div>Cloudflare&nbsp;R2 и OQ-0002</div>"
+
+
+def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(root):
+    # Выгрузка до номеров заметок оставила в тексте «Q2»; правку человека повторная выгрузка не
+    # теряет — номер потока в ней тоже становится номером заметки.
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "откат нужен, пока Q2 открыт"})]})
+    first, _, _, _ = export(root, stream)
+    adr = next(note for note in first.notes if note.type == "adr" and "Q2" not in note.generated
+               and "откат нужен" in note.generated)
+    old = "Ручной откат остаётся, потому что откат нужен, пока Q2 открыт"
+    legacy = first.model_copy(update={"notes": [
+        note.model_copy(update={"generated": old,
+                                "written": old.replace("остаётся", "остаётся по кнопке")})
+        if note is adr else note for note in first.notes]})
+    notes, _, _ = draft(root, stream, previous=legacy)
+    assert by_id(notes)[adr.id].text == (
+        "Ручной откат остаётся по кнопке, потому что откат нужен, пока OQ-0003 открыт")
+
+
+def test_a_legacy_export_migrates_an_edit_where_the_council_text_had_no_numbers(root):
+    # Запись выгрузки до номеров заметок (note_numbers нет): «Q2» дописал человек, а текст
+    # совета номеров не имел и не изменился, — правка всё равно переходит на номера заметок.
+    # В нынешней записи «Q2» в правке — слово человека, как он написал.
+    first, _, _, _ = export(root, edits={"idea": "Деплой требует меньше ручной работы, см. Q2."})
+    assert all(note.note_numbers for note in first.notes)
+    legacy = first.model_copy(update={"notes": [note.model_copy(update={"note_numbers": False})
+                                                for note in first.notes]})
+    assert by_id(draft(root, previous=legacy)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. OQ-0003.")
+    assert by_id(draft(root, previous=first)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. Q2.")
+
+
+def test_a_record_keeps_which_of_its_numbers_were_catalog_notes(root):
+    # ADR-0001 в каталоге есть — ссылка; ADR-9999 нет — слово («ADR-9999 fixture»); OQ-0001 в
+    # каталоге есть, но в тексте он только в коде — не ссылка.
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "так велит ADR-0001, проверено на ADR-9999 fixture и `OQ-0001`"})]})
+    record, _, _, _ = export(root, stream)
+    adr = next(note for note in record.notes if "ADR-9999" in note.written)
+    assert adr.references == ["ADR-0001"]
+
+
+def test_a_record_keeps_its_references_after_the_note_is_deleted(root):
+    # OUT-0001 был в каталоге, когда решение записали: ссылка. Заметку удалили — при повторной
+    # выгрузке номер всё ещё ссылка, пока текст его называет.
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "так велит OUT-0001 validation"})]})
+    first, _, _, _ = export(root, stream)
+    adr = next(note for note in first.notes if "OUT-0001" in note.written)
+    assert adr.references == ["OUT-0001"]
+    (root / "outcomes" / "OUT-0001.md").unlink()
+    second, _, _, _ = export(root, stream, previous=first)
+    assert by_id(second.notes)[adr.id].references == ["OUT-0001"]
+
+
+def test_a_legacy_record_kept_for_a_hand_edited_file_stays_legacy(root):
+    # Файл правили руками после выгрузки до номеров заметок: его запись остаётся прежней — и
+    # прежней по номерам, — пока правку не вернут и её не переведут.
+    first, _, _, _ = export(root, edits={"idea": "Деплой требует меньше ручной работы, см. Q2."})
+    legacy = first.model_copy(update={"notes": [note.model_copy(update={"note_numbers": False})
+                                                for note in first.notes]})
+    path = root / "ideas" / "IDEA-0002.md"
+    before = path.read_text(encoding="utf-8")
+    path.write_text(before + "Дописали руками.\n", encoding="utf-8")
+    record, _, _, _ = export(root, previous=legacy)
+    assert not by_id(record.notes)["IDEA-0002"].note_numbers
+    path.write_text(before, encoding="utf-8")
+    assert by_id(draft(root, previous=record)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. OQ-0003.")
+
+
+def test_a_fragment_offered_to_two_questions_is_named_by_each_ones_own_option(root):
+    # F3 — вариант и Q1, и Q2: «F3» в решении Q2 — его вариант, а не вариант Q1. Вне вопросов
+    # «F3» ничей: там встанет текст фрагмента.
+    stream = STREAM.model_copy(update={
+        "scope": [SCOPE[0], SCOPE[1].model_copy(update={"proposal_ids": [3]}), SCOPE[2]],
+        "decisions": [DECIDED[0].model_copy(update={"rationale": "так проще: F3"}),
+                      Decision(question_id="Q2", proposal="F3", rationale="и тут подходит F3",
+                               rationale_by="human"), DECIDED[2]]})
+    notes, _, _ = draft(root, stream)
+    refs = refs_of(root, stream)
+    assert "F3" not in refs
+    for question, reason in (("Q1", "проще: {}"), ("Q2", "подходит {}")):
+        own = next(n for n in notes if n.type == "proposal" and n.links == [refs[question]]
+                   and n.text == FRAGMENTS[3].text)
+        adr = next(n for n in notes if n.type == "adr" and n.links == [own.id])
+        assert adr.text.endswith(reason.format(own.id))
+
+
+def test_a_refined_option_is_named_by_its_refinement(root):
+    own = "Деплой запускают по тегу релиза, а hotfix — по merge."
+    stream = STREAM.model_copy(update={
+        "choices": [Choice(question_id="Q1", proposal="P4", text=own, based_on="P1"),
+                    Choice(question_id="Q2", proposal=None),
+                    Choice(question_id="Q3", proposal="P3")],
+        "decisions": [Decision(question_id="Q1", proposal="P4", rationale="Так быстрее.",
+                               rationale_by="human"), DECIDED[1],
+                      DECIDED[2].model_copy(update={"rationale": "откат нужен и при P1"})]})
+    notes, _, _ = draft(root, stream)
+    refined = next(n for n in notes if n.type == "proposal" and n.text == own)
+    adr = next(n for n in notes if n.type == "adr" and n.text.startswith("Ручной откат"))
+    assert adr.text == f"Ручной откат остаётся, потому что откат нужен и при {refined.id}"
+    # Заметки нет (удалили) — за номером исходного уже текст правки, а не прежний; за номером
+    # вопроса и его фрагмента — его формулировка в заметке.
+    texts = stream_texts(stream, FRAGMENTS)
+    assert texts["P1"] == own
+    assert texts["Q1"] == texts["F5"] == SCOPE[0].note
+    # Заметки идеи нет — за I1 её утверждённый текст.
+    assert texts["I1"] == STREAM.idea.text
 
 
 REFINED = "Ручной откат остаётся, но только по кнопке."

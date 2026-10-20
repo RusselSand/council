@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesOfDep, Store, StoreDep
 from ..export import (
     Shelf,
+    cited_in,
     drafted,
     export_in,
     graph_problems,
@@ -120,7 +121,18 @@ def draft_of(council: Council, group: str, stream: Stream, shelf: Shelf,
     return NotesDraft(state="running", run=uuid4().hex[:8], outcomes=approved(stream),
                       language=notes_language(), root=str(shelf.root),
                       steps=translating(council.judge), notes=notes, vanished=vanished,
-                      skipped=skipped, refs=refs)
+                      skipped=skipped, refs=refs,
+                      cited=cited_now(council, group, stream, shelf))
+
+
+def cited_now(council: Council, group: str, stream: Stream, shelf: Shelf,
+              draft: Sequence[str] = ()) -> list[str]:
+    """Какие заметки каталога называют исходные тексты потока: что в каталоге сейчас и что
+    запомнили прошлая выгрузка и черновик (draft) — заметку с тех пор могли удалить."""
+    previous = export_in(stream.notes, shelf.root)
+    fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
+    return cited_in(stream, fragments, shelf.catalog.notes,
+                    [*(previous.cited if previous else ()), *draft])
 
 
 def drafting(group: str):
@@ -211,12 +223,13 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         saved: list[Council | None] = []
+        cited = cited_now(council, group, stream, shelf, draft.cited)
 
         def keep(exported: list[ExportedNote]) -> None:
             # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.
             record = NotesExport(run=draft.run, outcomes=draft.outcomes,
                                  language=draft.language, root=str(root), notes=exported,
-                                 refs=draft.refs)
+                                 refs=draft.refs, cited=cited)
             saved.append(store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"notes": record}))}))
 

@@ -200,6 +200,7 @@ from .slicing import (
 )
 from .tasks import Inputs as TaskInputs
 from .tasks import plan_of, plan_prompt, same_plan
+from .tasks_export import aligned
 
 log = logging.getLogger(__name__)
 
@@ -1362,9 +1363,10 @@ class DesignRun(CouncilRun[DesignScan]):
                 self.workspace = None
 
 
-def start_tasks(participants: list[str], judge: str, basis: Mapping[str, str]) -> TaskPlan:
+def start_tasks(participants: list[str], judge: str, basis: Mapping[str, str],
+                cited: Sequence[str] = ()) -> TaskPlan:
     """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан."""
-    return TaskPlan(state="running", run=uuid4().hex[:8], basis=dict(basis),
+    return TaskPlan(state="running", run=uuid4().hex[:8], basis=dict(basis), cited=list(cited),
                     steps=steps(participants, judge,
                                 (StepName.task_plan, StepName.task_plan_judge)))
 
@@ -1387,7 +1389,7 @@ class TaskRun(CouncilRun[TaskPlan]):
                  design: str = design_context(None),
                  copy: Copier = snapshot_all) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_tasks(participants, judge, inputs.basis))
+                         start_tasks(participants, judge, inputs.basis, inputs.cited))
         self.inputs = inputs
         self.sources = sources
         self.repository = repository
@@ -1445,8 +1447,9 @@ class NotesRun(CouncilRun[NotesDraft | TasksDraft]):
     """Перевод черновика выгрузки на язык документации (COUNCIL_NOTES_LANGUAGE): ходы судьи
     по очереди — новые тексты заметок разом, файл задачи — каждый своим ходом (portions). Ход
     упал — шаг упал, а ответы готовых ходов остаются в лотке: повтор возьмёт их даром. Номера
-    заметок и задач в переводе — те же, иначе ответ негодный. После перевода совет заново
-    смотрит, что с каждой заметкой будет при записи."""
+    заметок и задач в переводе — те же, иначе ответ негодный. Задачу во всех файлах зовут так,
+    как перевели её собственный файл (aligned). После перевода совет заново смотрит, что с
+    каждой заметкой будет при записи."""
 
     what = "перевод заметок"
 
@@ -1469,7 +1472,12 @@ class NotesRun(CouncilRun[NotesDraft | TasksDraft]):
                                      partial(translations, sources=part))
         if not parts:
             self._skip(StepName.notes_translation)
-        notes = [settled(note.model_copy(update={"text": found.get(note.key, note.text)}),
+        texts = {note.key: found.get(note.key, note.text) for note in self.state.notes}
+        if isinstance(self.state, TasksDraft):
+            # Каждый файл задачи переводили своим ходом: задачу, после которой делать эту,
+            # зовут так, как перевели её собственный файл.
+            texts |= aligned(self.state.notes, texts, found.keys())
+        notes = [settled(note.model_copy(update={"text": texts[note.key]}),
                          previous_of(note, self.previous), self.shelf)
                  for note in self.state.notes]
         return {"notes": notes}

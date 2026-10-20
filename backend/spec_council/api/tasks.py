@@ -9,6 +9,7 @@
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,12 +25,13 @@ from ..deps import (
     Store,
     StoreDep,
 )
-from ..design import context_prompt as design_context
 from ..export import (
     Shelf,
+    design_map,
     graph_problems,
     knows_words,
     previous_of,
+    repository_map,
     settled,
     untranslated,
     words_for,
@@ -56,12 +58,19 @@ from ..repository import (
     Inventory,
     RepositoryError,
     Source,
-    context_prompt,
     same_copy,
     working_copy,
 )
-from ..tasks import basis_of, inputs_of, not_ready
-from ..tasks_export import drafted_tasks
+from ..tasks import (
+    basis_of,
+    inputs_of,
+    not_ready,
+    outcome_names,
+    research_cited,
+    research_maps,
+    research_texts,
+)
+from ..tasks_export import aligned, drafted_tasks
 from .councils import MISSING, NOT_FOUND, RunState, Slot, council_lock, reporter, running
 from .documents import NO_NOTES, WriteNotes
 from .groups import NOT_THESE_GROUPS, current
@@ -89,24 +98,6 @@ DRAFTING = council_slot("tasks_draft")
 
 def research_of(council: Council) -> Research:
     return council.research or Research()
-
-
-def repository_map(research: Research) -> str:
-    """Карта утверждённого скана исследования или «не сканировали»."""
-    step, scan = research.repository, research.scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return context_prompt(None)
-    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
-                          follow_up=scan.follow_up)
-
-
-def design_map(research: Research) -> str:
-    """Описание утверждённого скана макета или «не смотрели»."""
-    step, scan = research.design, research.design_scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return design_context(None)
-    return design_context(scan.result, scan.source, complete=scan.complete,
-                          follow_up=scan.follow_up)
 
 
 def code_of(research: Research, repositories: Path | None) -> list[Source]:
@@ -182,11 +173,11 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
     sources = code_of(read[0], repositories)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
-        inputs = inputs_of(council)
+        inputs = replace(inputs_of(council), cited=research_snapshot(council, notes_of(council)))
         runs: list[CouncilRun] = []
         if missing:
-            state = unconnected(start_tasks(council.participants, council.judge, inputs.basis),
-                                missing)
+            state = unconnected(start_tasks(council.participants, council.judge, inputs.basis,
+                                            inputs.cited), missing)
         else:
             research = research_of(council)
             runs = [TaskRun(council.id, council.participants, council.judge, agents,
@@ -224,6 +215,22 @@ def notes_root(notes: Path | None) -> Path:
     if notes is None:
         raise HTTPException(422, NO_NOTES)
     return notes
+
+
+def research_snapshot(council: Council, notes: Path | None) -> list[str]:
+    """Номера каталога, что называют находки исследования, — пока заметки в каталоге: план
+    запомнит их (TaskPlan.cited). Каталог не прочитать — 422: пустое запомнить нельзя, план
+    строят снова, когда каталог починят."""
+    if notes is None:
+        return []
+    try:
+        catalog = Catalog.load(notes)
+    except NotesError as exc:
+        raise HTTPException(422, f"Каталог заметок {notes}: {exc} — почините его и спланируйте "
+                                 "снова") from None
+    # И что запомнила прошлая попытка плана (упавшая): заметку с тех пор могли удалить.
+    return research_cited([*research_texts(council).values(), *research_maps(council)],
+                          catalog.notes, council.tasks.cited if council.tasks else ())
 
 
 def shelf_of(notes: Path, issues: Path) -> Shelf:
@@ -282,7 +289,8 @@ def drafted_for(council: Council, shelf: Shelf, store: Store
     try:
         return drafted_tasks(plan, fragments, shelf, export_in(council.tasks_export, shelf.issues),
                              words_for(language()), notes_language(),
-                             reserved_by_others(store, council.id, shelf.issues))
+                             reserved_by_others(store, council.id, shelf.issues),
+                             outcome_names(council, fragments, plan.cited))
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -319,7 +327,11 @@ def draft_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Conf
                            numbers=numbers)
         runs: list[CouncilRun] = []
         if not translate or not untranslated(draft.notes):
-            draft = draft.model_copy(update={"state": "done", "steps": []})
+            # Переводить нечего, но название задачи могли перевести по-разному раньше или
+            # поправить руками — строки других файлов берут его из её файла.
+            previous = export_in(council.tasks_export, issues)
+            draft = draft.model_copy(update={"state": "done", "steps": [],
+                                             "notes": realigned(notes, previous, shelf)})
         elif missing:
             draft = unconnected(draft, missing)
         else:
@@ -365,15 +377,29 @@ def write_tasks(council_id: str, edit: WriteNotes, store: StoreDep, notes_of: No
                                  root=str(issues), notes=exported, numbers=draft.numbers)
             saved.append(store.update_council(council_id, {"tasks_export": record}))
 
+        # Название задачи человек поправил в её файле — так её зовут и строки других файлов.
+        edits = {**edit.edits, **aligned(planned, {note.key: edit.edits.get(note.key, note.text)
+                                                   for note in planned})}
         try:
-            graph_problems(shelf.catalog, planned, vanished, edit.edits, edit.delete)
-            written_files(planned, vanished, edit.edits, edit.delete, shelf, previous, keep)
+            graph_problems(shelf.catalog, planned, vanished, edits, edit.delete)
+            written_files(planned, vanished, edits, edit.delete, shelf, previous, keep)
         except NotesError as exc:
             raise HTTPException(422, str(exc)) from None
         council = saved[0]
     if council is None:
         raise HTTPException(404, MISSING)
     return council
+
+
+def realigned(notes: list[NotePlan], previous: TasksExport | None,
+              shelf: Shelf) -> list[NotePlan]:
+    """Черновик, где задачу во всех файлах зовут названием из её файла (aligned), — и что
+    теперь будет с поправленными файлами при записи."""
+    before = {note.key: note for note in previous.notes} if previous else {}
+    texts = aligned(notes)
+    return [settled(note.model_copy(update={"text": texts[note.key]}),
+                    previous_of(note, before), shelf) if note.key in texts else note
+            for note in notes]
 
 
 def checked_draft(council: Council, edit: WriteNotes, issues: Path) -> TasksDraft:
