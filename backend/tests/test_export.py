@@ -342,12 +342,14 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         "[x\n\n](/questions/OQ-0002)")
     assert renumbered("[x](\n\n/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "[x](\n\n/questions/OQ-0002)")
-    # «[» и «<code>» в строке кода — не начало ссылки и не элемент; незакрытый <code> — не
-    # элемент.
+    # «[» и «<code>» в строке кода — не начало ссылки и не элемент. А незакрытый элемент кода —
+    # код до конца текста, как его прочтёт браузер.
     assert renumbered("`[x` ](/questions/Q1)", {"Q1": "OQ-0002"}, {}) == (
         "`[x` ](/questions/OQ-0002)")
     assert renumbered("Use `<code>` then Q1", {"Q1": "OQ-0002"}, {}) == (
         "Use `<code>` then OQ-0002")
+    unclosed = "Q1 до <script>const id = 'Q1'\n\nи Q1"
+    assert renumbered(unclosed, {"Q1": "OQ-0002"}, {}) == unclosed.replace("Q1 до", "OQ-0002 до")
     # Узел IPv6 в адресе — часть адреса; вложенные элементы кода — одно целое.
     ipv6 = "http://[::1]/Q1"
     assert renumbered(f"{ipv6} и Q1", {"Q1": "OQ-0002"}, {}) == f"{ipv6} и OQ-0002"

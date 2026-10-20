@@ -792,7 +792,8 @@ def raw_elements(text: str, found: Iterable[tuple[str, int, int]]) -> list[tuple
     """Где в тексте элемент HTML, чьё содержимое — код (RAW), — с вложенными в него такими же:
     <code>…<code>…</code>…</code> — одно целое. Теги — те, что нашёл разбор (found, «html»):
     <code> в строке кода или в атрибуте — не тег; в сыром тексте (RAW_TEXT:
-    <script>"<script>"</script>) тег — текст; незакрытый элемент — не элемент."""
+    <script>"<script>"</script>) тег — текст. Незакрытый элемент — до конца текста: так его
+    прочтёт и браузер."""
     elements: list[tuple[int, int]] = []
     start = None
     names: list[str] = []
@@ -808,6 +809,8 @@ def raw_elements(text: str, found: Iterable[tuple[str, int, int]]) -> list[tuple
             names.pop()
             if not names and start is not None:
                 elements.append((start, end))
+    if names and start is not None:
+        elements.append((start, len(text)))
     return elements
 
 
