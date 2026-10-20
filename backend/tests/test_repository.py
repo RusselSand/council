@@ -359,12 +359,12 @@ def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path
     (repo / "api" / "deps.py").write_text("def get_context(): return 3\n", encoding="utf-8")
     with pytest.raises(RepositoryError, match="менялась"):
         copy(found, tmp_path, "again")
-    excluded = repository.excluded_in("", found.skipped)
+    copies = {each.prefix: each for each in repository.copies_of(repo, found.skipped)}
     notes_only = repository.head(repo)
-    assert repository.moved_within(repo, found.heads[""], notes_only, excluded)
+    assert repository.moved_within(copies[""], found.heads[""], notes_only, copies)
     git(repo, "add", "api")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "код")
-    assert not repository.moved_within(repo, notes_only, repository.head(repo), excluded)
+    assert not repository.moved_within(copies[""], notes_only, repository.head(repo), copies)
     # Пределы — без пропущенных папок: большая папка заметок скан не роняет — ни числом
     # файлов, ни длиной вывода git.
     monkeypatch.setattr(repository, "FILES_MAX", 3)
@@ -445,6 +445,38 @@ def with_submodule(repo, tmp_path):
     git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "vendor/lib")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "подмодуль")
     return repo
+
+
+def test_a_council_folder_inside_a_submodule_moves_it_without_a_change(with_submodule,
+                                                                       tmp_path):
+    """Папка заметок — в подмодуле: коммит заметок сдвигает подмодуль, и родитель видит его
+    сдвинутым. Но файлы, что читают модели, те же — и копия без правок, и снимок годится, даже
+    если сдвиг записали и в коммит родителя."""
+    lib = with_submodule / "vendor" / "lib"
+    folders = council_folders(lib / "docs" / "council", None)
+
+    def committed(root, message, *paths):
+        git(root, "add", *paths)
+        git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+
+    (lib / "docs" / "council").mkdir(parents=True)
+    (lib / "docs" / "council" / "ADR-0001.md").write_text("Решение.\n", encoding="utf-8")
+    committed(lib, "заметка", "docs")
+    found = inventory(with_submodule, folders)
+    assert found.skipped == ("vendor/lib/docs/council/",) and not found.dirty
+    assert "vendor/lib/lib.py" in found.files
+    # Ещё заметка — коммитом в подмодуле, а сдвиг подмодуля — коммитом родителя.
+    (lib / "docs" / "council" / "ADR-0002.md").write_text("Ещё.\n", encoding="utf-8")
+    committed(lib, "ещё заметка", "docs")
+    committed(with_submodule, "сдвиг", "vendor/lib")
+    _, _, copied = copy(found, tmp_path)
+    assert "vendor/lib/lib.py" in copied
+    # А сдвиг с правкой кода — правка.
+    (lib / "lib.py").write_text("def api(): return 2\n", encoding="utf-8")
+    committed(lib, "код", "lib.py")
+    assert inventory(with_submodule, folders).dirty
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path, "again")
 
 
 def test_files_of_a_checked_out_submodule_are_in_the_inventory(with_submodule):

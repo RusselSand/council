@@ -214,6 +214,8 @@ class Copy(NamedTuple):
     absent: tuple[str, ...] = ()
     # Пропущенные папки в ней — исключающими pathspec для git (excluded_in).
     excluded: tuple[str, ...] = ()
+    # Её подмодули — путь от неё и коммит, на котором они записаны в её индексе.
+    gitlinks: tuple[tuple[str, str], ...] = ()
 
 
 def listed(copies: list[Copy]) -> list[str]:
@@ -273,7 +275,8 @@ def copies_of(root: Path, skipped: tuple[str, ...] = ()) -> list[Copy]:
                 within(counted, chars, len(seen))
                 queue.append((path, f"{prefix}{link}/", inside))
         found.append(Copy(folder, prefix, cached, others, embedded, outside_of(folder, index),
-                          tuple(absent), excluded))
+                          tuple(absent), excluded,
+                          tuple((name, sha) for _, mode, sha, name in index if mode == b"160000")))
     return found
 
 
@@ -555,8 +558,20 @@ def levels(copies: list[Copy]) -> list[tuple[str, str, bytes]]:
     файлом). Во вложенные git status сам не заходит: обходим их мы, без ссылок и кругов, — и у
     каждой свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в
     нём ни правили."""
-    return [(copy.prefix, head(copy.folder), changes_of(copy.folder, copy.excluded))
-            for copy in copies]
+    by_prefix = {copy.prefix: copy for copy in copies}
+    heads = {copy.prefix: head(copy.folder) for copy in copies}
+    found = []
+    for copy in copies:
+        # Подмодуль сдвинулся только в своих пропущенных папках (закоммитили заметки) — для
+        # родителя не правка: файлы, что читают модели, те же.
+        moved = tuple(
+            ":(exclude,literal)" + name for name, sha in copy.gitlinks
+            if (child := by_prefix.get(f"{copy.prefix}{name}/")) is not None
+            and heads[child.prefix] != sha and moved_within(child, sha, heads[child.prefix],
+                                                            by_prefix))
+        found.append((copy.prefix, heads[copy.prefix],
+                      changes_of(copy.folder, copy.excluded + moved)))
+    return found
 
 
 def settled(now: list[tuple[str, str, bytes]], found: Inventory,
@@ -564,24 +579,35 @@ def settled(now: list[tuple[str, str, bytes]], found: Inventory,
     """Состояние копий (levels) для сверки с found.state: коммит копии сменился только в
     пропущенных папках (выгрузили заметки и закоммитили) — для снимка он тот же: файлы, что
     читают модели, в нём те же."""
+    by_prefix = {copy.prefix: copy for copy in copies}
     kept: list[tuple[str, str, bytes]] = []
     for (prefix, sha, status), copy in zip(now, copies, strict=True):
         was = found.heads.get(prefix, sha)
-        if was != sha and copy.excluded and moved_within(copy.folder, was, sha, copy.excluded):
+        if was != sha and found.skipped and moved_within(copy, was, sha, by_prefix):
             sha = was
         kept.append((prefix, sha, status))
     return kept
 
 
-def moved_within(root: Path, before: str, after: str, excluded: tuple[str, ...]) -> bool:
-    """Коммиты before и after копии с корнем root различаются только в пропущенных папках."""
-    if not before or not after:
+def moved_within(copy: Copy, before: str, after: str, copies: Mapping[str, Copy]) -> bool:
+    """Коммиты before и after копии различаются только в её пропущенных папках — и в
+    подмодулях (copies — копии по пути от корня), сдвинутых только в их пропущенных папках."""
+    if not before or not after or not any(c.excluded for c in copies.values()):
         return False
     try:
-        git_bytes(root, "diff", "--quiet", "--no-ext-diff", "--no-textconv", before, after,
-                  *limited(excluded))
-    except RepositoryError:     # различаются (код 1) или не сравнить
+        raw = git_bytes(copy.folder, "diff", "--raw", "-z", "--no-abbrev", "--no-renames",
+                        "--no-ext-diff", "--no-textconv", before, after, *limited(copy.excluded))
+    except RepositoryError:     # не сравнить — или различий столько, что и не перечислить
         return False
+    parts = raw.split(b"\0")
+    # «:режим режим sha sha буква» и следом путь.
+    for meta, name in zip(parts[0::2], parts[1::2], strict=False):
+        fields = meta.split()
+        child = copies.get(f"{copy.prefix}{os.fsdecode(name)}/")
+        if not (len(fields) == 5 and fields[0] == b":160000" and fields[1] == b"160000"
+                and child is not None
+                and moved_within(child, fields[2].decode(), fields[3].decode(), copies)):
+            return False
     return True
 
 
