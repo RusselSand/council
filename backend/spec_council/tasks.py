@@ -100,9 +100,10 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
              *(decision.adr_id for decision in stream.project_decisions or []),
              *(reference for note in notes for reference in note.references)}
+    cited = stream.notes.cited if stream.notes else []
     return Names(stream.notes.refs if stream.notes else {},
-                 stream_texts(stream, fragments) | found, terms_of(stream),
-                 phrases_of(stream, fragments, found.values(), written, known),
+                 stream_texts(stream, fragments) | found, terms_of(stream, cited),
+                 phrases_of(stream, fragments, found.values(), written, known, cited),
                  frozenset(note.id for note in notes if not note.note_numbers))
 
 

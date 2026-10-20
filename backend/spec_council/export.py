@@ -373,13 +373,15 @@ def decision_texts(stream: Stream) -> list[str]:
             for text in (decision.idea, decision.question, decision.decision)]
 
 
-def terms_of(stream: Stream) -> frozenset[str]:
-    """Номера, которых не трогают нигде: решения проекта — отобранное для потока и те, что
-    называет проза отобранных, — без нулей в номере (ADR-0001 — «ADR-1»). Каталог зовёт решение
-    и так, и «ADR-1» в тексте — не обязательно первое решение потока."""
+def terms_of(stream: Stream, cited: Collection[str] = ()) -> frozenset[str]:
+    """Номера, которых не трогают нигде: решения проекта — отобранное для потока, те, что
+    называет проза отобранных, и те, что называют исходные тексты (cited_in), — без нулей в
+    номере (ADR-0001 — «ADR-1»). Каталог зовёт решение и так, и «ADR-1» в тексте — не
+    обязательно первое решение потока."""
     named = [decision.adr_id for decision in stream.project_decisions or []]
     named += [found for text in decision_texts(stream)
               for found in NUMBER.findall(visible_of(text))]
+    named += cited
     return frozenset(f"ADR-{int(found.group(1))}" for name in named
                      if (found := PAST_ADR.fullmatch(name)) is not None)
 
@@ -403,27 +405,42 @@ def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     return [*sources, *more]
 
 
+def cited_in(stream: Stream, fragments: Mapping[int, LabeledFragment],
+             catalog: Collection[str]) -> list[str]:
+    """Номера заметок каталога (catalog — номера, что в нём сейчас), которые называет проза
+    исходных текстов потока (sources_of): каталог старше совета, и такой номер в них — ссылка,
+    а не слово. Запоминают при выгрузке (NotesExport.cited): заметку потом могут удалить."""
+    keys = {note_key(note_id) for note_id in catalog}
+    return sorted({found for text in sources_of(stream, fragments)
+                   for found in numbers_in_prose(text) if note_key(found) in keys})
+
+
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = (), notes: Iterable[str] = (),
-               known: Collection[str] = ()) -> frozenset[str]:
+               known: Collection[str] = (), cited: Collection[str] = ()) -> frozenset[str]:
     """Где в прозе исходных текстов — текста группы, идеи, находок скана (и more) — слово,
     похожее на номер («F1 score», «Cloudflare R2», «I1 cache», «ADR-9999 fixture»): оно с
     соседним словом. Номера потока, заметок и задач появились позже этих текстов, и в таком
     сочетании слово — их слово, а не ссылка; то же слово в другом месте текста совета — ссылка.
-    notes — тексты заметок: в них номер известной заметки (known) — настоящая ссылка, и его
-    сочетание словом не становится. Тексты отобранных решений проекта — из каталога: там
-    ссылка — любой номер заметки, а слово — только номер потока («Q1 reporting»)."""
+    Кроме номеров заметок каталога, что они называют (cited_in): это ссылки. notes — тексты
+    заметок: в них номер известной заметки (known) — настоящая ссылка, и его сочетание словом
+    не становится. Тексты отобранных решений проекта — из каталога: там ссылка — любой номер
+    заметки, а слово — только номер потока («Q1 reporting»)."""
     found: set[str] = set()
     keys = {note_key(note_id) for note_id in known}
+    catalog = {note_key(note_id) for note_id in cited}
 
     def known_note(name: str) -> bool:
         return note_key(name) in keys
+
+    def cited_note(name: str) -> bool:
+        return note_key(name) in catalog
 
     def any_note(name: str) -> bool:
         return NUMBER.fullmatch(name) is not None
 
     sources: list[tuple[str, Callable[[str], bool] | None]] = [
-        (text, None) for text in sources_of(stream, fragments, more)]
+        (text, cited_note) for text in sources_of(stream, fragments, more)]
     sources += [(text, known_note) for text in notes]
     sources += [(text, any_note) for text in decision_texts(stream)]
     for source, linked in sources:
@@ -553,7 +570,7 @@ def placed(content: str, rows: Sequence[str]) -> Callable[[int], int]:
 
 Marked = dict[int, list[tuple[str, int, int]]]
 Seen = dict[int, list[tuple[int, str]]]
-# Строки блока HTML в in_prose — как есть, а их теги ищет raw_elements.
+# Строки блока HTML в in_prose: проза в них — видимый текст, а их теги ищет и raw_elements.
 HTML = -2
 # Что в блоке HTML целое, по правилам CommonMark: комментарий, инструкция, CDATA, объявление,
 # тег с атрибутами. «<code>» в комментарии или в значении атрибута — не тег.
@@ -602,9 +619,13 @@ def blocks_of(text: str) -> Blocks:
                               {**env, SPANS: spans, SEEN: shown, BASES: [0]}, [])
         place = placed(token.content, rows[first:last])
         marked[block] = [(kind, place(start), place(end)) for kind, start, end in spans]
-        seen[block] = [pair for start, end, text in sorted(shown, key=lambda found: found[0])
-                       for pair in ([(place(at), token.content[at]) for at in range(start, end)]
-                                    if text is None else [(place(start), sign) for sign in text])]
+        # Пробел Юникода (неразрывный и прочие) — пробел: так «Cloudflare R2» узнаётся и с ним.
+        seen[block] = [(at, spaced(sign)) for start, end, text in
+                       sorted(shown, key=lambda found: found[0])
+                       for at, sign in ([(place(at), token.content[at])
+                                         for at in range(start, end)]
+                                        if text is None else [(place(start), sign)
+                                                              for sign in text])]
     return Blocks(lines, prose, marked, seen, html)
 
 
@@ -646,19 +667,32 @@ def visible_of(text: str) -> str:
     starts = block_starts(text, blocks)
     shown = ["".join("\n" if inside(starts[block] + at, elements) else sign
                      for at, sign in signs) for block, signs in blocks.seen.items()]
-    for start, end in html_runs(text, blocks):
-        # Элемент кода — граница, тег и комментарий — прозрачны.
-        drops = sorted([(max(begin, start), min(close, end), "\n") for begin, close in elements
-                        if begin < end and close > start]
-                       + [(*piece.span(), "") for piece in HTML_PIECE.finditer(text, start, end)])
-        words: list[str] = []
-        last = start
-        for begin, close, border in drops:
-            if begin >= last:
-                words += [text[last:begin], border]
-            last = max(last, close)
-        shown.append(re.sub(r"[^\S\n]", " ", unescape("".join([*words, text[last:end]]))))
+    shown += [spaced(unescape("".join(sign for _, sign in html_signs(text, start, end, elements))))
+              for start, end in html_runs(text, blocks)]
     return "\n".join(shown)
+
+
+def spaced(text: str) -> str:
+    """Пробел Юникода (неразрывный и прочие) — пробел, перенос строки — как есть."""
+    return re.sub(r"[^\S\n]", " ", text)
+
+
+def html_signs(text: str, start: int, end: int,
+               elements: Iterable[tuple[int, int]]) -> list[tuple[int, str]]:
+    """Видимый текст блока HTML (text[start:end]) — по знаку с его местом: тег и комментарий
+    прозрачны, элемент кода (elements) — граница «\n»."""
+    drops = sorted([(max(begin, start), min(close, end), "\n") for begin, close in elements
+                    if begin < end and close > start]
+                   + [(*piece.span(), "") for piece in HTML_PIECE.finditer(text, start, end)],
+                   key=lambda drop: (drop[0], -drop[1]))
+    signs: list[tuple[int, str]] = []
+    last = start
+    for begin, close, border in drops:
+        if begin >= last:
+            signs += [(at, text[at]) for at in range(last, begin)]
+            signs += [(begin, border)] if border else []
+        last = max(last, close)
+    return signs + [(at, text[at]) for at in range(last, end)]
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
@@ -719,10 +753,11 @@ def addresses(text: str, opaque: Collection[tuple[int, int]] = (),
 
 
 def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()) -> str:
-    """Текст, где change — только в прозе: блоки кода и HTML на любой глубине и определения
+    """Текст, где change — только в прозе: блоки кода на любой глубине и определения
     ссылок-сносок (их строки — по разбору Markdown); в строках прозы — что нашёл их разбор
     (marking: строки кода, теги, адреса и метки ссылок), почта (UNTOUCHED) и адреса сами по
-    себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть."""
+    себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть. В блоке HTML
+    проза — его видимый текст, а теги, комментарии и элементы кода — как есть."""
     blocks = blocks_of(text)
     code, prose, marked, seen, html = blocks
     lines = [f"{row}\n" for row in text.split("\n")]
@@ -743,9 +778,9 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                 for found in phrases.finditer(shown) if found.end() > found.start()]
 
     def block(item: tuple[int, str]) -> int | None:
-        """Строка блока HTML — HTML, прочего кода — None, прозы — номер её блока (абзаца,
-        заголовка), прочие — -1: ссылка и строка кода не выходят за свой блок, «[» абзаца над
-        заголовком — не начало ссылки в нём."""
+        """Строка блока HTML — HTML, прочего кода — None (как есть), прозы — номер её блока
+        (абзаца, заголовка), прочие — -1: ссылка и строка кода не выходят за свой блок, «[»
+        абзаца над заголовком — не начало ссылки в нём."""
         if item[0] in html:
             return HTML
         return None if item[0] in code else prose.get(item[0], -1)
@@ -756,10 +791,16 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     elements = elements_of(text, blocks)
 
     def inline(part: str, key: int, at: int) -> str:
-        # Что не трогают — может пересекаться.
-        parsed = [(start, end) for _, start, end in marked.get(key, [])]
-        opaque = parsed + [found.span() for found in UNTOUCHED.finditer(part)]
-        opaque += kept(seen.get(key, []))
+        # Что не трогают — может пересекаться. В блоке HTML — теги и комментарии, а видимый
+        # текст в нём — проза, как и в абзаце.
+        if key == HTML:
+            parsed = [piece.span() for piece in HTML_PIECE.finditer(part)]
+            signs = [(place - at, spaced(sign))
+                     for place, sign in html_signs(text, at, at + len(part), elements)]
+        else:
+            parsed = [(start, end) for _, start, end in marked.get(key, [])]
+            signs = seen.get(key, [])
+        opaque = parsed + [found.span() for found in UNTOUCHED.finditer(part)] + kept(signs)
         raw = [(max(start, at) - at, min(end, at + len(part)) - at)
                for start, end in elements if start < at + len(part) and end > at]
         merged: list[list[int]] = []
@@ -784,7 +825,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                          for n in range(len(merged))) + part[bounds[-2]:]
         return MASKED.sub(lambda found: hidden[ord(found.group(0)) - MASK], change(masked))
 
-    return "".join(part if key in (None, HTML) else inline(part, key, start)
+    return "".join(part if key is None else inline(part, key, start)
                    for (key, part), start in zip(groups, starts, strict=False))
 
 
@@ -947,7 +988,8 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
-    terms, phrases = terms_of(stream), phrases_of(stream, fragments)
+    cited = cited_in(stream, fragments, catalog.notes)
+    terms, phrases = terms_of(stream, cited), phrases_of(stream, fragments, cited=cited)
 
     def numbered(part: Part) -> dict[str, str]:
         """Номера для текста части: в вопросе — и варианты этого вопроса (parts_of)."""

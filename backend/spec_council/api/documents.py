@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from ..deps import AgentsDep, ConfigDep, LauncherDep, NotesOfDep, Store, StoreDep
 from ..export import (
     Shelf,
+    cited_in,
     drafted,
     export_in,
     graph_problems,
@@ -211,12 +212,15 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         saved: list[Council | None] = []
+        # Какие заметки каталога называют исходные тексты потока — пока они в каталоге.
+        fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
+        cited = cited_in(stream, fragments, shelf.catalog.notes)
 
         def keep(exported: list[ExportedNote]) -> None:
             # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.
             record = NotesExport(run=draft.run, outcomes=draft.outcomes,
                                  language=draft.language, root=str(root), notes=exported,
-                                 refs=draft.refs)
+                                 refs=draft.refs, cited=cited)
             saved.append(store.update_council(council_id, {"streams": replaced(
                 council, stream.model_copy(update={"notes": record}))}))
 

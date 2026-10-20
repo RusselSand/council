@@ -7,6 +7,7 @@ import pytest
 from spec_council.export import WORDS as LANGUAGES
 from spec_council.export import (
     Shelf,
+    cited_in,
     drafted,
     export_in,
     graph_problems,
@@ -539,6 +540,14 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
                              label="idea", reason="", council_label="idea")
     found = phrases_of(STREAM, {4: inline})
     assert "R9 storage" in found and "R8 cache" not in found
+    # Элемент кода в блоке HTML — граница, хоть его тег и разобран раньше; неразрывный пробел
+    # (и любой пробел Юникода) — пробел.
+    nbsp = chr(0xA0)
+    split = LabeledFragment(id=5, text="<div>Cloudflare</div><code>x</code><div> R10</div>\n\n"
+                                       f"Храним в Cloudflare{nbsp}R11 storage.",
+                            label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {5: split})
+    assert "Cloudflare R10" not in found and "Cloudflare R11" in found
     # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
     spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
                              reason="", council_label="idea")
@@ -548,6 +557,27 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
     text = "Cloudflare [R2](https://x), *R2* storage, <b>R2</b> storage и R2"
     assert renumbered(text, {"R2": "OQ-0009"}, {}, phrases=phrases) == (
         text[:-2] + "OQ-0009")
+    assert renumbered(f"Cloudflare{nbsp}R11 и R11", {"R11": "OQ-0009"}, {},
+                      phrases=found) == f"Cloudflare{nbsp}R11 и OQ-0009"
+
+
+def test_catalog_notes_the_original_sources_cite_are_references():
+    # Каталог старше совета: «ADR-0042 validation» в тексте группы при ADR-0042 в каталоге —
+    # ссылка, а не слово; «ADR-9999 fixture», которого в каталоге не было, — слово.
+    fragment = LabeledFragment(id=1, text="Следовать ADR-0042 validation, ADR-9999 fixture.",
+                               label="idea", reason="", council_label="idea")
+    assert cited_in(STREAM, {1: fragment}, {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+    phrases = phrases_of(STREAM, {1: fragment}, cited=["ADR-0042"])
+    assert "ADR-9999 fixture" in phrases
+    assert not any("ADR-0042" in phrase for phrase in phrases)
+
+
+def test_visible_text_of_an_html_block_is_renumbered():
+    # Текст в блоке HTML — проза: номер потока в нём — номер заметки; теги, комментарии и
+    # элементы кода — как есть.
+    block = "<div class=\"Q1\">Ответ на Q1 <!-- Q1 --> <code>Q1</code></div>"
+    assert renumbered(f"{block}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == (
+        "<div class=\"Q1\">Ответ на OQ-0002 <!-- Q1 --> <code>Q1</code></div>\n\nи OQ-0002")
 
 
 def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(root):
