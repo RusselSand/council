@@ -212,9 +212,11 @@ def write_notes(council_id: str, group: str, edit: WriteNotes, store: StoreDep,
             raise HTTPException(409, "Каталог заметок поменялся, пока смотрели черновик, — "
                                      "соберите его заново")
         saved: list[Council | None] = []
-        # Какие заметки каталога называют исходные тексты потока — пока они в каталоге.
+        # Какие заметки каталога называют исходные тексты потока: что в каталоге сейчас и что
+        # запомнила прошлая выгрузка (заметку с тех пор могли удалить).
         fragments = {f.id: f for f in fragments_of(council, group_of(council, group))}
-        cited = cited_in(stream, fragments, shelf.catalog.notes)
+        cited = cited_in(stream, fragments, shelf.catalog.notes,
+                         previous.cited if previous else ())
 
         def keep(exported: list[ExportedNote]) -> None:
             # Запись о выгрузке — в той же сделке, что и файлы: не сохранилась — файлы назад.

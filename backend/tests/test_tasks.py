@@ -622,6 +622,10 @@ def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
     edited = draft + "\n\nДописал человек."
     assert aligned([first, second], {"i:1": first.text, "i:2": edited}) == {
         "i:2": edited.replace("Index v1", "Index v2")}
+    # Пункт списка с «*» вместо «-» — тот же пункт.
+    starred = draft.replace("- ISS-0001", "* ISS-0001")
+    assert aligned([first, second], {"i:1": first.text, "i:2": starred}) == {
+        "i:2": starred.replace("Index v1", "Index v2")}
 
 
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():

@@ -49,8 +49,8 @@ from .tasks import Names, line, relabeled
 TITLE = re.compile(r"[ ]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t\r]*(?=\n|\Z)")
 # Заголовок раздела файла задачи «## …» — и с отступом до трёх пробелов, и с табуляцией.
 SECTION = re.compile(r"[ ]{0,3}##(?:[ \t\r]|$)")
-# Пункт списка задач, после которых делать эту: «- ISS-0012: название».
-AFTER = re.compile(r"^([ \t]*-[ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
+# Пункт списка задач, после которых делать эту: «- ISS-0012: название» (и с «*» или «+»).
+AFTER = re.compile(r"^([ \t]*[-*+][ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
 
 
 def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | None,

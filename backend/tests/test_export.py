@@ -567,6 +567,10 @@ def test_catalog_notes_the_original_sources_cite_are_references():
     fragment = LabeledFragment(id=1, text="Следовать ADR-0042 validation, ADR-9999 fixture.",
                                label="idea", reason="", council_label="idea")
     assert cited_in(STREAM, {1: fragment}, {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+    # Прошлая выгрузка запомнила ADR-0042, а заметку с тех пор удалили: номер всё ещё ссылка,
+    # пока его называет текст; ADR-0077 текст уже не называет — его нет.
+    assert cited_in(STREAM, {1: fragment}, {"OQ-0001"}, ["ADR-0042", "ADR-0077"]) == [
+        "ADR-0042"]
     phrases = phrases_of(STREAM, {1: fragment}, cited=["ADR-0042"])
     assert "ADR-9999 fixture" in phrases
     assert not any("ADR-0042" in phrase for phrase in phrases)
@@ -578,6 +582,9 @@ def test_visible_text_of_an_html_block_is_renumbered():
     block = "<div class=\"Q1\">Ответ на Q1 <!-- Q1 --> <code>Q1</code></div>"
     assert renumbered(f"{block}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == (
         "<div class=\"Q1\">Ответ на OQ-0002 <!-- Q1 --> <code>Q1</code></div>\n\nи OQ-0002")
+    # Мнемоника в блоке HTML — тем, что она значит: «Cloudflare&nbsp;R2» — сочетание.
+    assert renumbered("<div>Cloudflare&nbsp;R2 и R2</div>", {"R2": "OQ-0002"}, {},
+                      phrases={"Cloudflare R2"}) == "<div>Cloudflare&nbsp;R2 и OQ-0002</div>"
 
 
 def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(root):

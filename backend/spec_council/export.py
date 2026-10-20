@@ -406,11 +406,13 @@ def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 
 def cited_in(stream: Stream, fragments: Mapping[int, LabeledFragment],
-             catalog: Collection[str]) -> list[str]:
+             catalog: Collection[str], before: Collection[str] = ()) -> list[str]:
     """Номера заметок каталога (catalog — номера, что в нём сейчас), которые называет проза
     исходных текстов потока (sources_of): каталог старше совета, и такой номер в них — ссылка,
-    а не слово. Запоминают при выгрузке (NotesExport.cited): заметку потом могут удалить."""
-    keys = {note_key(note_id) for note_id in catalog}
+    а не слово. Запоминают при выгрузке (NotesExport.cited): заметку потом могут удалить. И
+    запомненные прошлой выгрузкой (before) — пока текст их называет: удалили заметку с тех
+    пор — номер всё ещё ссылка."""
+    keys = {note_key(note_id) for note_id in [*catalog, *before]}
     return sorted({found for text in sources_of(stream, fragments)
                    for found in numbers_in_prose(text) if note_key(found) in keys})
 
@@ -667,7 +669,7 @@ def visible_of(text: str) -> str:
     starts = block_starts(text, blocks)
     shown = ["".join("\n" if inside(starts[block] + at, elements) else sign
                      for at, sign in signs) for block, signs in blocks.seen.items()]
-    shown += [spaced(unescape("".join(sign for _, sign in html_signs(text, start, end, elements))))
+    shown += [spaced("".join(sign for _, sign in html_signs(text, start, end, elements)))
               for start, end in html_runs(text, blocks)]
     return "\n".join(shown)
 
@@ -689,9 +691,26 @@ def html_signs(text: str, start: int, end: int,
     last = start
     for begin, close, border in drops:
         if begin >= last:
-            signs += [(at, text[at]) for at in range(last, begin)]
+            signs += decoded(text, last, begin)
             signs += [(begin, border)] if border else []
         last = max(last, close)
+    return signs + decoded(text, last, end)
+
+
+# Мнемоника HTML: «&nbsp;», «&#160;», «&#xA0;».
+ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});")
+
+
+def decoded(text: str, start: int, end: int) -> list[tuple[int, str]]:
+    """Знаки text[start:end] с их местами, мнемоника — тем, что она значит (пробельная —
+    пробелом), на месте её начала."""
+    signs: list[tuple[int, str]] = []
+    last = start
+    for entity in ENTITY.finditer(text, start, end):
+        shown = unescape(entity.group(0))
+        signs += [(at, text[at]) for at in range(last, entity.start())]
+        signs += [(entity.start(), " " if shown.isspace() else sign) for sign in shown]
+        last = entity.end()
     return signs + [(at, text[at]) for at in range(last, end)]
 
 
@@ -988,7 +1007,7 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
             ids[part.key] = catalog.next_id(part.type, taken=[*ids.values(), *reserved])
     numbers = {name: ids[key] for name, key in named.items()}
     texts = stream_texts(stream, fragments)
-    cited = cited_in(stream, fragments, catalog.notes)
+    cited = cited_in(stream, fragments, catalog.notes, previous.cited if previous else ())
     terms, phrases = terms_of(stream, cited), phrases_of(stream, fragments, cited=cited)
 
     def numbered(part: Part) -> dict[str, str]:
