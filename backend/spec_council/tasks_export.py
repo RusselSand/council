@@ -139,12 +139,6 @@ def issue_text(issue: Issue, number: str, outcome: tuple[str, str],
     return "\n".join(lines)
 
 
-def written_by_plan(issue: Issue) -> list[str]:
-    """Что в задаче написала модель плана: название, история, что там сейчас, что сделать,
-    что неясно, — как это ляжет в файл: название и пункты списков — одной строкой."""
-    return [line(issue.title), issue.user_story, issue.current_state,
-            *map(line, issue.scope), *map(line, issue.open_questions)]
-
 
 def title_of(catalog: Catalog, note_id: str) -> str:
     """Заметка коротко — её первая строка: у итога это название."""
@@ -190,31 +184,12 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         names = names_of(issue)
         return names.phrases if names is not None else frozenset()
 
-    def final(issue: Issue, text: str) -> str:
-        """Текст, как он ляжет: на месте номера без заметки — его текст, а в нём могут быть свои
-        номера заметок."""
-        change = renumber(issue)
-        return change(text) if change else text
-
-    def checked(issue: Issue) -> list[str]:
-        """Что ляжет в файл задачи из плана — и ограничения и риски, что лягут как есть."""
-        limits = [fragments[i].text for i in (*issue.constraint_ids, *issue.risk_ids)
-                  if i in fragments]
-        return [*(final(issue, text) for text in written_by_plan(issue)), *limits]
-
-    # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
-    dead = sorted({found for issue in plan.issues for text in checked(issue)
-                   for found in numbers_in_prose(text, kept(issue))
-                   if not found.startswith("ISS-") and note_key(found) not in known})
-    if dead:
-        raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
-                         "называют: верните заметки или выгрузите потоки заново и спланируйте "
-                         "снова")
     labels = {name: number.id for name, number in by_issue.items()}
 
     titles = {issue.id: issue_title(issue, labels, renumber(issue), kept(issue))
               for issue in plan.issues}
     notes: list[NotePlan] = []
+    dead: set[str] = set()
     for issue in plan.issues:
         number = by_issue[issue.id]
         # Итог и решения — как в каталоге: номера потока в них ушли при выгрузке, а правку
@@ -235,11 +210,20 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                           [fragments[i].text for i in issue.constraint_ids if i in fragments],
                           [fragments[i].text for i in issue.risk_ids if i in fragments], words,
                           labels, renumber(issue), kept(issue))
+        # Файл задачи — весь, как он ляжет: что написал план (и что встало на место номера без
+        # заметки), ограничения и риски, итог и решения из каталога. Номер в сочетании из
+        # исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
+        dead |= {found for found in numbers_in_prose(text, kept(issue))
+                 if not found.startswith("ISS-") and note_key(found) not in known}
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
                              migrated(old, text, renumber(issue)), old.key if old else None,
                              shelf, reuse))
+    if dead:
+        raise NotesError(f"В каталоге заметок больше нет {', '.join(sorted(dead))}, а задачи "
+                         "плана их называют: верните заметки или выгрузите потоки заново и "
+                         "спланируйте снова")
     current = {number.id for number in numbers}
     # Файлы, что останутся в папке как есть: не из плана или правленные руками. Исчезнувшую
     # задачу, на которую они ссылаются, удалить нельзя.
@@ -271,11 +255,15 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
     titles = {note.id: found.group(1) for note in notes
               if (found := TITLE.match(current(note))) is not None}
     def closing(note: NotePlan) -> str | None:
-        """Строка о номере для коммита этого файла: у только что переведённого — его последняя
-        строка с его номером (перевод хранит строение текста, а слова у каждого файла свои),
-        иначе — последняя строка черновика, как она есть: правку человека не угадывать."""
-        last = filled(current(note) if note.key in fresh else note.text)
-        return last if last is not None and note.id in last else None
+        """Строка о номере для коммита этого файла: последняя строка (вне кода и не пункт
+        списка задач) с его номером — у только что переведённого в его тексте (перевод хранит
+        строение текста, а слова у каждого файла свои), иначе — в тексте черновика: правку
+        человека не угадывать. Человек мог дописать что-то после неё."""
+        text = current(note) if note.key in fresh else note.text
+        code = blocks_of(text).code
+        rows = [row.strip() for n, row in enumerate(text.split("\n"))
+                if n not in code and note.id in row and not AFTER.match(row)]
+        return rows[-1] if rows else None
 
     changed: dict[str, str] = {}
     for note in notes:
@@ -292,12 +280,6 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
         if new != text and numbering_problem(text, new) is None:
             changed[note.key] = new
     return changed
-
-
-def filled(text: str) -> str | None:
-    """Последняя непустая строка текста."""
-    rows = [row.strip() for row in text.split("\n") if row.strip()]
-    return rows[-1] if rows else None
 
 
 def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], section: int,

@@ -1363,9 +1363,10 @@ class DesignRun(CouncilRun[DesignScan]):
                 self.workspace = None
 
 
-def start_tasks(participants: list[str], judge: str, basis: Mapping[str, str]) -> TaskPlan:
+def start_tasks(participants: list[str], judge: str, basis: Mapping[str, str],
+                cited: Sequence[str] = ()) -> TaskPlan:
     """Код в начале не прочитан: какой — ход отметит сам, когда снимок сделан."""
-    return TaskPlan(state="running", run=uuid4().hex[:8], basis=dict(basis),
+    return TaskPlan(state="running", run=uuid4().hex[:8], basis=dict(basis), cited=list(cited),
                     steps=steps(participants, judge,
                                 (StepName.task_plan, StepName.task_plan_judge)))
 
@@ -1388,7 +1389,7 @@ class TaskRun(CouncilRun[TaskPlan]):
                  design: str = design_context(None),
                  copy: Copier = snapshot_all) -> None:
         super().__init__(council_id, participants, judge, runner, report,
-                         start_tasks(participants, judge, inputs.basis))
+                         start_tasks(participants, judge, inputs.basis, inputs.cited))
         self.inputs = inputs
         self.sources = sources
         self.repository = repository

@@ -45,6 +45,7 @@ from spec_council.tasks import (
     outcome_entry,
     outcome_names,
     relabeled,
+    research_cited,
     research_texts,
 )
 from spec_council.tasks_export import aligned, drafted_tasks, issue_text
@@ -611,6 +612,29 @@ def test_a_note_number_in_a_copied_constraint_is_checked_too(tmp_path):
                       words_for("Russian"), "Russian", (), {"OUT-0001": Names({}, {})})
 
 
+def test_a_note_number_in_a_copied_decision_is_checked_too(tmp_path):
+    # Решение ложится в файл задачи текстом из каталога: ADR-0042, на который оно ссылается,
+    # удалён — файл сослался бы впустую.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов"),
+                       "ADR-0001": Note("ADR-0001", "adr", "Кэш в Redis, как в ADR-0042")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", adr_ids=["ADR-0001"])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    with pytest.raises(NotesError, match="ADR-0042"):
+        drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian", (), {"OUT-0001": Names({}, {})})
+
+
+def test_catalog_notes_the_research_cites_are_references():
+    # Находка исследования, по которому строили план, называет ADR-0042, что был тогда в
+    # каталоге: «ADR-0042 validation» — ссылка, а не слово.
+    names = names_of(Stream(group="C"), {}, {"R1": "Следовать ADR-0042 validation."},
+                     cited=["ADR-0042"])
+    assert not any("ADR-0042" in phrase for phrase in names.phrases)
+    assert research_cited({"R1": "Следовать ADR-0042 validation, ADR-9999 fixture."},
+                          {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+
+
 def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
     # Заметку вопроса Q1 удалили — встанет его текст «См. ADR-0042», а ADR-0042 тоже удалён:
     # такой файл задачи сослался бы впустую.
@@ -642,6 +666,10 @@ def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
         "i:2": starred.replace("Index v1", "Index v2")}
     glued = draft.replace("- ISS-0001", "-ISS-0001")
     assert aligned([first, second], {"i:1": first.text, "i:2": glued}) == {}
+    # Повторная выгрузка взяла правку целиком (строка после строки о коммите — в тексте
+    # черновика): строку о коммите всё равно узнают.
+    reused = second.model_copy(update={"text": edited})
+    assert aligned([first, reused]) == {"i:2": edited.replace("Index v1", "Index v2")}
 
 
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():

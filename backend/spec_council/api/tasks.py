@@ -9,6 +9,7 @@
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -60,7 +61,14 @@ from ..repository import (
     same_copy,
     working_copy,
 )
-from ..tasks import basis_of, inputs_of, not_ready, outcome_names
+from ..tasks import (
+    basis_of,
+    inputs_of,
+    not_ready,
+    outcome_names,
+    research_cited,
+    research_texts,
+)
 from ..tasks_export import aligned, drafted_tasks
 from .councils import MISSING, NOT_FOUND, RunState, Slot, council_lock, reporter, running
 from .documents import NO_NOTES, WriteNotes
@@ -182,11 +190,11 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
     sources = code_of(read[0], repositories)
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
-        inputs = inputs_of(council)
+        inputs = replace(inputs_of(council), cited=research_snapshot(council, notes_of(council)))
         runs: list[CouncilRun] = []
         if missing:
-            state = unconnected(start_tasks(council.participants, council.judge, inputs.basis),
-                                missing)
+            state = unconnected(start_tasks(council.participants, council.judge, inputs.basis,
+                                            inputs.cited), missing)
         else:
             research = research_of(council)
             runs = [TaskRun(council.id, council.participants, council.judge, agents,
@@ -224,6 +232,19 @@ def notes_root(notes: Path | None) -> Path:
     if notes is None:
         raise HTTPException(422, NO_NOTES)
     return notes
+
+
+def research_snapshot(council: Council, notes: Path | None) -> list[str]:
+    """Номера каталога, что называют находки исследования, — пока заметки в каталоге: план
+    запомнит их (TaskPlan.cited). Каталог не прочитать — ничего: выгрузить план и тогда не
+    выйдет (shelf_of)."""
+    if notes is None:
+        return []
+    try:
+        catalog = Catalog.load(notes)
+    except NotesError:
+        return []
+    return research_cited(research_texts(council), catalog.notes)
 
 
 def shelf_of(notes: Path, issues: Path) -> Shelf:
@@ -283,7 +304,7 @@ def drafted_for(council: Council, shelf: Shelf, store: Store
         return drafted_tasks(plan, fragments, shelf, export_in(council.tasks_export, shelf.issues),
                              words_for(language()), notes_language(),
                              reserved_by_others(store, council.id, shelf.issues),
-                             outcome_names(council, fragments))
+                             outcome_names(council, fragments, plan.cited))
     except NotesError as exc:
         raise HTTPException(422, str(exc)) from None
 

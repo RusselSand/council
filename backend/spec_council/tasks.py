@@ -16,7 +16,15 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
-from .export import in_prose, note_key, phrases_of, renumbered, stream_texts, terms_of
+from .export import (
+    in_prose,
+    note_key,
+    numbers_in_prose,
+    phrases_of,
+    renumbered,
+    stream_texts,
+    terms_of,
+)
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -91,14 +99,23 @@ def exported_of(council: Council) -> frozenset[str]:
                      for note in stream.notes.notes)
 
 
+def research_cited(research: Mapping[str, str], catalog: Collection[str]) -> list[str]:
+    """Номера заметок каталога (catalog — что в нём сейчас), которые называет проза находок
+    исследования (research_texts): это ссылки, а не слова. Запоминают, когда строят план
+    (TaskPlan.cited): заметку потом могут удалить."""
+    keys = {note_key(note_id) for note_id in catalog}
+    return sorted({found for text in research.values() for found in numbers_in_prose(text)
+                   if note_key(found) in keys})
+
+
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              research: Mapping[str, str] | None = None,
-             exported: Collection[str] = ()) -> Names:
+             exported: Collection[str] = (), cited: Collection[str] = ()) -> Names:
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
     карту кода и описание макета, и тексты задач называют их находки, а не копии потока.
     Сочетания — и из выгруженных заметок потока: модели плана видят их тексты, а человек мог
     дописать туда своё «Q1 reporting». exported — номера заметок всех потоков совета
-    (exported_of)."""
+    (exported_of); cited — номера каталога, что называет исследование (research_cited)."""
     found = dict(research or {})
     notes = stream.notes.notes if stream.notes else []
     written = [note.written for note in notes]
@@ -107,7 +124,9 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
              *(decision.adr_id for decision in stream.project_decisions or []),
              *(reference for note in notes for reference in note.references)}
-    cited = stream.notes.cited if stream.notes else []
+    # Номера каталога, что называют исходные тексты потока (при его выгрузке) и исследование
+    # (cited — когда строили план).
+    cited = [*(stream.notes.cited if stream.notes else []), *cited]
     owned = stream_texts(stream, fragments)
     return Names(stream.notes.refs if stream.notes else {}, owned | found,
                  terms_of(stream, cited),
@@ -138,15 +157,17 @@ def own_fragments(council: Council, stream: Stream,
             if group is None or i in group.fragment_ids}
 
 
-def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment]
-                  ) -> dict[str, Names]:
+def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment],
+                  cited: Collection[str] = ()) -> dict[str, Names]:
     """Номера потока у каждого итога плана — по номеру заметки итога: файл задачи называет
-    части потока своего итога."""
+    части потока своего итога. cited — номера каталога, что называло исследование, когда
+    строили план (TaskPlan.cited)."""
     research = research_texts(council)
     exported = exported_of(council)
     found: dict[str, Names] = {}
     for stream in council.streams or []:
-        names = names_of(stream, own_fragments(council, stream, fragments), research, exported)
+        names = names_of(stream, own_fragments(council, stream, fragments), research, exported,
+                         cited)
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             if outcome.id in names.numbers:
                 found[names.numbers[outcome.id]] = names
@@ -163,6 +184,8 @@ class Inputs:
     outcomes: list[str]
     skipped: list[str]
     basis: dict[str, str]
+    # Номера каталога, что называет исследование, — пока они в каталоге (research_cited).
+    cited: list[str] = field(default_factory=list)
 
 
 def as_json(value: object) -> str:
