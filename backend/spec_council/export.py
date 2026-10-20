@@ -428,12 +428,16 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     for source, linked in sources:
         text = prose_of(source)
         for match in WORDLIKE.finditer(text):
-            if linked is not None and linked(match.group(0)):
+            word = match.group(0)
+            if linked is not None and linked(word):
                 continue
-            if (after := re.match(r"[ \t]+\w+", text[match.end():])) is not None:
-                found.add(text[match.start():match.end() + after.end()])
-            if (before := re.search(r"\w+[ \t]+$", text[:match.start()])) is not None:
-                found.add(text[before.start():match.end()])
+            # Разметка выделения прозрачна: «Cloudflare **R2** storage» — «Cloudflare R2».
+            after = re.match(r"[*_]*[ \t]+[*_]*(\w+)", text[match.end():])
+            if after is not None and (neighbor := after.group(1).strip("_")):
+                found.add(f"{word} {neighbor}")
+            before = re.search(r"(\w+)[*_]*[ \t]+[*_]*$", text[:match.start()])
+            if before is not None and (neighbor := before.group(1).strip("_")):
+                found.add(f"{neighbor} {word}")
     return frozenset(found)
 
 
@@ -583,7 +587,10 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     code, prose, marked = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
-    extra = [re.escape(phrase) for phrase in sorted(keep, key=len, reverse=True)]
+    # Сочетание — его слова через пробелы, и разметка выделения вокруг них прозрачна:
+    # «Cloudflare R2» — и в «Cloudflare **R2**».
+    extra = [r"[*_]*[ \t]+[*_]*".join(map(re.escape, phrase.split()))
+             for phrase in sorted(keep, key=len, reverse=True) if phrase.split()]
     untouched = re.compile("|".join([UNTOUCHED.pattern, *extra])) if extra else UNTOUCHED
 
     def block(item: tuple[int, str]) -> int | None:
@@ -772,10 +779,23 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
         """Номера для текста части: в вопросе — и варианты этого вопроса (parts_of)."""
         return numbers | {name: ids[key] for name, key in local.get(part.key, {}).items()}
 
-    notes = [planned(replace(part, text=renumbered(part.text, numbered(part), texts,
-                                                   words["quote"], terms, phrases)),
-                     ids, olds.get(part.key), alias.get(part.key), shelf, reuse)
-             for part in parts]
+    def renumber(part: Part, text: str) -> str:
+        return renumbered(text, numbered(part), texts, words["quote"], terms, phrases)
+
+    def migrated(part: Part, old: ExportedNote | None) -> ExportedNote | None:
+        """Прежняя заметка — как её выгрузили бы сейчас, если написал бы совет то же: выгрузка
+        до номеров заметок оставила в текстах номера потока (Q1), и правку человека повторная
+        выгрузка терять не должна. Номер потока в правке — тоже номером заметки."""
+        if old is None or old.generated == part.text \
+                or renumber(part, old.generated) != part.text:
+            return old
+        return old.model_copy(update={"generated": part.text,
+                                      "written": renumber(part, old.written)})
+
+    notes = [planned(numbered_part, ids, migrated(numbered_part, olds.get(part.key)),
+                     alias.get(part.key), shelf, reuse)
+             for part in parts
+             for numbered_part in [replace(part, text=renumber(part, part.text))]]
     ours = {note.id for note in notes} | {note.id for note in before.values()}
     vanished = [VanishedNote(id=old.id, type=old.type, text=catalog.notes[old.id].body,
                              linked_from=sorted(note.id for note in catalog.notes.values()

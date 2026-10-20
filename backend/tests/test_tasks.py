@@ -562,6 +562,25 @@ def test_task_names_come_from_the_streams_own_group_and_the_approved_research(ag
         "R1": "Ответы ищут полнотекстом."}
 
 
+def test_a_note_number_another_stream_exported_stays_a_reference(agents, folders):
+    # «ADR-0042 validation» в заметке потока C — ссылка на решение, что выгрузил поток D: его
+    # сочетание словом не становится, и проверка удалённых заметок его видит.
+    found = council(ready())
+    [stream] = found.streams
+    mention = ExportedNote(key="x:1", id="OQ-0099", type="open_question", generated="Вопрос",
+                           written="Сверить по ADR-0042 validation", digest="d")
+    elsewhere = ExportedNote(key="a:1", id="ADR-0042", type="adr", generated="Решение",
+                             written="Решение", digest="d")
+    mine = stream.model_copy(update={"notes": stream.notes.model_copy(
+        update={"notes": [*stream.notes.notes, mention]})})
+    other = Stream(group="D", notes=NotesExport(run="n2", language="Russian", notes=[elsewhere],
+                                                refs={"I1": "IDEA-0042"}))
+    fragments = {f.id: f for f in found.slicing.fragments}
+    [names] = outcome_names(found.model_copy(update={"streams": [mine, other]}),
+                            fragments).values()
+    assert not any("ADR-0042" in phrase for phrase in names.phrases)
+
+
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():
     def file(number, generated, text=None, links=()):
         return NotePlan(key=f"i:{number}", id=number, type="issue", text=text or generated,

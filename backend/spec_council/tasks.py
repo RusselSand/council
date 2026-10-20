@@ -69,16 +69,25 @@ class Names:
                                       if number in notes})
 
 
+def exported_of(council: Council) -> frozenset[str]:
+    """Номера заметок, что выгрузили потоки совета."""
+    return frozenset(note.id for stream in council.streams or [] if stream.notes
+                     for note in stream.notes.notes)
+
+
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
-             research: Mapping[str, str] | None = None) -> Names:
+             research: Mapping[str, str] | None = None,
+             exported: Collection[str] = ()) -> Names:
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
     карту кода и описание макета, и тексты задач называют их находки, а не копии потока.
     Сочетания — и из выгруженных заметок потока: модели плана видят их тексты, а человек мог
-    дописать туда своё «Q1 reporting»."""
+    дописать туда своё «Q1 reporting». exported — номера заметок всех потоков совета
+    (exported_of)."""
     found = dict(research or {})
     written = [note.written for note in stream.notes.notes] if stream.notes else []
-    # Номер заметки потока или отобранного решения проекта в выгруженном тексте — ссылка.
-    known = {*(stream.notes.refs.values() if stream.notes else ()),
+    # Номер заметки любого потока совета или отобранного решения проекта в выгруженном тексте
+    # — ссылка.
+    known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
              *(decision.adr_id for decision in stream.project_decisions or [])}
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found, terms_of(stream),
@@ -113,9 +122,10 @@ def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment]
     """Номера потока у каждого итога плана — по номеру заметки итога: файл задачи называет
     части потока своего итога."""
     research = research_texts(council)
+    exported = exported_of(council)
     found: dict[str, Names] = {}
     for stream in council.streams or []:
-        names = names_of(stream, own_fragments(council, stream, fragments), research)
+        names = names_of(stream, own_fragments(council, stream, fragments), research, exported)
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             if outcome.id in names.numbers:
                 found[names.numbers[outcome.id]] = names
@@ -190,9 +200,10 @@ def inputs_of(council: Council) -> Inputs:
     constraints: set[int] = set()
     risks: set[int] = set()
     skipped: list[str] = []
+    exported = exported_of(council)
     for stream in council.streams or []:
         refs = stream.notes.refs if stream.notes else {}
-        names = names_of(stream, own_fragments(council, stream, fragments))
+        names = names_of(stream, own_fragments(council, stream, fragments), exported=exported)
         written = {note.id: note.written for note in stream.notes.notes} if stream.notes else {}
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             note = refs.get(outcome.id)

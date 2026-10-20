@@ -11,6 +11,7 @@ from spec_council.export import (
     export_in,
     graph_problems,
     outcome_text,
+    phrases_of,
     renumbered,
     stream_texts,
     translations,
@@ -495,6 +496,34 @@ def test_a_source_phrase_stays_but_the_same_number_elsewhere_is_a_reference(root
     assert notes["ADR-0002"].text == (
         "Деплой запускает CI после merge, потому что лучше выбрать PRO-0003 для OQ-0003, а "
         "P1 incidents — первыми")
+
+
+def test_a_source_phrase_is_found_and_kept_through_emphasis():
+    # «Cloudflare **R2** storage»: сочетание — без разметки, и узнаётся в тексте и с ней, и без.
+    fragment = LabeledFragment(id=1, text="Храним в Cloudflare **R2** storage.", label="idea",
+                               reason="", council_label="idea")
+    phrases = phrases_of(STREAM, {1: fragment})
+    assert {"Cloudflare R2", "R2 storage"} <= phrases
+    assert renumbered("Cloudflare **R2**, *R2* storage и R2", {"R2": "OQ-0009"}, {},
+                      phrases=phrases) == "Cloudflare **R2**, *R2* storage и OQ-0009"
+
+
+def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(root):
+    # Выгрузка до номеров заметок оставила в тексте «Q2»; правку человека повторная выгрузка не
+    # теряет — номер потока в ней тоже становится номером заметки.
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "откат нужен, пока Q2 открыт"})]})
+    first, _, _, _ = export(root, stream)
+    adr = next(note for note in first.notes if note.type == "adr" and "Q2" not in note.generated
+               and "откат нужен" in note.generated)
+    old = "Ручной откат остаётся, потому что откат нужен, пока Q2 открыт"
+    legacy = first.model_copy(update={"notes": [
+        note.model_copy(update={"generated": old,
+                                "written": old.replace("остаётся", "остаётся по кнопке")})
+        if note is adr else note for note in first.notes]})
+    notes, _, _ = draft(root, stream, previous=legacy)
+    assert by_id(notes)[adr.id].text == (
+        "Ручной откат остаётся по кнопке, потому что откат нужен, пока OQ-0003 открыт")
 
 
 def test_a_fragment_offered_to_two_questions_is_named_by_each_ones_own_option(root):
