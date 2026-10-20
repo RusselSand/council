@@ -25,7 +25,6 @@ from ..deps import (
     Store,
     StoreDep,
 )
-from ..design import context_prompt as design_context
 from ..export import (
     Shelf,
     graph_problems,
@@ -57,16 +56,18 @@ from ..repository import (
     Inventory,
     RepositoryError,
     Source,
-    context_prompt,
     same_copy,
     working_copy,
 )
 from ..tasks import (
     basis_of,
+    design_map,
     inputs_of,
     not_ready,
     outcome_names,
+    repository_map,
     research_cited,
+    research_maps,
     research_texts,
 )
 from ..tasks_export import aligned, drafted_tasks
@@ -97,24 +98,6 @@ DRAFTING = council_slot("tasks_draft")
 
 def research_of(council: Council) -> Research:
     return council.research or Research()
-
-
-def repository_map(research: Research) -> str:
-    """Карта утверждённого скана исследования или «не сканировали»."""
-    step, scan = research.repository, research.scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return context_prompt(None)
-    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
-                          follow_up=scan.follow_up)
-
-
-def design_map(research: Research) -> str:
-    """Описание утверждённого скана макета или «не смотрели»."""
-    step, scan = research.design, research.design_scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return design_context(None)
-    return design_context(scan.result, scan.source, complete=scan.complete,
-                          follow_up=scan.follow_up)
 
 
 def code_of(research: Research, repositories: Path | None) -> list[Source]:
@@ -244,7 +227,8 @@ def research_snapshot(council: Council, notes: Path | None) -> list[str]:
         catalog = Catalog.load(notes)
     except NotesError:
         return []
-    return research_cited(research_texts(council), catalog.notes)
+    return research_cited([*research_texts(council).values(), *research_maps(council)],
+                          catalog.notes)
 
 
 def shelf_of(notes: Path, issues: Path) -> Shelf:

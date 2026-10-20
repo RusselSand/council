@@ -631,8 +631,13 @@ def test_catalog_notes_the_research_cites_are_references():
     names = names_of(Stream(group="C"), {}, {"R1": "Следовать ADR-0042 validation."},
                      cited=["ADR-0042"])
     assert not any("ADR-0042" in phrase for phrase in names.phrases)
-    assert research_cited({"R1": "Следовать ADR-0042 validation, ADR-9999 fixture."},
+    assert research_cited(["Следовать ADR-0042 validation, ADR-9999 fixture."],
                           {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+    # План читает исследование целиком — карту и описание макета, а не только находки: слово
+    # оттуда («Cloudflare R2») — слово, хоть у исследования и есть находка R2.
+    names = names_of(Stream(group="C"), {}, {"R2": "Ответы в индексе."},
+                     context=["Хранилище — Cloudflare R2 storage."])
+    assert "Cloudflare R2" in names.phrases
 
 
 def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
@@ -670,6 +675,10 @@ def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
     # черновика): строку о коммите всё равно узнают.
     reused = second.model_copy(update={"text": edited})
     assert aligned([first, reused]) == {"i:2": edited.replace("Index v1", "Index v2")}
+    # Дописанное называет ISS-00020 — это другой номер, а не номер задачи.
+    longer = second.model_copy(update={"text": draft + "\n\nСм. ISS-00020."})
+    assert aligned([first, longer]) == {
+        "i:2": longer.text.replace("Index v1", "Index v2")}
 
 
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():

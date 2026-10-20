@@ -16,6 +16,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
+from .design import context_prompt as design_context
 from .export import (
     in_prose,
     note_key,
@@ -25,7 +26,8 @@ from .export import (
     stream_texts,
     terms_of,
 )
-from .models import Council, Issue, LabeledFragment, Outcome, Stream
+from .models import Council, Issue, LabeledFragment, Outcome, Research, Stream
+from .repository import context_prompt
 from .slicing import BadAnswer
 
 TEXT_MAX = 4000
@@ -99,23 +101,53 @@ def exported_of(council: Council) -> frozenset[str]:
                      for note in stream.notes.notes)
 
 
-def research_cited(research: Mapping[str, str], catalog: Collection[str]) -> list[str]:
-    """Номера заметок каталога (catalog — что в нём сейчас), которые называет проза находок
-    исследования (research_texts): это ссылки, а не слова. Запоминают, когда строят план
-    (TaskPlan.cited): заметку потом могут удалить."""
+def research_cited(texts: Iterable[str], catalog: Collection[str]) -> list[str]:
+    """Номера заметок каталога (catalog — что в нём сейчас), которые называет проза исследования
+    (texts: его находки и всё, что план читает о нём, — research_maps): это ссылки, а не слова.
+    Запоминают, когда строят план (TaskPlan.cited): заметку потом могут удалить."""
     keys = {note_key(note_id) for note_id in catalog}
-    return sorted({found for text in research.values() for found in numbers_in_prose(text)
+    return sorted({found for text in texts for found in numbers_in_prose(text)
                    if note_key(found) in keys})
+
+
+def repository_map(research: Research) -> str:
+    """Карта утверждённого скана исследования или «не сканировали»."""
+    step, scan = research.repository, research.scan
+    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
+        return context_prompt(None)
+    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
+                          follow_up=scan.follow_up)
+
+
+def design_map(research: Research) -> str:
+    """Описание утверждённого скана макета или «не смотрели»."""
+    step, scan = research.design, research.design_scan
+    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
+        return design_context(None)
+    return design_context(scan.result, scan.source, complete=scan.complete,
+                          follow_up=scan.follow_up)
+
+
+def research_maps(council: Council) -> list[str]:
+    """Что план читает об исследовании целиком: карту кода и описание макета — с шагами, данными
+    экранов, неясным и противоречиями, а не только находки. Слово оттуда («Cloudflare R2») план
+    может переписать в задачу."""
+    research = council.research or Research()
+    return [text for text, empty in ((repository_map(research), context_prompt(None)),
+                                     (design_map(research), design_context(None)))
+            if text != empty]
 
 
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              research: Mapping[str, str] | None = None,
-             exported: Collection[str] = (), cited: Collection[str] = ()) -> Names:
+             exported: Collection[str] = (), cited: Collection[str] = (),
+             context: Iterable[str] = ()) -> Names:
     """Номера потока по его выгрузке. research — находки исследования совета: план читал его
     карту кода и описание макета, и тексты задач называют их находки, а не копии потока.
     Сочетания — и из выгруженных заметок потока: модели плана видят их тексты, а человек мог
     дописать туда своё «Q1 reporting». exported — номера заметок всех потоков совета
-    (exported_of); cited — номера каталога, что называет исследование (research_cited)."""
+    (exported_of); cited — номера каталога, что называет исследование (research_cited);
+    context — что ещё план читал об исследовании (research_maps): сочетания и оттуда."""
     found = dict(research or {})
     notes = stream.notes.notes if stream.notes else []
     written = [note.written for note in notes]
@@ -130,7 +162,8 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     owned = stream_texts(stream, fragments)
     return Names(stream.notes.refs if stream.notes else {}, owned | found,
                  terms_of(stream, cited),
-                 phrases_of(stream, fragments, found.values(), written, known, cited),
+                 phrases_of(stream, fragments, [*found.values(), *context], written, known,
+                            cited),
                  frozenset(note.id for note in notes if not note.note_numbers), owned)
 
 
@@ -163,11 +196,12 @@ def outcome_names(council: Council, fragments: Mapping[int, LabeledFragment],
     части потока своего итога. cited — номера каталога, что называло исследование, когда
     строили план (TaskPlan.cited)."""
     research = research_texts(council)
+    maps = research_maps(council)
     exported = exported_of(council)
     found: dict[str, Names] = {}
     for stream in council.streams or []:
         names = names_of(stream, own_fragments(council, stream, fragments), research, exported,
-                         cited)
+                         cited, maps)
         for outcome in stream.outcomes.outcomes if stream.outcomes else []:
             if outcome.id in names.numbers:
                 found[names.numbers[outcome.id]] = names

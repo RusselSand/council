@@ -261,8 +261,10 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
         человека не угадывать. Человек мог дописать что-то после неё."""
         text = current(note) if note.key in fresh else note.text
         code = blocks_of(text).code
+        # Номер — целиком: ISS-00020 — другой номер, не ISS-0002.
+        own = re.compile(rf"(?<![\w-]){re.escape(note.id)}(?![\w-])")
         rows = [row.strip() for n, row in enumerate(text.split("\n"))
-                if n not in code and note.id in row and not AFTER.match(row)]
+                if n not in code and own.search(row) and not AFTER.match(row)]
         return rows[-1] if rows else None
 
     changed: dict[str, str] = {}
