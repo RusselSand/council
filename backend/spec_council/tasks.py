@@ -100,11 +100,13 @@ def exported_of(council: Council) -> frozenset[str]:
                      for note in stream.notes.notes)
 
 
-def research_cited(texts: Iterable[str], catalog: Collection[str]) -> list[str]:
+def research_cited(texts: Iterable[str], catalog: Collection[str],
+                   before: Collection[str] = ()) -> list[str]:
     """Номера заметок каталога (catalog — что в нём сейчас), которые называет проза исследования
     (texts: его находки и всё, что план читает о нём, — research_maps): это ссылки, а не слова.
-    Запоминают, когда строят план (TaskPlan.cited): заметку потом могут удалить."""
-    keys = {note_key(note_id) for note_id in catalog}
+    Запоминают, когда строят план (TaskPlan.cited): заметку потом могут удалить. И запомненные
+    прошлой попыткой плана (before) — пока исследование их называет."""
+    keys = {note_key(note_id) for note_id in [*catalog, *before]}
     return sorted({found for text in texts for found in numbers_in_prose(text)
                    if note_key(found) in keys})
 

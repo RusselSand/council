@@ -648,6 +648,10 @@ def test_catalog_notes_the_research_cites_are_references():
     assert not any("ADR-0042" in phrase for phrase in names.phrases)
     assert research_cited(["Следовать ADR-0042 validation, ADR-9999 fixture."],
                           {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
+    # Прошлый план (упавший) запомнил ADR-0042, заметку с тех пор удалили: номер всё ещё
+    # ссылка, пока исследование его называет; ADR-0077 оно уже не называет.
+    assert research_cited(["Следовать ADR-0042 validation."], {"OQ-0001"},
+                          ["ADR-0042", "ADR-0077"]) == ["ADR-0042"]
     # План читает исследование целиком — карту и описание макета, а не только находки: слово
     # оттуда («Cloudflare R2») — слово, хоть у исследования и есть находка R2.
     names = names_of(Stream(group="C"), {}, {"R3": "Ответы в индексе."},

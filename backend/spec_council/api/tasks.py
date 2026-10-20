@@ -228,8 +228,9 @@ def research_snapshot(council: Council, notes: Path | None) -> list[str]:
     except NotesError as exc:
         raise HTTPException(422, f"Каталог заметок {notes}: {exc} — почините его и спланируйте "
                                  "снова") from None
+    # И что запомнила прошлая попытка плана (упавшая): заметку с тех пор могли удалить.
     return research_cited([*research_texts(council).values(), *research_maps(council)],
-                          catalog.notes)
+                          catalog.notes, council.tasks.cited if council.tasks else ())
 
 
 def shelf_of(notes: Path, issues: Path) -> Shelf:
