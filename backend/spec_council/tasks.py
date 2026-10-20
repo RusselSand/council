@@ -57,9 +57,16 @@ class Names:
     # Сочетания исходных текстов со словом, похожим на номер («F1 score», «I1 cache»): номером
     # они не становятся (phrases_of).
     phrases: frozenset[str] = frozenset()
+    # Заметки потока, чья запись — до номеров заметок (их файлы правили руками, и выгрузка их
+    # оставила): в их тексте номера потока (Q1).
+    legacy: frozenset[str] = frozenset()
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
         return renumbered(text, self.numbers, self.texts, quote, self.terms, self.phrases)
+
+    def settled(self, note_id: str, text: str, quote: str = "«{}»") -> str:
+        """Текст заметки потока с номерами заметок: в записи до них (legacy) — номера потока."""
+        return self(text, quote) if note_id in self.legacy else text
 
     def within(self, notes: Collection[str]) -> Names:
         """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
@@ -86,16 +93,17 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     дописать туда своё «Q1 reporting». exported — номера заметок всех потоков совета
     (exported_of)."""
     found = dict(research or {})
-    written = [note.written for note in stream.notes.notes] if stream.notes else []
+    notes = stream.notes.notes if stream.notes else []
+    written = [note.written for note in notes]
     # Номер заметки любого потока совета, отобранного решения проекта или заметки каталога, что
     # была там, когда текст записывали (references), в выгруженном тексте — ссылка.
     known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
              *(decision.adr_id for decision in stream.project_decisions or []),
-             *(found for note in (stream.notes.notes if stream.notes else [])
-               for found in note.references)}
+             *(reference for note in notes for reference in note.references)}
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found, terms_of(stream),
-                 phrases_of(stream, fragments, found.values(), written, known))
+                 phrases_of(stream, fragments, found.values(), written, known),
+                 frozenset(note.id for note in notes if not note.note_numbers))
 
 
 def research_texts(council: Council) -> dict[str, str]:
@@ -263,15 +271,16 @@ def adr_entry(stream: Stream, name: str, note: str, written: Mapping[str, str],
               named: Names) -> dict:
     """Решение потока: номер заметки, вопрос и текст, как они легли в заметки («решение,
     потому что обоснование»): номера потока в них ушли при выгрузке, а правку человека
-    пересчитывать нельзя. Вопроса в заметках нет — его текст в потоке, с номерами заметок
-    (names)."""
+    пересчитывать нельзя — кроме записи до номеров заметок (Names.settled). Вопроса в заметках
+    нет — его текст в потоке, с номерами заметок (names)."""
     n = int(name.split("-")[1])
     scope = stream.scope or []
     question = scope[n - 1] if 0 < n <= len(scope) else None
-    asked = written.get(named.numbers.get(question.id, "")) if question else None
+    asked_note = named.numbers.get(question.id, "") if question else ""
+    asked = named.settled(asked_note, written.get(asked_note, ""))
     return {"id": note,
             "question": asked or (named(question.note or question.text) if question else ""),
-            "decision": written.get(note, "")}
+            "decision": named.settled(note, written.get(note, ""))}
 
 
 def limits_prompt(fragments: Mapping[int, LabeledFragment], ids: Iterable[int]) -> list[dict]:
@@ -292,6 +301,12 @@ def texts_of(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()][:ITEMS_MAX]
+
+
+def line(text: str) -> str:
+    """Пункт списка и название задачи — одной строкой: перенос внутри разорвал бы список. И
+    номера в нём ищут уже в этой строке: «Пример:\n\n    I2» — проза, а не блок кода."""
+    return " ".join(text.split())
 
 
 def relabeled(text: str, names: Mapping[str, str], keep: Collection[str] = ()) -> str:
@@ -345,17 +360,18 @@ def plan_of(data: dict, context: Context) -> list[Issue]:
             return relabeled(value, renamed, keep)
 
         issues.append(Issue(
-            id=issue_id, title=text(text_of(item.get("title"), "названия")),
+            id=issue_id, title=text(line(text_of(item.get("title"), "названия"))),
             user_story=text(text_of(item.get("user_story"), "user story")),
             main_entry_points=texts_of(item.get("main_entry_points")),
             current_state=text(text_of(item.get("current_state"), "нынешнего состояния", False)),
-            scope=[text(line) for line in texts_of(item.get("scope"))],
+            scope=[text(line(entry)) for entry in texts_of(item.get("scope"))],
             outcome_id=item["outcome_id"],
             adr_ids=[a for a in texts_of(item.get("adr_ids")) if a in own.adrs],
             constraint_ids=ints_in(item.get("constraint_ids"), own.constraints),
             risk_ids=ints_in(item.get("risk_ids"), own.risks),
             depends_on=list(dict.fromkeys(after)),
-            open_questions=[text(line) for line in texts_of(item.get("open_questions"))]))
+            open_questions=[text(line(entry))
+                            for entry in texts_of(item.get("open_questions"))]))
     return issues
 
 

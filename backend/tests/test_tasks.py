@@ -44,6 +44,7 @@ from spec_council.tasks import (
     names_of,
     outcome_entry,
     outcome_names,
+    relabeled,
     research_texts,
 )
 from spec_council.tasks_export import aligned, drafted_tasks, issue_text
@@ -772,6 +773,36 @@ def test_the_planner_sees_decisions_and_questions_as_they_were_written():
     entry = adr_entry(stream, "ADR-1", "ADR-0001", written, Names({"Q1": "OQ-0001"}, {}))
     assert (entry["question"], entry["decision"]) == ("Как считать долю?",
                                                       "Считать по Q1 reporting")
+    # Запись до номеров заметок (legacy: её файл правили руками, и выгрузка её оставила)
+    # хранит номера потока — модели видят их номерами заметок.
+    legacy = Names({"Q1": "OQ-0001"}, {}, legacy=frozenset({"ADR-0001"}))
+    written = {"ADR-0001": "Считать по Q1", "OQ-0001": "Как считать долю?"}
+    assert adr_entry(stream, "ADR-1", "ADR-0001", written, legacy)["decision"] == (
+        "Считать по OQ-0001")
+
+
+def test_a_legacy_note_body_is_renumbered_in_the_task_file(tmp_path):
+    # Итог и решение потока, чьи файлы правили руками до номеров заметок, в каталоге с «Q1»:
+    # в файл задачи они ложатся с номерами заметок.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш для Q1"),
+                       "OQ-0001": Note("OQ-0001", "open_question", "Где хранить кэш?"),
+                       "ADR-0001": Note("ADR-0001", "adr", "Кэш в Redis — ответ на Q1")})
+    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001", "ADR-1": "ADR-0001"}, {},
+                  legacy=frozenset({"OUT-0001", "ADR-0001"}))
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", adr_ids=["ADR-0001"])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    [file], _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                 words_for("Russian"), "Russian", (), {"OUT-0001": names})
+    assert "- OUT-0001: Кэш для OQ-0001" in file.text
+    assert "- ADR-0001: Кэш в Redis — ответ на OQ-0001" in file.text
+    assert "Q1" not in file.text
+
+
+def test_a_source_phrase_protects_only_itself_not_a_longer_word():
+    # «I1 cache» — сочетание; «I1 cacheable» — другое слово, и I1 в нём — номер задачи.
+    assert relabeled("I1 cache и I1 cacheable", {"I1": "ISS-0001"}, {"I1 cache"}) == (
+        "I1 cache и ISS-0001 cacheable")
 
 
 def test_note_numbers_in_task_code_and_links_are_not_references(tmp_path):

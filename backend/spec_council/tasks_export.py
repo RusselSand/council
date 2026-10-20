@@ -42,7 +42,7 @@ from .models import (
 )
 from .notes import Catalog, NotesError, issues_in
 from .questions import same_question
-from .tasks import Names, relabeled
+from .tasks import Names, line, relabeled
 
 # Название задачи — заголовок её файла: первая строка «# …» (без закрывающих «#»). Первая
 # строка не заголовок (файл правили руками) — названия нет.
@@ -85,11 +85,6 @@ def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | 
         numbers.append(IssueNumber(key=key, id=identifier, issue_id=issue.id, title=issue.title,
                                    outcome_ids=[issue.outcome_id]))
     return numbers
-
-
-def line(text: str) -> str:
-    """Пункт списка — одной строкой: перенос внутри разорвал бы список."""
-    return " ".join(text.split())
 
 
 def issue_title(issue: Issue, names: Mapping[str, str],
@@ -215,11 +210,18 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     notes: list[NotePlan] = []
     for issue in plan.issues:
         number = by_issue[issue.id]
-        outcome = (issue.outcome_id, title_of(catalog, issue.outcome_id))
         # Итог и решения — как в каталоге: номера потока в них ушли при выгрузке, а правку
-        # человека в заметке пересчитывать нельзя.
-        adrs = [(name, catalog.notes[name].body.strip()) for name in issue.adr_ids
-                if name in catalog.notes]
+        # человека в заметке пересчитывать нельзя. Кроме заметок потока, чья запись — до
+        # номеров заметок (Names.settled): там номера потока остались.
+        names = names_of(issue)
+
+        def settled(note_id: str, text: str, names: Names | None = names) -> str:
+            return names.settled(note_id, text, words["quote"]) if names else text
+
+        outcome = (issue.outcome_id,
+                   settled(issue.outcome_id, title_of(catalog, issue.outcome_id)))
+        adrs = [(name, settled(name, catalog.notes[name].body.strip()))
+                for name in issue.adr_ids if name in catalog.notes]
         after = [(by_issue[name].id, titles[name]) for name in issue.depends_on
                  if name in by_issue]
         text = issue_text(issue, number.id, outcome, adrs, after,

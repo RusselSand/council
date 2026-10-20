@@ -1231,6 +1231,15 @@ def test_a_source_term_keeps_its_number_when_tasks_are_renumbered():
     assert found[1].scope == ["Греть I1 cache после I1."]
 
 
+def test_a_multiline_task_item_is_flattened_before_task_ids_are_renumbered():
+    # Пункт ляжет одной строкой: «wait for I2» в блоке кода с отступом станет прозой — и номер
+    # задачи в нём переводят уже в ней (I2 — первая задача плана).
+    found = plan_of({"issues": [task("I2", "Индекс"),
+                                task("I1", "Выдача", scope=["Пример:\n\n    wait for I2"])]},
+                    PLAN_CONTEXT)
+    assert found[1].scope == ["Пример: wait for I1"]
+
+
 def test_a_task_refers_only_to_what_its_own_outcome_has():
     """ADR-0003, F5 и F7 — у OUT-0001; задача OUT-0002 сослаться на них не может."""
     [other] = plan_of({"issues": [task("A1", "Хранение", outcome="OUT-0002", constraint_ids=[5],

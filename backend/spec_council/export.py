@@ -666,7 +666,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     lines[-1] = lines[-1][:-1]
     # Сочетание — его слова через пробелы в видимом тексте прозы: разметка ссылок и выделения
     # и теги между ними прозрачны — «Cloudflare R2» и в «Cloudflare [**R2**](…)».
-    words = [r"[ \t]+".join(map(re.escape, phrase.split()))
+    # Сочетание — целыми словами: «I1 cache» — не начало «I1 cacheable».
+    words = [r"(?<!\w)" + r"[ \t]+".join(map(re.escape, phrase.split())) + r"(?!\w)"
              for phrase in sorted(keep, key=len, reverse=True) if phrase.split()]
     phrases = re.compile("|".join(words)) if words else None
 
