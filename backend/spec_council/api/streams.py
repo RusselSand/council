@@ -291,10 +291,24 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     def folders(council: Council) -> list[tuple[Path, str]]:
         return council_folders(notes_of(council), issues_of(council))
 
+    # Сверка карты с папками совета зовёт git в каждой рабочей копии — не под замком советов:
+    # до него, а под замком — что сверяли тот же скан и те же папки.
+    with council_lock:
+        council = current(council_id, store, edit)
+        seen = (map_scan(council), folders(council))
+    stale = seen[0] is not None and unskipped_since(seen[0], repositories, seen[1])
+
+    def checked(council: Council) -> None:
+        if (map_scan(council), folders(council)) != seen:
+            raise HTTPException(409, "Исследование или папки проекта поменялись, пока совет сверял "
+                                     "карту кода, — начните поток снова")
+        if stale:
+            raise HTTPException(409, STALE_MAP)
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
-        stream = taken(council, stream_in(council, group), edit, folders(council),
-                       repositories)
+        stream = taken(council, stream_in(council, group), edit)
+        checked(council)
         anew = asks_anew(stream, stream.repository, stream.design)
         if anew and below_running(stream_in(council, group), "decisions_search"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
@@ -302,7 +316,8 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         before = stream_in(council, group)
-        ready = taken(council, before, edit, folders(council), repositories)
+        ready = taken(council, before, edit)
+        checked(council)
         changes: dict = {field: getattr(ready, field)
                          for field in ("scan", "repository", "design_scan", "design")}
         runs: list[CouncilRun] = []
@@ -339,20 +354,24 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
 
 
-def taken(council: Council, stream: Stream, edit: StartStream,
-          folders: Sequence[tuple[Path, str]] = (), repositories: Path | None = None) -> Stream:
+def map_scan(council: Council) -> RepositoryScan | None:
+    """Скан, чью карту кода поток возьмёт из исследования, — если шаг «Репозиторий» пройден
+    сканом."""
+    research = council.research
+    if research is None or research.repository is None or research.repository.by != "scan":
+        return None
+    return research.scan
+
+
+def taken(council: Council, stream: Stream, edit: StartStream) -> Stream:
     """Поток с копией исследования совета, с которой его начинают: идея утверждена и та, что
-    человек видел, исследование пройдено, и карта кода — без папок совета (folders —
-    council_folders), какие они сейчас, в рабочих копиях от каталога repositories."""
+    человек видел, исследование пройдено."""
     if stream.idea is None:
         raise HTTPException(409, NO_IDEA)
     seen_idea(stream, edit)
     research = council.research
     if research is None or research.repository is None or research.design is None:
         raise HTTPException(409, NO_RESEARCH)
-    if (research.repository.by == "scan" and research.scan is not None
-            and unskipped_since(research.scan, repositories, folders)):
-        raise HTTPException(409, STALE_MAP)
     return stream.model_copy(update={
         "scan": research.scan if research.repository.by == "scan" else None,
         "repository": research.repository,

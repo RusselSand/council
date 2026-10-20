@@ -45,7 +45,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import STALE_MAP, Source, inventory, working_copy
+from spec_council.repository import COUNCIL_COPY, STALE_MAP, Source, inventory, working_copy
 from spec_council.store import migrated
 from tests.figma_fake import LINK, FakeFigma
 
@@ -1583,6 +1583,48 @@ def test_council_folders_changed_while_the_copies_are_read_start_no_scan(agents,
         app.dependency_overrides.pop(get_notes_of)
     assert res.status_code == 409 and "поменялись" in res.json()["detail"]
     assert "repository_discovery" not in agents.prompts
+
+
+def test_a_working_copy_that_is_the_council_notes_folder_is_not_scanned(agents, repos):
+    """Папка документации проекта — сама рабочая копия: читать в ней моделям нечего, кроме
+    прошлых решений, а они приходят в совет только отбором, — скан не начинают."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos
+    try:
+        res = scans(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert res.status_code == 422 and res.json()["detail"] == COUNCIL_COPY
+    assert "repository_discovery" not in agents.prompts
+
+
+def test_a_map_of_a_working_copy_moved_away_starts_no_stream_under_council_folders(agents,
+                                                                                    repos):
+    """Рабочую копию после скана унесли: какие папки совета в ней пропустил бы скан сейчас, не
+    сверить, — пока у проекта есть папки совета, поток с этой картой не начать. Сверка — та же
+    при начале потока, что и под замком: папки сменили, пока сверяли, — тоже 409."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos.parent / "notes"
+    try:
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert research_of(council_id).scan.repositories[0].skipped == []
+        moved = repos.rename(repos.parent / "moved")
+        res = passes(council_id, "C")
+        assert res.status_code == 409 and res.json()["detail"] == STALE_MAP
+        moved.rename(repos)
+        first = iter([repos.parent / "notes"])
+        app.dependency_overrides[get_notes_of] = lambda: lambda council: next(
+            first, repos / "docs" / "council")
+        res = starts(council_id, "C")
+        assert res.status_code == 409 and "поменялись" in res.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert "question_discovery" not in agents.prompts
 
 
 def test_a_map_made_while_the_scan_read_the_council_folders_starts_no_stream(agents, repos):

@@ -352,11 +352,28 @@ def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path
     # Пределы — без пропущенных папок: большая папка заметок скан не роняет.
     monkeypatch.setattr(repository, "FILES_MAX", 3)
     assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
-    # Папка вне рабочей копии и сама копия целиком — не пропускаются.
+    # Папка вне рабочей копии — не пропускается.
     monkeypatch.setattr(repository, "FILES_MAX", 100)
-    whole = inventory(repo, [(tmp_path / "elsewhere", "нет"), (repo, "вся")])
+    whole = inventory(repo, [(tmp_path / "elsewhere", "нет")])
     assert whole.skipped == () and "docs/council/adrs/ADR-0049.md" in whole.files
     assert "docs/council/inner/x.md" in whole.files
+    # А копия, что сама папка совета или лежит в ней, — не скан: читать в ней моделям нечего.
+    for folder in (repo, tmp_path):
+        with pytest.raises(RepositoryError, match="папка документации или задач совета"):
+            inventory(repo, [(folder, "вся")])
+
+
+def test_a_submodule_in_place_of_a_council_folder_is_skipped_too(repo):
+    """Папка задач совета — подмодуль, которого нет на диске: git зовёт его без «/», а пропущен
+    он весь — ни строки о нескачанном подмодуле, ни правки оттого, что его нет."""
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},docs/issues")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "подмодуль")
+    assert any("docs/issues/" in entry for entry in inventory(repo).omitted)
+    found = inventory(repo, council_folders(None, repo / "docs" / "issues"))
+    assert found.skipped == ("docs/issues/",) and not found.dirty
+    assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/issues/"]
 
 
 def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):
