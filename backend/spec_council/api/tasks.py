@@ -55,12 +55,12 @@ from ..notes import Catalog, NotesError
 from ..pipeline import CouncilRun, NotesRun, TaskRun, start_tasks, translating
 from ..prompts import language, notes_language
 from ..repository import (
+    STALE_MAP,
     Inventory,
     RepositoryError,
     Source,
     council_folders,
     same_copy,
-    skipping,
     working_copy,
 )
 from ..tasks import (
@@ -114,23 +114,28 @@ def code_of(research: Research, repositories: Path | None,
     if not scan.repositories or not all(source.root for source in scan.repositories):
         raise HTTPException(422, "Скан сделан, когда совет ещё не запоминал, какую рабочую копию "
                                  "читал, — просканируйте репозиторий заново")
-    return [Source(source.name, source.path, skipping(again(source, repositories), folders))
+    return [Source(source.name, source.path, again(source, repositories, folders))
             for source in scan.repositories]
 
 
-def again(source: ScannedRepository, repositories: Path | None) -> Inventory:
-    """Рабочая копия скана, какая она сейчас. Тот же путь от другого каталога репозиториев —
-    уже другая рабочая копия: читать её под картой прежней нельзя. Но тот же каталог, видный
-    по-другому (снаружи докера и в нём), — та же копия (same_copy)."""
+def again(source: ScannedRepository, repositories: Path | None,
+          folders: Sequence[tuple[Path, str]] = ()) -> Inventory:
+    """Рабочая копия скана, какая она сейчас, без папок совета (folders). Тот же путь от другого
+    каталога репозиториев — уже другая рабочая копия: читать её под картой прежней нельзя. Но тот
+    же каталог, видный по-другому (снаружи докера и в нём), — та же копия (same_copy). Скан
+    пропускал другие папки совета (сделан до пропуска или папки сменили) — карта читала не то,
+    что прочтёт план, — 422."""
     try:
         found = working_copy(source.within if source.within and repositories is not None
-                             else source.path, repositories)
+                             else source.path, repositories, skip=folders)
     except RepositoryError as exc:
         raise HTTPException(422, f"Рабочую копию {source.path} не прочитать: {exc}") from None
     if not same_copy(source, found.root):
         raise HTTPException(422, f"По пути {source.path} теперь другая рабочая копия: "
                                  f"сканировали {source.root}, а сейчас это {found.root} — "
                                  "просканируйте заново")
+    if list(found.skipped) != source.skipped:
+        raise HTTPException(422, STALE_MAP)
     return found
 
 
@@ -161,6 +166,8 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
     # Исследование, чьи рабочие копии прочитаны: пока их читали или проверяли модели, его могли
     # сбросить или пройти заново в другой вкладке — тогда код и карта разошлись бы.
     read: list[Research] = []
+    # И папки совета, без которых их прочли: пока читали, проект могли поменять.
+    taken: list[list[tuple[Path, str]]] = []
 
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
@@ -168,14 +175,17 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
         if read and research_of(council) != read[0]:
             raise HTTPException(409, "Исследование поменялось, пока совет читал рабочие копии, — "
                                      "спланируйте снова")
+        if taken and council_folders(notes_of(council), issues_of(council)) != taken[0]:
+            raise HTTPException(409, "Папки документации или задач проекта поменялись, пока совет "
+                                     "читал рабочие копии, — спланируйте снова")
         return council, True
 
     # Сначала дешёвое: запрос, которому всё равно откажут, рабочую копию не читает.
     with council_lock:
         council, _ = plan()
+        taken.append(council_folders(notes_of(council), issues_of(council)))
     read.append(research_of(council))
-    sources = code_of(read[0], repositories,
-                      council_folders(notes_of(council), issues_of(council)))
+    sources = code_of(read[0], repositories, taken[0])
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         inputs = replace(inputs_of(council), cited=research_snapshot(council, notes_of(council)))

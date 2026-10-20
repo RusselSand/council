@@ -30,7 +30,6 @@ from spec_council.repository import (
     same_copy,
     scanned,
     sha_prompt,
-    skipping,
     snapshot,
     snapshot_all,
     sources_of,
@@ -312,7 +311,7 @@ def test_a_snapshot_holds_only_the_inventory_files(repo, tmp_path):
     assert (into / "api" / "deps.py").read_text(encoding="utf-8") == "def get_context(): ...\n"
 
 
-def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path):
+def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path, monkeypatch):
     """Заметки и задачи совета в репозитории проекта модели в коде не читают: прошлые решения
     приходят в совет отбором. И их правка во время скана — не правка того, что модели читают."""
     for name in ("docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
@@ -320,13 +319,27 @@ def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path
         (repo / name).write_text("Пока не делаем.\n", encoding="utf-8")
     git(repo, "add", ".")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "заметки")
-    # Выгрузка ещё одной заметки не делает рабочую копию «с правками».
+    # Выгрузка ещё одной заметки не делает рабочую копию «с правками», и правка заметки с
+    # assume-unchanged — тоже.
     (repo / "docs" / "council" / "adrs" / "ADR-0048.md").write_text("Ещё.\n", encoding="utf-8")
+    git(repo, "update-index", "--assume-unchanged", "docs/council/adrs/ADR-0047.md")
+    (repo / "docs" / "council" / "adrs" / "ADR-0047.md").write_text("Уже.\n", encoding="utf-8")
+    # Ссылка в пропущенной папке: о ней моделям не говорят — её папки для них нет.
+    try:
+        (repo / "docs" / "council" / "link").symlink_to(tmp_path)
+    except OSError:
+        pass
+    # И репозиторий внутри неё — тоже: ни его файлов, ни строки о нём.
+    inner = repo / "docs" / "council" / "inner"
+    inner.mkdir()
+    git(inner, "init", "-q")
+    (inner / "x.md").write_text("Вложенный.\n", encoding="utf-8")
     folders = council_folders(repo / "docs" / "council", repo / "docs" / "issues")
-    found = skipping(inventory(repo), folders)
+    found = inventory(repo, folders)
     assert found.files == (".gitignore", "api/deps.py")
     assert not found.dirty
     assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/council/", "docs/issues/"]
+    assert found.skipped == ("docs/council/", "docs/issues/")
     # Пока делается снимок, в пропущенные папки пишут — снимок тот же и годится.
     (repo / "docs" / "council" / "adrs" / "ADR-0049.md").write_text("Новое.\n", encoding="utf-8")
     (repo / "docs" / "issues" / "ISS-0001.md").write_text("Правка.\n", encoding="utf-8")
@@ -336,8 +349,14 @@ def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path
     (repo / "api" / "deps.py").write_text("def get_context(): return 3\n", encoding="utf-8")
     with pytest.raises(RepositoryError, match="менялась"):
         copy(found, tmp_path, "again")
+    # Пределы — без пропущенных папок: большая папка заметок скан не роняет.
+    monkeypatch.setattr(repository, "FILES_MAX", 3)
+    assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
     # Папка вне рабочей копии и сама копия целиком — не пропускаются.
-    assert skipping(found, [(tmp_path / "elsewhere", "нет"), (repo, "вся")]) is found
+    monkeypatch.setattr(repository, "FILES_MAX", 100)
+    whole = inventory(repo, [(tmp_path / "elsewhere", "нет"), (repo, "вся")])
+    assert whole.skipped == () and "docs/council/adrs/ADR-0049.md" in whole.files
+    assert "docs/council/inner/x.md" in whole.files
 
 
 def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):

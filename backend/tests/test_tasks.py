@@ -40,6 +40,7 @@ from spec_council.models import (
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
 from spec_council.pipeline import start_tasks
+from spec_council.repository import STALE_MAP
 from spec_council.tasks import (
     Names,
     adr_entry,
@@ -460,6 +461,29 @@ def test_the_plan_does_not_read_the_council_folders_in_the_repository(agents, fo
     assert plans(council_id).status_code == 202
     assert council(council_id).tasks.state == "done"
     assert agents.seen == ["app.py"]
+
+
+def test_a_map_made_while_the_scan_read_the_council_folders_refuses_the_plan(  # noqa: F811
+        agents, folders, repos):  # noqa: F811
+    # Скан сделан до пропуска папок совета: его карта читала заметки — план под ней читал бы
+    # другое, и его не строят, пока не просканируют заново.
+    notes, issues = repos / "docs" / "council", repos / "docs" / "issues"
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: notes
+    app.dependency_overrides[get_issues_of] = lambda: lambda council: issues
+    council_id = single()
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    all_decided(council_id)
+    exported(council_id)
+    research = council(council_id).research
+    scan = research.scan.model_copy(update={"repositories": [
+        source.model_copy(update={"skipped": []}) for source in research.scan.repositories]})
+    get_store().update_council(council_id,
+                               {"research": research.model_copy(update={"scan": scan})})
+    res = plans(council_id)
+    assert res.status_code == 422 and res.json()["detail"] == STALE_MAP
+    assert council(council_id).tasks is None
 
 
 def test_a_working_copy_gone_since_the_scan_refuses_the_plan(agents, folders, repos):  # noqa: F811

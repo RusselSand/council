@@ -45,7 +45,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import Source, inventory, working_copy
+from spec_council.repository import STALE_MAP, Source, inventory, working_copy
 from spec_council.store import migrated
 from tests.figma_fake import LINK, FakeFigma
 
@@ -1566,6 +1566,45 @@ def test_the_scan_does_not_read_the_council_notes_and_issues_folders(agents, rep
     assert agents.seen == ["app.py"]
     assert research_of(council_id).scan.repositories[0].files == 1
     assert "docs/council/ — папка документации совета" in agents.prompts["repository_discovery"]
+
+
+def test_council_folders_changed_while_the_copies_are_read_start_no_scan(agents, repos):
+    """Папку документации проекта сменили, пока совет читал рабочие копии: прочитанное пропускало
+    прежнюю папку, а не нынешнюю, — скан не начинают."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    first = iter([repos / "docs" / "old"])
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: next(
+        first, repos / "docs" / "council")
+    try:
+        res = scans(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert res.status_code == 409 and "поменялись" in res.json()["detail"]
+    assert "repository_discovery" not in agents.prompts
+
+
+def test_a_map_made_while_the_scan_read_the_council_folders_starts_no_stream(agents, repos):
+    """Папку документации проекта задали в репозитории после скана: карта читала заметки,
+    которых модели теперь не читают, — поток с ней не начать. Скан заново — и можно."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos / "docs" / "council"
+    try:
+        res = passes(council_id, "C")
+        assert res.status_code == 409 and res.json()["detail"] == STALE_MAP
+        assert "question_discovery" not in agents.prompts
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert research_of(council_id).scan.repositories[0].skipped == ["docs/council/"]
+        assert passes(council_id, "C").status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert "question_discovery" in agents.prompts
 
 
 def test_an_approved_map_goes_into_the_questions_and_every_step_below(agents, repos):

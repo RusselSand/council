@@ -23,6 +23,7 @@ from ..decisions import RATIONALE_MAX
 from ..deps import (
     AgentsDep,
     ConfigDep,
+    IssuesOfDep,
     Launcher,
     LauncherDep,
     NotesOf,
@@ -96,6 +97,7 @@ from ..pipeline import (
 from ..project import catalog_print, fingerprint, records
 from ..proposals import PROPOSAL_MAX, found_by_question, last_number
 from ..questions import QUESTION_MAX, same_question
+from ..repository import STALE_MAP, council_folders, unskipped_since
 from ..work import (
     carried_analyses,
     carried_options,
@@ -277,16 +279,22 @@ def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep,
                         423: {"description": "Совет ещё работает с этим потоком"}})
 def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep,
                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                 notes_of: NotesOfDep, repositories: RepositoriesDep) -> Council:
+                 notes_of: NotesOfDep, issues_of: IssuesOfDep,
+                 repositories: RepositoriesDep) -> Council:
     """Человек начинает поток: поток берёт себе копию исследования совета — карту кода и
     описание макета, — и совет сразу ищет открытые вопросы, а карта и описание идут во все
     следующие шаги. Если в каталоге заметок есть прошлые решения проекта, сначала совет отбирает
     относящиеся к идее, а вопросы — когда человек отметит нужные. Начать заново, когда
     исследование с тех пор прошли иначе, — всё ниже заново, с новым исследованием; с тем же —
-    ничего не меняется. Идея — та, что человек видел."""
+    ничего не меняется. Идея — та, что человек видел. Карта кода, сделанная, когда скан ещё
+    читал папки совета, — 409: её делают заново."""
+    def folders(council: Council) -> list[tuple[Path, str]]:
+        return council_folders(notes_of(council), issues_of(council))
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
-        stream = taken(council, stream_in(council, group), edit)
+        stream = taken(council, stream_in(council, group), edit, folders(council),
+                       repositories)
         anew = asks_anew(stream, stream.repository, stream.design)
         if anew and below_running(stream_in(council, group), "decisions_search"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
@@ -294,7 +302,7 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         before = stream_in(council, group)
-        ready = taken(council, before, edit)
+        ready = taken(council, before, edit, folders(council), repositories)
         changes: dict = {field: getattr(ready, field)
                          for field in ("scan", "repository", "design_scan", "design")}
         runs: list[CouncilRun] = []
@@ -331,15 +339,20 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
 
 
-def taken(council: Council, stream: Stream, edit: StartStream) -> Stream:
+def taken(council: Council, stream: Stream, edit: StartStream,
+          folders: Sequence[tuple[Path, str]] = (), repositories: Path | None = None) -> Stream:
     """Поток с копией исследования совета, с которой его начинают: идея утверждена и та, что
-    человек видел, исследование пройдено."""
+    человек видел, исследование пройдено, и карта кода — без папок совета (folders —
+    council_folders), какие они сейчас, в рабочих копиях от каталога repositories."""
     if stream.idea is None:
         raise HTTPException(409, NO_IDEA)
     seen_idea(stream, edit)
     research = council.research
     if research is None or research.repository is None or research.design is None:
         raise HTTPException(409, NO_RESEARCH)
+    if (research.repository.by == "scan" and research.scan is not None
+            and unskipped_since(research.scan, repositories, folders)):
+        raise HTTPException(409, STALE_MAP)
     return stream.model_copy(update={
         "scan": research.scan if research.repository.by == "scan" else None,
         "repository": research.repository,

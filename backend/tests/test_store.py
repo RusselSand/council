@@ -242,7 +242,7 @@ def test_a_scan_saved_with_one_repository_reads_as_a_list_of_one():
     assert [r.model_dump() for r in scan.repositories] == [{
         "name": "", "path": "project", "root": "/repos/project", "checkout": "", "within": "",
         "commit_sha": "abc", "dirty": True, "files": 2, "outside": 1,
-        "omitted": ["vendor/ — подмодуль не скачан"], "omitted_count": 1}]
+        "omitted": ["vendor/ — подмодуль не скачан"], "omitted_count": 1, "skipped": []}]
 
 
 def test_councils_are_read_under_the_models_of_today(tmp_path):

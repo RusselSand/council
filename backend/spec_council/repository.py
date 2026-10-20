@@ -225,10 +225,12 @@ def listed(copies: list[Copy]) -> list[str]:
     return found
 
 
-def copies_of(root: Path) -> list[Copy]:
+def copies_of(root: Path, skipped: tuple[str, ...] = ()) -> list[Copy]:
     """Корень и вложенные рабочие копии — checked-out подмодули и просто репозитории внутри,
     не подмодули, — и вложенные в них. Подменённую ссылкой и уже пройденную не обходим: ссылка
-    назад на родителя водила бы по кругу, а наружу — за пределы рабочей копии."""
+    назад на родителя водила бы по кругу, а наружу — за пределы рабочей копии. Пропущенных папок
+    (skipped — от корня, с «/» на конце: skipped_of) нет нигде: ни их файлов, ни копий и ссылок
+    в них, — и в пределы обхода они не идут."""
     top = os.path.realpath(root)
     seen = {top}
     found: list[Copy] = []
@@ -236,9 +238,12 @@ def copies_of(root: Path) -> list[Copy]:
     queue = [(root, "", False)]
     while queue:
         folder, prefix, embedded = queue.pop(0)
-        index = index_of(folder)
+        index = [entry for entry in index_of(folder)
+                 if not (prefix + entry[3]).startswith(skipped)]
         cached = [name for *_, name in index]
-        others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
+        others = [name for name in
+                  names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
+                  if not (prefix + name).startswith(skipped)]
         counted += len(cached) + len(others)
         # Пути — как их потом соберёт listed(): с путём копии от корня у каждого.
         chars += (len(cached) + len(others)) * len(prefix)
@@ -372,7 +377,8 @@ def placed(text: str, base: Path | None) -> Path:
     return path.resolve()
 
 
-def working_copy(text: str, base: Path | None, *, mark: bool = False) -> Inventory:
+def working_copy(text: str, base: Path | None, *, mark: bool = False,
+                 skip: Iterable[tuple[Path, str]] = ()) -> Inventory:
     """Рабочая копия по тексту человека — целиком внутри каталога репозиториев: корень git
     может оказаться выше выбранной папки. Корень — одним дешёвым вызовом git, до обхода: чужую
     рабочую копию не читаем даже ради отказа. С её меткой (mark — поставить, если её нет: скан)
@@ -380,7 +386,7 @@ def working_copy(text: str, base: Path | None, *, mark: bool = False) -> Invento
     root = top_of(located(text, base))
     if base is not None and not root.is_relative_to(base.resolve()):
         raise RepositoryError(f"Корень рабочей копии {root} вне каталога репозиториев {base}")
-    found = inventory(root)
+    found = inventory(root, skip)
     fits(found)
     within = root.relative_to(base.resolve()).as_posix() if base is not None else ""
     return replace(found, checkout=checkout_of(root, mark=mark), within=within)
@@ -543,7 +549,7 @@ def unskipped(found: list[tuple[str, str, bytes]],
         return found
     kept_levels: list[tuple[str, str, bytes]] = []
     for prefix, sha, status in found:
-        listed_part, sep, hidden = status.partition(b"\0\0hidden\0")
+        listed_part, _, hidden = status.partition(HIDDEN_MARK)
         parts = listed_part.split(b"\0")
         kept: list[bytes] = []
         at = 0
@@ -556,8 +562,11 @@ def unskipped(found: list[tuple[str, str, bytes]],
                 if not all((prefix + os.fsdecode(path)).startswith(skipped) for path in paths):
                     kept += parts[at:at + 1 + extra]
             at += 1 + extra
+        # Правки в файлах с assume-unchanged и skip-worktree (hidden_of) — тоже без них.
+        flagged = [name for name in hidden.split(b"\0")
+                   if name and not (prefix + os.fsdecode(name)).startswith(skipped)]
         kept_levels.append((prefix, sha, b"".join(part + b"\0" for part in kept)
-                            + (sep + hidden if sep else b"")))
+                            + (HIDDEN_MARK + b"\0".join(flagged) if flagged else b"")))
     return kept_levels
 
 
@@ -567,10 +576,15 @@ def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
                          for prefix, sha, status in found)
 
 
+# Где в статусе копии (changes_of) кончается git status и начинаются правки, что он не
+# покажет (hidden_of).
+HIDDEN_MARK = b"\0\0hidden\0"
+
+
 def changes_of(root: Path) -> bytes:
     """git status с каждым новым файлом — и правки, которых он не покажет."""
     hidden = hidden_of(root)
-    return status_of(root) + (b"\0\0hidden\0" + hidden if hidden else b"")
+    return status_of(root) + (HIDDEN_MARK + hidden if hidden else b"")
 
 
 def hidden_of(root: Path) -> bytes:
@@ -695,51 +709,45 @@ def status_of(root: Path) -> bytes:
                      "--ignore-submodules=dirty")
 
 
-def inventory(path: Path) -> Inventory:
+def inventory(path: Path, skip: Iterable[tuple[Path, str]] = ()) -> Inventory:
     """Корень рабочей копии, её коммит, есть ли незакоммиченные правки, и список файлов — тех,
     что на диске есть, это обычные файлы и лежат в рабочей копии (удалённый, но отслеживаемый,
-    вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы)."""
+    вне sparse checkout, ссылка и файл за каталогом-ссылкой — не её файлы). Без папок skip (путь
+    и почему: council_folders) — их нет ни в файлах, ни в пределах, ни в состоянии и правках:
+    их правят (выгрузка заметок), а снимок тот же; модели узнают, почему их нет (omitted)."""
     root = top_of(path)
-    copies = copies_of(root)
+    skipped, told = skipped_of(root, skip)
+    copies = copies_of(root, skipped)
     files = present(root, copies)
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
     if size > SNAPSHOT_MAX:
         raise too_big()        # до git status и hash-object: они читают файлы с флагами целиком
-    found = levels(copies)
+    found = unskipped(levels(copies), skipped)
     # Правки — и вложенный репозиторий, не подмодуль: его кода в коммите корня нет.
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
-    return Inventory(root, found[0][1], dirty, files,
-                     state_of(found), modes_of(copies), size,
-                     sum(copy.outside for copy in copies), omitted_of(root, copies))
+    kept = set(files)
+    modes = {name: mode for name, mode in modes_of(copies).items() if name in kept}
+    return Inventory(root, found[0][1], dirty, files, state_of(found), modes, size,
+                     sum(copy.outside for copy in copies), (*omitted_of(root, copies), *told),
+                     skipped=skipped)
 
 
-def skipping(found: Inventory, folders: Iterable[tuple[Path, str]]) -> Inventory:
-    """Опись рабочей копии без файлов из папок folders (путь и почему): в снимок они не лягут, а
-    модели узнают, чего в нём нет и почему (omitted). Папка вне рабочей копии или сама копия
-    целиком — не пропускается."""
-    root = found.root.resolve()
+def skipped_of(root: Path, folders: Iterable[tuple[Path, str]]
+               ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Какие из папок folders (путь и почему) опись рабочей копии с корнем root пропускает — от
+    корня, с «/» на конце, — и что о каждой узнают модели (omitted). Папка вне рабочей копии или
+    сама копия целиком — не пропускается."""
+    top = root.resolve()
     prefixes: list[str] = []
     told: list[str] = []
     for folder, why in folders:
         resolved = folder.resolve()
-        if resolved == root or not resolved.is_relative_to(root):
+        if resolved == top or not resolved.is_relative_to(top):
             continue
-        inside = resolved.relative_to(root).as_posix()
+        inside = resolved.relative_to(top).as_posix()
         prefixes.append(inside + "/")
         told.append(f"{shown(inside)}/ — {why}")
-    if not prefixes:
-        return found
-    skipped = (*found.skipped, *prefixes)
-    files = tuple(name for name in found.files if not name.startswith(skipped))
-    kept = set(files)
-    size = sum(stamp[0] for stamp in (stamp_of(found.root / name) for name in files) if stamp)
-    # Состояние и правки — без пропущенных папок: их правят (выгрузка заметок), а снимок тот же.
-    copies = copies_of(found.root)
-    levelled = unskipped(levels(copies), skipped)
-    dirty = any(status for _, _, status in levelled) or any(copy.embedded for copy in copies)
-    return replace(found, files=files, size=size, state=state_of(levelled), dirty=dirty,
-                   modes={name: mode for name, mode in found.modes.items() if name in kept},
-                   omitted=(*found.omitted, *told), skipped=skipped)
+    return tuple(prefixes), tuple(told)
 
 
 def council_folders(notes: Path | None, issues: Path | None) -> list[tuple[Path, str]]:
@@ -840,10 +848,9 @@ def snapshot(found: Inventory, into: Path, *,
         digest.update(os.fsencode(name) + b"\0" + part + b"\0")
         taken[name] = stamp
         written += (into / name).stat().st_size
-    copies = copies_of(found.root)
+    copies = copies_of(found.root, found.skipped)
     # Состояние читается после списка файлов: появился файл между ними — его в снимке нет.
-    appeared = {name for name in present(found.root, copies)
-                if not name.startswith(found.skipped)} - set(found.files)
+    appeared = set(present(found.root, copies)) - set(found.files)
     if state_of(unskipped(levels(copies), found.skipped)) != found.state or appeared or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
@@ -996,7 +1003,25 @@ def scanned(source: Source) -> ScannedRepository:
                              within=found.within, checkout=found.checkout,
                              commit_sha=found.commit_sha, dirty=found.dirty,
                              files=len(found.files), outside=found.outside,
-                             omitted=capped(found.omitted), omitted_count=len(found.omitted))
+                             omitted=capped(found.omitted), omitted_count=len(found.omitted),
+                             skipped=list(found.skipped))
+
+
+# Карта сделана, когда скан ещё читал папки совета, или их с тех пор сменили (unskipped_since).
+STALE_MAP = ("Карта кода сделана, когда скан ещё читал папки документации и задач совета (или их "
+             "с тех пор сменили в проекте), — просканируйте репозиторий заново")
+
+
+def unskipped_since(scan: RepositoryScan, base: Path | None,
+                    folders: Iterable[tuple[Path, str]]) -> bool:
+    """Скан пропускал не те папки совета, что пропустил бы сейчас (folders — council_folders):
+    сделан до пропуска или папки проекта с тех пор сменили. Его карта читала не то, что прочтут
+    потоки, — карту делают заново. Корни — где копии сейчас (rerooted): снаружи докера и в нём
+    каталог репозиториев виден по-другому, а папки проекта — от того, каким он виден сейчас.
+    Копию не найти (или скан до запоминания корня) — не сверить."""
+    folders = list(folders)
+    return any(source.root and list(skipped_of(Path(source.root), folders)[0]) != source.skipped
+               for source in rerooted(scan, base).repositories)
 
 
 def merged(sources: Sequence[Source]) -> Inventory:
