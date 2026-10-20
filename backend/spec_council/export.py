@@ -421,7 +421,8 @@ def cited_in(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = (), notes: Iterable[str] = (),
-               known: Collection[str] = (), cited: Collection[str] = ()) -> frozenset[str]:
+               known: Collection[str] = (), cited: Collection[str] = (),
+               maps: Iterable[str] = (), local: Collection[str] = ()) -> frozenset[str]:
     """Где в прозе исходных текстов — текста группы, идеи, находок скана (и more) — слово,
     похожее на номер («F1 score», «Cloudflare R2», «I1 cache», «ADR-9999 fixture»): оно с
     соседним словом. Номера потока, заметок и задач появились позже этих текстов, и в таком
@@ -429,7 +430,8 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     Кроме номеров заметок каталога, что они называют (cited_in): это ссылки. notes — тексты
     заметок: в них номер известной заметки (known) — настоящая ссылка, и его сочетание словом
     не становится. Тексты отобранных решений проекта — из каталога: там ссылка — любой номер
-    заметки, а слово — только номер потока («Q1 reporting»)."""
+    заметки, а слово — только номер потока («Q1 reporting»). maps — что ещё план читал об
+    исследовании (его карты): номер его находки (local) там — ссылка на неё («R1 validation»)."""
     found: set[str] = set()
     keys = {note_key(note_id) for note_id in known}
     catalog = {note_key(note_id) for note_id in cited}
@@ -443,8 +445,12 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     def any_note(name: str) -> bool:
         return NUMBER.fullmatch(name) is not None
 
+    def mapped(name: str) -> bool:
+        return cited_note(name) or name in local
+
     sources: list[tuple[str, Callable[[str], bool] | None]] = [
         (text, cited_note) for text in sources_of(stream, fragments, more)]
+    sources += [(text, mapped) for text in maps]
     sources += [(text, known_note) for text in notes]
     sources += [(text, any_note) for text in decision_texts(stream)]
     for source, linked in sources:
@@ -478,6 +484,19 @@ PROTECTED = frozenset(("code", "html", "autolink", "link"))
 # теги, разметка ссылок и выделения — прозрачно: «Cloudflare [**R2**](…)» — это «Cloudflare R2».
 VISIBLE = frozenset(("text", "literal"))
 BORDER = frozenset(("code", "autolink"))
+# Теги, что рвут строку: перенос, черта и блочные элементы — граница, а не прозрачная
+# разметка: «Cloudflare<br>R2» — не «Cloudflare R2».
+BREAKS = frozenset(("br", "hr", "p", "div", "li", "ul", "ol", "dl", "dt", "dd", "table", "tr",
+                    "td", "th", "thead", "tbody", "h1", "h2", "h3", "h4", "h5", "h6",
+                    "blockquote", "section", "article", "header", "footer", "nav", "aside",
+                    "figure", "figcaption", "details", "summary"))
+TAG_NAME = re.compile(r"</?([A-Za-z][A-Za-z0-9-]*)")
+
+
+def breaks(tag: str) -> bool:
+    """Тег рвёт строку (BREAKS)."""
+    found = TAG_NAME.match(tag)
+    return found is not None and found.group(1).lower() in BREAKS
 
 
 def marking(kind: str, rule: InlineRule) -> InlineRule:
@@ -518,6 +537,8 @@ def marking(kind: str, rule: InlineRule) -> InlineRule:
             seen.append((base + start, base + end, "\n" if hard else " "))
         elif kind in VISIBLE or kind in BORDER:
             seen.append((base + start, base + end, None if kind in VISIBLE else "\n"))
+        elif kind == "html" and breaks(state.src[start:end]):
+            seen.append((base + start, base + end, "\n"))
         if kind == "link":
             close = state.md.helpers.parseLinkLabel(state, start + image, not image)
             if close >= 0 and state.src[close + 1:end] not in ("", "[]"):
@@ -684,10 +705,11 @@ def spaced(text: str) -> str:
 def html_signs(text: str, start: int, end: int,
                elements: Iterable[tuple[int, int]]) -> list[tuple[int, str]]:
     """Видимый текст блока HTML (text[start:end]) — по знаку с его местом: тег и комментарий
-    прозрачны, элемент кода (elements) — граница «\n»."""
+    прозрачны, а тег, что рвёт строку (BREAKS), и элемент кода (elements) — граница «\n»."""
     drops = sorted([(max(begin, start), min(close, end), "\n") for begin, close in elements
                     if begin < end and close > start]
-                   + [(*piece.span(), "") for piece in HTML_PIECE.finditer(text, start, end)],
+                   + [(*piece.span(), "\n" if breaks(piece.group(0)) else "")
+                      for piece in HTML_PIECE.finditer(text, start, end)],
                    key=lambda drop: (drop[0], -drop[1]))
     signs: list[tuple[int, str]] = []
     last = start

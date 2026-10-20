@@ -7,6 +7,7 @@ import shutil
 from dataclasses import replace
 
 import pytest
+from fastapi import HTTPException
 
 from spec_council.api import tasks as tasks_api
 from spec_council.app import app
@@ -625,6 +626,20 @@ def test_a_note_number_in_a_copied_decision_is_checked_too(tmp_path):
                       words_for("Russian"), "Russian", (), {"OUT-0001": Names({}, {})})
 
 
+def test_source_phrases_do_not_hide_numbers_in_copied_catalog_text(tmp_path):
+    # «ADR-9999 fixture» — слово исходных текстов потока, но решение в каталоге ссылается теми же
+    # словами на ADR-9999, которого больше нет: в тексте из каталога это ссылка.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов"),
+                       "ADR-0001": Note("ADR-0001", "adr", "Проверено на ADR-9999 fixture")})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", adr_ids=["ADR-0001"])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    names = Names({}, {}, phrases=frozenset({"ADR-9999 fixture"}))
+    with pytest.raises(NotesError, match="ADR-9999"):
+        drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian", (), {"OUT-0001": names})
+
+
 def test_catalog_notes_the_research_cites_are_references():
     # Находка исследования, по которому строили план, называет ADR-0042, что был тогда в
     # каталоге: «ADR-0042 validation» — ссылка, а не слово.
@@ -635,9 +650,36 @@ def test_catalog_notes_the_research_cites_are_references():
                           {"ADR-0042", "OQ-0001"}) == ["ADR-0042"]
     # План читает исследование целиком — карту и описание макета, а не только находки: слово
     # оттуда («Cloudflare R2») — слово, хоть у исследования и есть находка R2.
-    names = names_of(Stream(group="C"), {}, {"R2": "Ответы в индексе."},
+    names = names_of(Stream(group="C"), {}, {"R3": "Ответы в индексе."},
                      context=["Хранилище — Cloudflare R2 storage."])
     assert "Cloudflare R2" in names.phrases
+    # Номер находки исследования в его карте — ссылка на неё, а не слово; в тексте самой
+    # находки слово остаётся словом.
+    names = names_of(Stream(group="C"), {}, {"R2": "Храним в Cloudflare R2 storage."},
+                     context=["Шаг: R2 validation."])
+    assert "Cloudflare R2" in names.phrases and "R2 validation" not in names.phrases
+
+
+def test_a_legacy_note_body_gives_no_phrases_with_stream_numbers():
+    # Запись до номеров заметок хранит «Q1 validation» — это вопрос Q1, а не слово.
+    note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
+                        written="Сверить по Q1 validation", digest="d")
+    stream = Stream(group="C", scope=[OpenQuestion(id="Q1", text="Как?", source="discovered")],
+                    notes=NotesExport(run="n1", language="Russian", notes=[note],
+                                      refs={"I1": "IDEA-0001", "Q1": "OQ-0001"}))
+    names = names_of(stream, {})
+    assert not any("Q1" in phrase for phrase in names.phrases)
+    assert names.settled("ADR-0001", note.written) == "Сверить по OQ-0001 validation"
+
+
+def test_planning_with_an_unreadable_catalog_is_refused(agents, folders, tmp_path):
+    # Каталог не прочитать — номера каталога, что называет исследование, не запомнить: план не
+    # строят, а не запоминают пустое.
+    broken = tmp_path / "broken"
+    (broken / "adrs").mkdir(parents=True)
+    (broken / "adrs" / "ADR-0001.md").write_text("---\nid: [\n---\nТело", encoding="utf-8")
+    with pytest.raises(HTTPException):
+        tasks_api.research_snapshot(council(ready()), broken)
 
 
 def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
@@ -1025,10 +1067,10 @@ def test_a_dependency_list_under_an_indented_heading_is_found():
 
 
 def test_a_phrase_written_into_an_exported_note_is_a_stream_phrase():
-    # При выгрузке человек дописал «Q1 reporting» в решение: модели плана его видят, и в задачах
-    # это его слово, а не вопрос Q1.
+    # При выгрузке (нынешней, с номерами заметок) человек дописал «Q1 reporting» в решение:
+    # модели плана его видят, и в задачах это его слово, а не вопрос Q1.
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
-                        written="Считать по Q1 reporting", digest="d")
+                        written="Считать по Q1 reporting", digest="d", note_numbers=True)
     stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
                                                  refs={"I1": "IDEA-0001", "Q1": "OQ-0001"}))
     names = names_of(stream, {})

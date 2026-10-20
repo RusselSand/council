@@ -219,14 +219,15 @@ def notes_root(notes: Path | None) -> Path:
 
 def research_snapshot(council: Council, notes: Path | None) -> list[str]:
     """Номера каталога, что называют находки исследования, — пока заметки в каталоге: план
-    запомнит их (TaskPlan.cited). Каталог не прочитать — ничего: выгрузить план и тогда не
-    выйдет (shelf_of)."""
+    запомнит их (TaskPlan.cited). Каталог не прочитать — 422: пустое запомнить нельзя, план
+    строят снова, когда каталог починят."""
     if notes is None:
         return []
     try:
         catalog = Catalog.load(notes)
-    except NotesError:
-        return []
+    except NotesError as exc:
+        raise HTTPException(422, f"Каталог заметок {notes}: {exc} — почините его и спланируйте "
+                                 "снова") from None
     return research_cited([*research_texts(council).values(), *research_maps(council)],
                           catalog.notes)
 

@@ -550,6 +550,12 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
                             label="idea", reason="", council_label="idea")
     found = phrases_of(STREAM, {5: split})
     assert "Cloudflare R10" not in found and "Cloudflare R11" in found
+    # Тег переноса строки и блочный тег — граница, хоть за ними и мягкий перенос.
+    broken = LabeledFragment(id=6, text="Cloudflare<br>\nR12 storage, Cloudflare</p>R13 x.",
+                             label="idea", reason="", council_label="idea")
+    found_broken = phrases_of(STREAM, {6: broken})
+    assert "R12 storage" in found_broken
+    assert not any(phrase in found_broken for phrase in ("Cloudflare R12", "Cloudflare R13"))
     # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
     spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
                              reason="", council_label="idea")

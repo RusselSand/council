@@ -212,8 +212,18 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
                           labels, renumber(issue), kept(issue))
         # Файл задачи — весь, как он ляжет: что написал план (и что встало на место номера без
         # заметки), ограничения и риски, итог и решения из каталога. Номер в сочетании из
-        # исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
-        dead |= {found for found in numbers_in_prose(text, kept(issue))
+        # исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка; но только в том,
+        # что из них и из плана: в тексте каталога те же слова — ссылка.
+        planned_text = issue_text(issue, number.id, (outcome[0], ""),
+                                  [(name, "") for name, _ in adrs], after,
+                                  [fragments[i].text for i in issue.constraint_ids
+                                   if i in fragments],
+                                  [fragments[i].text for i in issue.risk_ids if i in fragments],
+                                  words, labels, renumber(issue), kept(issue))
+        catalog_texts = [outcome[1], *(body for _, body in adrs)]
+        dead |= {found for found in [*numbers_in_prose(planned_text, kept(issue)),
+                                     *(found for body in catalog_texts
+                                       for found in numbers_in_prose(body))]
                  if not found.startswith("ISS-") and note_key(found) not in known}
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)

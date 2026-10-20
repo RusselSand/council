@@ -150,20 +150,24 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     context — что ещё план читал об исследовании (research_maps): сочетания и оттуда."""
     found = dict(research or {})
     notes = stream.notes.notes if stream.notes else []
-    written = [note.written for note in notes]
-    # Номер заметки любого потока совета, отобранного решения проекта или заметки каталога, что
-    # была там, когда текст записывали (references), в выгруженном тексте — ссылка.
-    known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
-             *(decision.adr_id for decision in stream.project_decisions or []),
-             *(reference for note in notes for reference in note.references)}
+    refs = stream.notes.refs if stream.notes else {}
+    owned = stream_texts(stream, fragments)
     # Номера каталога, что называют исходные тексты потока (при его выгрузке) и исследование
     # (cited — когда строили план).
     cited = [*(stream.notes.cited if stream.notes else []), *cited]
-    owned = stream_texts(stream, fragments)
-    return Names(stream.notes.refs if stream.notes else {}, owned | found,
-                 terms_of(stream, cited),
-                 phrases_of(stream, fragments, [*found.values(), *context], written, known,
-                            cited),
+    terms = terms_of(stream, cited)
+    # Запись до номеров заметок хранит номера потока — «Q1 validation» там вопрос Q1, а не
+    # слово: сочетания ищут в её тексте уже с номерами заметок.
+    written = [note.written if note.note_numbers
+               else renumbered(note.written, refs, owned, terms=terms) for note in notes]
+    # Номер заметки любого потока совета, отобранного решения проекта или заметки каталога, что
+    # была там, когда текст записывали (references), в выгруженном тексте — ссылка.
+    known = {*refs.values(), *exported,
+             *(decision.adr_id for decision in stream.project_decisions or []),
+             *(reference for note in notes for reference in note.references)}
+    return Names(refs, owned | found, terms,
+                 phrases_of(stream, fragments, found.values(), written, known, cited,
+                            maps=context, local=found.keys()),
                  frozenset(note.id for note in notes if not note.note_numbers), owned)
 
 
