@@ -722,6 +722,19 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                    for (key, part), start in zip(groups, starts, strict=False))
 
 
+def numbers_in_prose(text: str, keep: Collection[str] = ()) -> list[str]:
+    """Номера заметок и задач в прозе: в коде, адресах ссылок и сочетаниях keep (in_prose)
+    номер — не ссылка."""
+    found: list[str] = []
+
+    def collect(part: str) -> str:
+        found.extend(NUMBER.findall(part))
+        return part
+
+    in_prose(text, collect, keep)
+    return found
+
+
 def renumbered(text: str, numbers: Mapping[str, str], texts: Mapping[str, str],
                quote: str = "«{}»", terms: Collection[str] = (),
                phrases: Collection[str] = ()) -> str:
@@ -996,7 +1009,7 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
                                          digest=digest_of(where(plan.id, plan.type)),
                                          note_numbers=True,
                                          references=sorted({
-                                             found for found in NUMBER.findall(texts[plan.key])
+                                             found for found in numbers_in_prose(texts[plan.key])
                                              if note_key(found) in catalog})))
         exported += [old.model_copy(update={"kept": True}) for old in before.values()
                      if old.id in gone and old.id not in delete]

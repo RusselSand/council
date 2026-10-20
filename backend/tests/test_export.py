@@ -560,9 +560,10 @@ def test_a_legacy_export_migrates_an_edit_where_the_council_text_had_no_numbers(
 
 
 def test_a_record_keeps_which_of_its_numbers_were_catalog_notes(root):
-    # ADR-0001 в каталоге есть — ссылка; ADR-9999 нет — слово («ADR-9999 fixture»).
+    # ADR-0001 в каталоге есть — ссылка; ADR-9999 нет — слово («ADR-9999 fixture»); OQ-0001 в
+    # каталоге есть, но в тексте он только в коде — не ссылка.
     stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
-        update={"rationale": "так велит ADR-0001, проверено на ADR-9999 fixture"})]})
+        update={"rationale": "так велит ADR-0001, проверено на ADR-9999 fixture и `OQ-0001`"})]})
     record, _, _, _ = export(root, stream)
     adr = next(note for note in record.notes if "ADR-9999" in note.written)
     assert adr.references == ["ADR-0001"]

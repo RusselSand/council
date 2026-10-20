@@ -20,16 +20,15 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from . import issue_files
 from .export import (
     ISSUE,
-    NUMBER,
     Part,
     Shelf,
     blocks_of,
-    in_prose,
     keyed,
     matched,
     migrated,
     note_key,
     numbering_problem,
+    numbers_in_prose,
     planned,
 )
 from .models import (
@@ -149,19 +148,6 @@ def written_by_plan(issue: Issue) -> list[str]:
     что неясно, — как это ляжет в файл: название и пункты списков — одной строкой."""
     return [line(issue.title), issue.user_story, issue.current_state,
             *map(line, issue.scope), *map(line, issue.open_questions)]
-
-
-def numbers_in_prose(text: str, keep: Collection[str] = ()) -> list[str]:
-    """Номера заметок и задач в прозе: в коде, адресах ссылок и сочетаниях keep (in_prose)
-    номер — не ссылка."""
-    found: list[str] = []
-
-    def collect(part: str) -> str:
-        found.extend(NUMBER.findall(part))
-        return part
-
-    in_prose(text, collect, keep)
-    return found
 
 
 def title_of(catalog: Catalog, note_id: str) -> str:
