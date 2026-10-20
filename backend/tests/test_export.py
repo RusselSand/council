@@ -556,6 +556,10 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
     found_broken = phrases_of(STREAM, {6: broken})
     assert "R12 storage" in found_broken
     assert not any(phrase in found_broken for phrase in ("Cloudflare R12", "Cloudflare R13"))
+    # Любой блочный элемент CommonMark — граница, и <address> тоже.
+    blocks = LabeledFragment(id=7, text="<address>Cloudflare</address><address> R14</address>",
+                             label="idea", reason="", council_label="idea")
+    assert "Cloudflare R14" not in phrases_of(STREAM, {7: blocks})
     # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
     spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
                              reason="", council_label="idea")

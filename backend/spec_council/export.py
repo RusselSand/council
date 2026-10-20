@@ -36,6 +36,7 @@ from typing import NamedTuple
 
 from markdown_it import MarkdownIt, rules_inline
 from markdown_it.common import html_re
+from markdown_it.common.html_blocks import block_names
 from markdown_it.rules_inline import StateInline
 
 from . import issue_files
@@ -484,12 +485,9 @@ PROTECTED = frozenset(("code", "html", "autolink", "link"))
 # теги, разметка ссылок и выделения — прозрачно: «Cloudflare [**R2**](…)» — это «Cloudflare R2».
 VISIBLE = frozenset(("text", "literal"))
 BORDER = frozenset(("code", "autolink"))
-# Теги, что рвут строку: перенос, черта и блочные элементы — граница, а не прозрачная
-# разметка: «Cloudflare<br>R2» — не «Cloudflare R2».
-BREAKS = frozenset(("br", "hr", "p", "div", "li", "ul", "ol", "dl", "dt", "dd", "table", "tr",
-                    "td", "th", "thead", "tbody", "h1", "h2", "h3", "h4", "h5", "h6",
-                    "blockquote", "section", "article", "header", "footer", "nav", "aside",
-                    "figure", "figcaption", "details", "summary"))
+# Теги, что рвут строку: перенос и все блочные элементы CommonMark (block_names: address, div,
+# p, li, td…) — граница, а не прозрачная разметка: «Cloudflare<br>R2» — не «Cloudflare R2».
+BREAKS = frozenset(("br", *block_names))
 TAG_NAME = re.compile(r"</?([A-Za-z][A-Za-z0-9-]*)")
 
 

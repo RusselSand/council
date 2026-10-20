@@ -23,6 +23,7 @@ from spec_council.models import (
     NotesExport,
     OpenQuestion,
     Outcome,
+    OutcomeDiscovery,
     ProjectDecision,
     RepositoryFinding,
     RepositoryMap,
@@ -592,8 +593,7 @@ def test_a_catalog_note_a_written_note_named_stays_a_reference():
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
                         written="Сверить по ADR-0042 validation и ADR-9999 fixture", digest="d",
                         references=["ADR-0042"])
-    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
-                                                 refs={"I1": "IDEA-0001"}))
+    stream = seen_by_plan([note], {"I1": "IDEA-0001"})
     phrases = names_of(stream, {}).phrases
     assert "ADR-9999 fixture" in phrases
     assert not any("ADR-0042" in phrase for phrase in phrases)
@@ -660,13 +660,53 @@ def test_catalog_notes_the_research_cites_are_references():
     assert "Cloudflare R2" in names.phrases and "R2 validation" not in names.phrases
 
 
+def seen_by_plan(notes, refs):
+    """Поток, где решение ADR-0001 (ADR-1) — решение итога: его текст план видит."""
+    return Stream(group="C", outcomes=OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
+        Outcome(id="O1", title="Итог", behavior="Работает.", adr_ids=["ADR-1"])]),
+        notes=NotesExport(run="n1", language="Russian", notes=notes,
+                          refs={**refs, "ADR-1": "ADR-0001"}))
+
+
+def test_phrases_come_only_from_note_bodies_the_planner_saw():
+    # План видит решения итогов и их вопросы — не варианты: «I1 cache» из варианта, которого
+    # план не видел, — не слово плана, а «R5 storage» из решения — его.
+    notes = [ExportedNote(key="p:1", id="PRO-0001", type="proposal", generated="В",
+                          written="Прогрев I1 cache", digest="d", note_numbers=True),
+             ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Р",
+                          written="Решение про R5 storage", digest="d", note_numbers=True)]
+    stream = Stream(group="C", scope=[OpenQuestion(id="Q1", text="Где?", source="discovered")],
+                    outcomes=OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
+                        Outcome(id="O1", title="Кэш", behavior="Быстро.", adr_ids=["ADR-1"])]),
+                    notes=NotesExport(run="n1", language="Russian", notes=notes,
+                                      refs={"I1": "IDEA-0001", "Q1": "OQ-0001", "P1": "PRO-0001",
+                                            "ADR-1": "ADR-0001", "O1": "OUT-0001"}))
+    phrases = names_of(stream, {}).phrases
+    assert "R5 storage" in phrases and "I1 cache" not in phrases
+
+
+def test_a_prerequisite_title_is_checked_with_its_own_phrases(tmp_path):
+    # Задача другого потока зовётся «Прогнать ADR-9999 fixture» — слово её потока: в списке
+    # задач, после которых делать эту, это не ссылка на удалённый ADR-9999.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Прогон"),
+                       "OUT-0002": Note("OUT-0002", "outcome", "Кэш")})
+    first = Issue(id="I1", title="Прогнать ADR-9999 fixture", user_story="As a team, I run.",
+                  outcome_id="OUT-0001")
+    second = Issue(id="I2", title="Кэш", user_story="As a team, I want answers.",
+                   outcome_id="OUT-0002", depends_on=["I1"])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[first, second])
+    streams = {"OUT-0001": Names({}, {}, phrases=frozenset({"ADR-9999 fixture"})),
+               "OUT-0002": Names({}, {})}
+    files, _, _ = drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                                words_for("Russian"), "Russian", (), streams)
+    assert ": Прогнать ADR-9999 fixture" in files[1].text
+
+
 def test_a_legacy_note_body_gives_no_phrases_with_stream_numbers():
     # Запись до номеров заметок хранит «Q1 validation» — это вопрос Q1, а не слово.
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
                         written="Сверить по Q1 validation", digest="d")
-    stream = Stream(group="C", scope=[OpenQuestion(id="Q1", text="Как?", source="discovered")],
-                    notes=NotesExport(run="n1", language="Russian", notes=[note],
-                                      refs={"I1": "IDEA-0001", "Q1": "OQ-0001"}))
+    stream = seen_by_plan([note], {"I1": "IDEA-0001", "Q1": "OQ-0001"})
     names = names_of(stream, {})
     assert not any("Q1" in phrase for phrase in names.phrases)
     assert names.settled("ADR-0001", note.written) == "Сверить по OQ-0001 validation"
@@ -1073,8 +1113,7 @@ def test_a_phrase_written_into_an_exported_note_is_a_stream_phrase():
     # модели плана его видят, и в задачах это его слово, а не вопрос Q1.
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
                         written="Считать по Q1 reporting", digest="d", note_numbers=True)
-    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
-                                                 refs={"I1": "IDEA-0001", "Q1": "OQ-0001"}))
+    stream = seen_by_plan([note], {"I1": "IDEA-0001", "Q1": "OQ-0001"})
     names = names_of(stream, {})
     assert "Q1 reporting" in names.phrases
     assert names("Q1 reporting и Q1") == "Q1 reporting и OQ-0001"
@@ -1094,8 +1133,7 @@ def test_a_known_note_number_in_an_exported_note_stays_a_reference():
     # «OQ-0002 validation» в выгруженной заметке — ссылка на заметку потока, а не слово.
     note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
                         written="Проверить по OQ-0002 validation и ADR-9999 fixture", digest="d")
-    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
-                                                 refs={"I1": "IDEA-0001", "Q2": "OQ-0002"}))
+    stream = seen_by_plan([note], {"I1": "IDEA-0001", "Q2": "OQ-0002"})
     phrases = names_of(stream, {}).phrases
     assert "ADR-9999 fixture" in phrases
     assert not any("OQ-0002" in phrase for phrase in phrases)

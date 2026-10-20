@@ -214,8 +214,11 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         # заметки), ограничения и риски, итог и решения из каталога. Номер в сочетании из
         # исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка; но только в том,
         # что из них и из плана: в тексте каталога те же слова — ссылка.
+        # Названия задач, после которых делать эту, проверяют в их собственных файлах — с
+        # сочетаниями их потоков.
         planned_text = issue_text(issue, number.id, (outcome[0], ""),
-                                  [(name, "") for name, _ in adrs], after,
+                                  [(name, "") for name, _ in adrs],
+                                  [(name, "") for name, _ in after],
                                   [fragments[i].text for i in issue.constraint_ids
                                    if i in fragments],
                                   [fragments[i].text for i in issue.risk_ids if i in fragments],

@@ -156,10 +156,13 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     # (cited — когда строили план).
     cited = [*(stream.notes.cited if stream.notes else []), *cited]
     terms = terms_of(stream, cited)
+    # Сочетания — только из заметок, что план видел (adr_entry): решения итогов и их вопросы.
     # Запись до номеров заметок хранит номера потока — «Q1 validation» там вопрос Q1, а не
     # слово: сочетания ищут в её тексте уже с номерами заметок.
+    shown = planner_notes(stream)
     written = [note.written if note.note_numbers
-               else renumbered(note.written, refs, owned, terms=terms) for note in notes]
+               else renumbered(note.written, refs, owned, terms=terms)
+               for note in notes if note.id in shown]
     # Номер заметки любого потока совета, отобранного решения проекта или заметки каталога, что
     # была там, когда текст записывали (references), в выгруженном тексте — ссылка.
     known = {*refs.values(), *exported,
@@ -169,6 +172,18 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                  phrases_of(stream, fragments, found.values(), written, known, cited,
                             maps=context, local=found.keys()),
                  frozenset(note.id for note in notes if not note.note_numbers), owned)
+
+
+def planner_notes(stream: Stream) -> set[str]:
+    """Заметки потока, чьи тексты видит план (inputs_of → adr_entry): решения, что итоги
+    реализуют или на которые опираются, и вопросы этих решений."""
+    refs = stream.notes.refs if stream.notes else {}
+    scope = stream.scope or []
+    adrs = {name for outcome in (stream.outcomes.outcomes if stream.outcomes else [])
+            for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
+    asked = [scope[n - 1].id for name in adrs
+             if (n := int(name.split("-")[1])) and 0 < n <= len(scope)]
+    return {refs[name] for name in [*adrs, *asked] if name in refs}
 
 
 def research_texts(council: Council) -> dict[str, str]:
