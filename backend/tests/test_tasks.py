@@ -661,11 +661,12 @@ def test_catalog_notes_the_research_cites_are_references():
 
 
 def seen_by_plan(notes, refs):
-    """Поток, где решение ADR-0001 (ADR-1) — решение итога: его текст план видит."""
+    """Поток, где решение ADR-0001 (ADR-1) — решение итога, что лёг в заметки (OUT-0001): его
+    текст план видит."""
     return Stream(group="C", outcomes=OutcomeDiscovery(state="done", run="o1", steps=[], outcomes=[
         Outcome(id="O1", title="Итог", behavior="Работает.", adr_ids=["ADR-1"])]),
         notes=NotesExport(run="n1", language="Russian", notes=notes,
-                          refs={**refs, "ADR-1": "ADR-0001"}))
+                          refs={**refs, "ADR-1": "ADR-0001", "O1": "OUT-0001"}))
 
 
 def test_phrases_come_only_from_note_bodies_the_planner_saw():
@@ -683,6 +684,17 @@ def test_phrases_come_only_from_note_bodies_the_planner_saw():
                                             "ADR-1": "ADR-0001", "O1": "OUT-0001"}))
     phrases = names_of(stream, {}).phrases
     assert "R5 storage" in phrases and "I1 cache" not in phrases
+    # Итог, что в заметки не лёг, в план не вошёл — и его решение план не видел.
+    skipped = ExportedNote(key="a:2", id="ADR-0002", type="adr", generated="Р",
+                           written="Прогрев I2 cache", digest="d", note_numbers=True)
+    stream = stream.model_copy(update={
+        "outcomes": stream.outcomes.model_copy(update={"outcomes": [
+            *stream.outcomes.outcomes,
+            Outcome(id="O2", title="Прогрев", behavior="Тепло.", adr_ids=["ADR-2"])]}),
+        "notes": stream.notes.model_copy(update={
+            "notes": [*stream.notes.notes, skipped],
+            "refs": {**stream.notes.refs, "ADR-2": "ADR-0002"}})})
+    assert "I2 cache" not in names_of(stream, {}).phrases
 
 
 def test_a_prerequisite_title_is_checked_with_its_own_phrases(tmp_path):

@@ -176,11 +176,12 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 
 def planner_notes(stream: Stream) -> set[str]:
     """Заметки потока, чьи тексты видит план (inputs_of → adr_entry): решения, что итоги
-    реализуют или на которые опираются, и вопросы этих решений."""
+    реализуют или на которые опираются, и вопросы этих решений. Итог, что в заметки не лёг, в
+    план не входит — и его решения план не видит."""
     refs = stream.notes.refs if stream.notes else {}
     scope = stream.scope or []
     adrs = {name for outcome in (stream.outcomes.outcomes if stream.outcomes else [])
-            for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
+            if outcome.id in refs for name in (*outcome.adr_ids, *outcome.relies_on_adr_ids)}
     asked = [scope[n - 1].id for name in adrs
              if (n := int(name.split("-")[1])) and 0 < n <= len(scope)]
     return {refs[name] for name in [*adrs, *asked] if name in refs}
