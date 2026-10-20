@@ -16,9 +16,9 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
-from .design import context_prompt as design_context
 from .export import (
     in_prose,
+    maps_of,
     note_key,
     numbers_in_prose,
     phrases_of,
@@ -27,7 +27,6 @@ from .export import (
     terms_of,
 )
 from .models import Council, Issue, LabeledFragment, Outcome, Research, Stream
-from .repository import context_prompt
 from .slicing import BadAnswer
 
 TEXT_MAX = 4000
@@ -110,32 +109,9 @@ def research_cited(texts: Iterable[str], catalog: Collection[str]) -> list[str]:
                    if note_key(found) in keys})
 
 
-def repository_map(research: Research) -> str:
-    """Карта утверждённого скана исследования или «не сканировали»."""
-    step, scan = research.repository, research.scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return context_prompt(None)
-    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
-                          follow_up=scan.follow_up)
-
-
-def design_map(research: Research) -> str:
-    """Описание утверждённого скана макета или «не смотрели»."""
-    step, scan = research.design, research.design_scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return design_context(None)
-    return design_context(scan.result, scan.source, complete=scan.complete,
-                          follow_up=scan.follow_up)
-
-
 def research_maps(council: Council) -> list[str]:
-    """Что план читает об исследовании целиком: карту кода и описание макета — с шагами, данными
-    экранов, неясным и противоречиями, а не только находки. Слово оттуда («Cloudflare R2») план
-    может переписать в задачу."""
-    research = council.research or Research()
-    return [text for text, empty in ((repository_map(research), context_prompt(None)),
-                                     (design_map(research), design_context(None)))
-            if text != empty]
+    """Что план читает об исследовании совета целиком (maps_of): карту кода и описание макета."""
+    return maps_of(council.research or Research())
 
 
 def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -169,8 +145,8 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              *(decision.adr_id for decision in stream.project_decisions or []),
              *(reference for note in notes for reference in note.references)}
     return Names(refs, owned | found, terms,
-                 phrases_of(stream, fragments, found.values(), written, known, cited,
-                            maps=context, local=found.keys()),
+                 phrases_of(stream, fragments, [*found.values(), *context], written, known,
+                            cited, local=found.keys()),
                  frozenset(note.id for note in notes if not note.note_numbers), owned)
 
 

@@ -40,6 +40,7 @@ from markdown_it.common.html_blocks import block_names
 from markdown_it.rules_inline import StateInline
 
 from . import issue_files
+from .design import context_prompt as design_context
 from .models import (
     Choice,
     Decision,
@@ -49,12 +50,14 @@ from .models import (
     NotesExport,
     OpenQuestion,
     Proposal,
+    Research,
     Stream,
     VanishedNote,
 )
 from .notes import Catalog, Note, NotesError, declared_issues, path_of, rendered
 from .proposals import found_by_question
 from .questions import same_question
+from .repository import context_prompt
 from .slicing import BadAnswer
 
 # Связки в тексте заметок и файлов задач — на языке работы; перевод, если нужен, — потом,
@@ -395,17 +398,54 @@ def note_key(note_id: str) -> tuple[str, int] | str:
     return (found.group(1).upper(), int(found.group(2))) if found else note_id
 
 
+def originals_of(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> list[str]:
+    """Тексты, что старше совета: текст группы и утверждённая идея."""
+    return [*(fragment.text for fragment in fragments.values()),
+            *([stream.idea.text] if stream.idea is not None else [])]
+
+
+def scanned_of(stream: Stream) -> tuple[list[str], set[str]]:
+    """Что модели потока читают о его сканах — находки и карты целиком (maps_of), — и номера
+    этих находок: в этих текстах номер находки — ссылка на неё («R1 validation»)."""
+    scans = [scan.result for scan in (stream.scan, stream.design_scan)
+             if scan is not None and scan.result is not None]
+    statements = [finding.statement for result in scans for finding in result.findings]
+    return ([*statements, *maps_of(stream)],
+            {finding.id for result in scans for finding in result.findings})
+
+
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = ()) -> list[str]:
     """Исходные тексты потока, что старше номеров заметок: текст группы, его утверждённая идея,
-    находки скана репозитория и макета — и more."""
-    sources = [fragment.text for fragment in fragments.values()]
-    if stream.idea is not None:
-        sources.append(stream.idea.text)
-    for scan in (stream.scan, stream.design_scan):
-        if scan is not None and scan.result is not None:
-            sources += [finding.statement for finding in scan.result.findings]
-    return [*sources, *more]
+    находки и карты сканов репозитория и макета — и more."""
+    return [*originals_of(stream, fragments), *scanned_of(stream)[0], *more]
+
+
+def repository_map(owner: Stream | Research) -> str:
+    """Карта утверждённого скана (потока или исследования совета) или «не сканировали»."""
+    step, scan = owner.repository, owner.scan
+    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
+        return context_prompt(None)
+    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
+                          follow_up=scan.follow_up)
+
+
+def design_map(owner: Stream | Research) -> str:
+    """Описание утверждённого скана макета (потока или исследования совета) или «не смотрели»."""
+    step, scan = owner.design, owner.design_scan
+    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
+        return design_context(None)
+    return design_context(scan.result, scan.source, complete=scan.complete,
+                          follow_up=scan.follow_up)
+
+
+def maps_of(owner: Stream | Research) -> list[str]:
+    """Что модели читают об утверждённых сканах целиком: карту кода и описание макета — с
+    шагами, данными экранов, неясным и противоречиями, а не только находки. Слово оттуда
+    («Cloudflare R2») модели могут переписать в свой текст."""
+    return [text for text, empty in ((repository_map(owner), context_prompt(None)),
+                                     (design_map(owner), design_context(None)))
+            if text != empty]
 
 
 def cited_in(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -423,16 +463,17 @@ def cited_in(stream: Stream, fragments: Mapping[int, LabeledFragment],
 def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
                more: Iterable[str] = (), notes: Iterable[str] = (),
                known: Collection[str] = (), cited: Collection[str] = (),
-               maps: Iterable[str] = (), local: Collection[str] = ()) -> frozenset[str]:
-    """Где в прозе исходных текстов — текста группы, идеи, находок скана (и more) — слово,
-    похожее на номер («F1 score», «Cloudflare R2», «I1 cache», «ADR-9999 fixture»): оно с
-    соседним словом. Номера потока, заметок и задач появились позже этих текстов, и в таком
+               local: Collection[str] = ()) -> frozenset[str]:
+    """Где в прозе исходных текстов — текста группы, идеи, находок и карт сканов (и more) —
+    слово, похожее на номер («F1 score», «Cloudflare R2», «I1 cache», «ADR-9999 fixture»): оно
+    с соседним словом. Номера потока, заметок и задач появились позже этих текстов, и в таком
     сочетании слово — их слово, а не ссылка; то же слово в другом месте текста совета — ссылка.
-    Кроме номеров заметок каталога, что они называют (cited_in): это ссылки. notes — тексты
-    заметок: в них номер известной заметки (known) — настоящая ссылка, и его сочетание словом
-    не становится. Тексты отобранных решений проекта — из каталога: там ссылка — любой номер
-    заметки, а слово — только номер потока («Q1 reporting»). maps — что ещё план читал об
-    исследовании (его карты): номер его находки (local) там — ссылка на неё («R1 validation»)."""
+    Кроме номеров заметок каталога, что они называют (cited_in): это ссылки. В текстах скана
+    потока ссылка и номер его находки («R1 validation»), а в more (что план читал об
+    исследовании совета) — номер находки исследования (local). notes — тексты заметок: в них
+    номер известной заметки (known) — настоящая ссылка, и его сочетание словом не становится.
+    Тексты отобранных решений проекта — из каталога: там ссылка — любой номер заметки, а слово —
+    только номер потока («Q1 reporting»)."""
     found: set[str] = set()
     keys = {note_key(note_id) for note_id in known}
     catalog = {note_key(note_id) for note_id in cited}
@@ -446,12 +487,18 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     def any_note(name: str) -> bool:
         return NUMBER.fullmatch(name) is not None
 
-    def mapped(name: str) -> bool:
+    scanned, findings = scanned_of(stream)
+
+    def scan_note(name: str) -> bool:
+        return cited_note(name) or name in findings
+
+    def research_note(name: str) -> bool:
         return cited_note(name) or name in local
 
     sources: list[tuple[str, Callable[[str], bool] | None]] = [
-        (text, cited_note) for text in sources_of(stream, fragments, more)]
-    sources += [(text, mapped) for text in maps]
+        (text, cited_note) for text in originals_of(stream, fragments)]
+    sources += [(text, scan_note) for text in scanned]
+    sources += [(text, research_note) for text in more]
     sources += [(text, known_note) for text in notes]
     sources += [(text, any_note) for text in decision_texts(stream)]
     for source, linked in sources:

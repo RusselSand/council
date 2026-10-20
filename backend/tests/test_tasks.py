@@ -653,11 +653,26 @@ def test_catalog_notes_the_research_cites_are_references():
     names = names_of(Stream(group="C"), {}, {"R3": "Ответы в индексе."},
                      context=["Хранилище — Cloudflare R2 storage."])
     assert "Cloudflare R2" in names.phrases
-    # Номер находки исследования в его карте — ссылка на неё, а не слово; в тексте самой
-    # находки слово остаётся словом.
-    names = names_of(Stream(group="C"), {}, {"R2": "Храним в Cloudflare R2 storage."},
-                     context=["Шаг: R2 validation."])
-    assert "Cloudflare R2" in names.phrases and "R2 validation" not in names.phrases
+    # Номер находки исследования — и в его карте, и в тексте другой находки — ссылка на неё, а не
+    # слово; «Cloudflare R5», где R5 не находка, — слово.
+    names = names_of(Stream(group="C"), {},
+                     {"R1": "Храним в Cloudflare R5 storage, нужна R2 validation.",
+                      "R2": "Ответы в индексе."}, context=["Шаг: R2 check."])
+    assert "Cloudflare R5" in names.phrases
+    assert not any("R2" in phrase for phrase in names.phrases)
+
+
+def test_the_stream_scan_maps_give_phrases_and_their_finding_numbers_are_references():
+    # Модели потока читают карту его скана целиком: «Cloudflare R7» из противоречий документации
+    # — слово; номер находки скана в тексте другой находки — ссылка.
+    scan = RepositoryScan(state="done", run="s1", steps=[], result=RepositoryMap(
+        findings=[RepositoryFinding(id="R1", statement="Нужна R2 validation.", status="verified"),
+                  RepositoryFinding(id="R2", statement="Ответы в индексе.", status="verified")],
+        documentation_conflicts=["В README хранилище — Cloudflare R7 storage."]))
+    stream = Stream(group="C", scan=scan, repository=RepositoryStep(by="scan", scan_run="s1"))
+    phrases = names_of(stream, {}).phrases
+    assert "Cloudflare R7" in phrases
+    assert not any("R2" in phrase for phrase in phrases)
 
 
 def seen_by_plan(notes, refs):

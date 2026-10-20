@@ -31,8 +31,7 @@ from ..deps import (
     Store,
     StoreDep,
 )
-from ..design import context_prompt as design_context
-from ..export import export_in
+from ..export import design_map, export_in, repository_map
 from ..ideas import IDEA_MAX
 from ..models import (
     SKIPPED,
@@ -97,9 +96,6 @@ from ..pipeline import (
 from ..project import catalog_print, fingerprint, records
 from ..proposals import PROPOSAL_MAX, found_by_question, last_number
 from ..questions import QUESTION_MAX, same_question
-from ..repository import (
-    context_prompt,
-)
 from ..work import (
     carried_analyses,
     carried_options,
@@ -272,15 +268,6 @@ def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep,
             or questions.design != step_key(design)
             or questions.decisions != [d.adr_id for d in picked]
             or questions.decisions_seen != fingerprint(picked))
-
-
-def repository_map(stream: Stream) -> str:
-    """Что получают следующие шаги: карта утверждённого скана или «не сканировали»."""
-    step, scan = stream.repository, stream.scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return context_prompt(None)
-    return context_prompt(scan.result, scan.repositories, complete=scan.complete,
-                          follow_up=scan.follow_up)
 
 
 @router.post("/{council_id}/streams/{group}/start",
@@ -634,15 +621,6 @@ def decisions_run(council: Council, group: str, stream: Stream, runner: Runner, 
                         council.participants, council.judge, runner,
                         reporter(store, council.id, searching(group)), catalog=catalog,
                         scan=approved_scan(stream), own=own, repositories=repositories)
-
-
-def design_map(stream: Stream) -> str:
-    """Что о макете знают следующие шаги: описание утверждённого скана или «не смотрели»."""
-    step, scan = stream.design, stream.design_scan
-    if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
-        return design_context(None)
-    return design_context(scan.result, scan.source, complete=scan.complete,
-                          follow_up=scan.follow_up)
 
 
 def idea_of(text: str | None, search: IdeaDiscovery | None) -> StreamIdea:

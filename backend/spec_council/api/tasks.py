@@ -27,9 +27,11 @@ from ..deps import (
 )
 from ..export import (
     Shelf,
+    design_map,
     graph_problems,
     knows_words,
     previous_of,
+    repository_map,
     settled,
     untranslated,
     words_for,
@@ -61,11 +63,9 @@ from ..repository import (
 )
 from ..tasks import (
     basis_of,
-    design_map,
     inputs_of,
     not_ready,
     outcome_names,
-    repository_map,
     research_cited,
     research_maps,
     research_texts,
