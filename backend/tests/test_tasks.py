@@ -443,6 +443,25 @@ def test_with_an_approved_scan_the_plan_reads_the_code_anew(agents, folders, rep
     assert "Ответы ищут в app.py" in section(agents.prompts["task_plan"], "REPOSITORY CONTEXT")
 
 
+def test_the_plan_does_not_read_the_council_folders_in_the_repository(agents, folders,  # noqa: F811
+                                                                      repos):  # noqa: F811
+    # Папки документации и задач — в репозитории проекта: заметки выгружены туда, а план в коде
+    # их не читает — решения приходят к нему входом плана.
+    notes, issues = repos / "docs" / "council", repos / "docs" / "issues"
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: notes
+    app.dependency_overrides[get_issues_of] = lambda: lambda council: issues
+    council_id = single()
+    scans(council_id, "C")
+    takes(council_id, "C")
+    passes(council_id, "C")
+    all_decided(council_id)
+    exported(council_id)
+    assert any(notes.rglob("*.md"))
+    assert plans(council_id).status_code == 202
+    assert council(council_id).tasks.state == "done"
+    assert agents.seen == ["app.py"]
+
+
 def test_a_working_copy_gone_since_the_scan_refuses_the_plan(agents, folders, repos):  # noqa: F811
     council_id = single()
     scans(council_id, "C")

@@ -103,6 +103,9 @@ class Inventory:
     # находят и узнают, как бы ни был виден каталог (working_copy).
     checkout: str = ""
     within: str = ""
+    # Папки, что в снимок не берут (skipping: заметки и задачи совета), — от корня, с «/» на
+    # конце. Их файлы, и появившиеся после inventory, — не правка рабочей копии под снимком.
+    skipped: tuple[str, ...] = ()
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -531,6 +534,33 @@ def levels(copies: list[Copy]) -> list[tuple[str, str, bytes]]:
     return [(copy.prefix, head(copy.folder), changes_of(copy.folder)) for copy in copies]
 
 
+def unskipped(found: list[tuple[str, str, bytes]],
+              skipped: tuple[str, ...]) -> list[tuple[str, str, bytes]]:
+    """git status каждой копии (levels) без записей о файлах пропущенных папок (skipped — от
+    корня): их в снимке нет, и их правка — не правка того, что читают модели. Переименование,
+    задевшее и обычную папку, остаётся."""
+    if not skipped:
+        return found
+    kept_levels: list[tuple[str, str, bytes]] = []
+    for prefix, sha, status in found:
+        listed_part, sep, hidden = status.partition(b"\0\0hidden\0")
+        parts = listed_part.split(b"\0")
+        kept: list[bytes] = []
+        at = 0
+        while at < len(parts):
+            record = parts[at]
+            # Переименование и копия — «XY путь» и следом исходный путь.
+            extra = 1 if record[:1] in (b"R", b"C") and at + 1 < len(parts) else 0
+            if record:
+                paths = [record[3:], *parts[at + 1:at + 1 + extra]]
+                if not all((prefix + os.fsdecode(path)).startswith(skipped) for path in paths):
+                    kept += parts[at:at + 1 + extra]
+            at += 1 + extra
+        kept_levels.append((prefix, sha, b"".join(part + b"\0" for part in kept)
+                            + (sep + hidden if sep else b"")))
+    return kept_levels
+
+
 def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
     """Состояние рабочей копии одной строкой байтов: поменялось — её правили."""
     return b"\0\0".join(os.fsencode(prefix) + b"\0" + sha.encode() + b"\0" + status
@@ -683,6 +713,44 @@ def inventory(path: Path) -> Inventory:
                      sum(copy.outside for copy in copies), omitted_of(root, copies))
 
 
+def skipping(found: Inventory, folders: Iterable[tuple[Path, str]]) -> Inventory:
+    """Опись рабочей копии без файлов из папок folders (путь и почему): в снимок они не лягут, а
+    модели узнают, чего в нём нет и почему (omitted). Папка вне рабочей копии или сама копия
+    целиком — не пропускается."""
+    root = found.root.resolve()
+    prefixes: list[str] = []
+    told: list[str] = []
+    for folder, why in folders:
+        resolved = folder.resolve()
+        if resolved == root or not resolved.is_relative_to(root):
+            continue
+        inside = resolved.relative_to(root).as_posix()
+        prefixes.append(inside + "/")
+        told.append(f"{shown(inside)}/ — {why}")
+    if not prefixes:
+        return found
+    skipped = (*found.skipped, *prefixes)
+    files = tuple(name for name in found.files if not name.startswith(skipped))
+    kept = set(files)
+    size = sum(stamp[0] for stamp in (stamp_of(found.root / name) for name in files) if stamp)
+    # Состояние и правки — без пропущенных папок: их правят (выгрузка заметок), а снимок тот же.
+    copies = copies_of(found.root)
+    levelled = unskipped(levels(copies), skipped)
+    dirty = any(status for _, _, status in levelled) or any(copy.embedded for copy in copies)
+    return replace(found, files=files, size=size, state=state_of(levelled), dirty=dirty,
+                   modes={name: mode for name, mode in found.modes.items() if name in kept},
+                   omitted=(*found.omitted, *told), skipped=skipped)
+
+
+def council_folders(notes: Path | None, issues: Path | None) -> list[tuple[Path, str]]:
+    """Папки совета в репозитории проекта, что модели в коде не читают: заметки — прошлые
+    решения приходят в совет только отбором, и невыбранное решение не должно действовать
+    из-за того, что его файл лежит в репозитории; задачи — план прошлого совета не факт о коде."""
+    return [*([(notes, "папка документации совета (заметки IDEA, OQ, PRO, ADR, OUT): в снимок "
+                       "не входит — прошлые решения приходят в совет отбором")] if notes else []),
+            *([(issues, "папка задач совета: в снимок не входит")] if issues else [])]
+
+
 def omitted_of(root: Path, copies: list[Copy]) -> tuple[str, ...]:
     """Чего нет в снимке, хоть оно и в рабочей копии, — с причиной."""
     return (*(entry for copy in copies for entry in copy.absent), *links_of(root, copies))
@@ -774,8 +842,9 @@ def snapshot(found: Inventory, into: Path, *,
         written += (into / name).stat().st_size
     copies = copies_of(found.root)
     # Состояние читается после списка файлов: появился файл между ними — его в снимке нет.
-    appeared = set(present(found.root, copies)) - set(found.files)
-    if state_of(levels(copies)) != found.state or appeared or any(
+    appeared = {name for name in present(found.root, copies)
+                if not name.startswith(found.skipped)} - set(found.files)
+    if state_of(unskipped(levels(copies), found.skipped)) != found.state or appeared or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")

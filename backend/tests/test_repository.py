@@ -20,6 +20,7 @@ from spec_council.repository import (
     Source,
     checkout_of,
     context_prompt,
+    council_folders,
     inventory,
     inventory_prompt,
     judged_map,
@@ -29,6 +30,7 @@ from spec_council.repository import (
     same_copy,
     scanned,
     sha_prompt,
+    skipping,
     snapshot,
     snapshot_all,
     sources_of,
@@ -308,6 +310,34 @@ def test_a_snapshot_holds_only_the_inventory_files(repo, tmp_path):
     assert copied == frozenset(present)
     assert not (into / ".git").exists()
     assert (into / "api" / "deps.py").read_text(encoding="utf-8") == "def get_context(): ...\n"
+
+
+def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path):
+    """Заметки и задачи совета в репозитории проекта модели в коде не читают: прошлые решения
+    приходят в совет отбором. И их правка во время скана — не правка того, что модели читают."""
+    for name in ("docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text("Пока не делаем.\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "заметки")
+    # Выгрузка ещё одной заметки не делает рабочую копию «с правками».
+    (repo / "docs" / "council" / "adrs" / "ADR-0048.md").write_text("Ещё.\n", encoding="utf-8")
+    folders = council_folders(repo / "docs" / "council", repo / "docs" / "issues")
+    found = skipping(inventory(repo), folders)
+    assert found.files == (".gitignore", "api/deps.py")
+    assert not found.dirty
+    assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/council/", "docs/issues/"]
+    # Пока делается снимок, в пропущенные папки пишут — снимок тот же и годится.
+    (repo / "docs" / "council" / "adrs" / "ADR-0049.md").write_text("Новое.\n", encoding="utf-8")
+    (repo / "docs" / "issues" / "ISS-0001.md").write_text("Правка.\n", encoding="utf-8")
+    _, _, copied = copy(found, tmp_path)
+    assert copied == frozenset({".gitignore", "api/deps.py"})
+    # А правка кода — по-прежнему правка.
+    (repo / "api" / "deps.py").write_text("def get_context(): return 3\n", encoding="utf-8")
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path, "again")
+    # Папка вне рабочей копии и сама копия целиком — не пропускаются.
+    assert skipping(found, [(tmp_path / "elsewhere", "нет"), (repo, "вся")]) is found
 
 
 def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):

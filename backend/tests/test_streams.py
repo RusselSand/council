@@ -12,7 +12,15 @@ from spec_council.api import streams as streams_api
 from spec_council.api.councils import reporter
 from spec_council.api.streams import decided, discovery
 from spec_council.app import app
-from spec_council.deps import get_agents, get_figma, get_launcher, get_repositories, get_store
+from spec_council.deps import (
+    get_agents,
+    get_figma,
+    get_issues_of,
+    get_launcher,
+    get_notes_of,
+    get_repositories,
+    get_store,
+)
 from spec_council.figma import FigmaError
 from spec_council.groups import arranged
 from spec_council.models import (
@@ -1536,6 +1544,28 @@ def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
     assert not snapshot.exists()
     assert "app.py" in agents.prompts["repository_discovery"]         # inventory в промпте
     assert streams_of(council_id)["C"].questions is None              # карту ещё не утвердили
+
+
+def test_the_scan_does_not_read_the_council_notes_and_issues_folders(agents, repos):
+    """Папки документации и задач проекта лежат в репозитории, но модели их в коде не читают:
+    прошлые решения приходят в совет только отбором — невыбранное не действует оттого, что его
+    файл в репозитории."""
+    for name in ("docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
+        (repos / name).parent.mkdir(parents=True, exist_ok=True)
+        (repos / name).write_text("Пока не делаем.\n", encoding="utf-8")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos / "docs" / "council"
+    app.dependency_overrides[get_issues_of] = lambda: lambda council: repos / "docs" / "issues"
+    try:
+        council_id = grouped()
+        confirm(council_id)
+        approve(council_id, "C", IDEA_C)
+        assert scans(council_id, "C").status_code == 202
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+        app.dependency_overrides.pop(get_issues_of)
+    assert agents.seen == ["app.py"]
+    assert research_of(council_id).scan.repositories[0].files == 1
+    assert "docs/council/ — папка документации совета" in agents.prompts["repository_discovery"]
 
 
 def test_an_approved_map_goes_into_the_questions_and_every_step_below(agents, repos):

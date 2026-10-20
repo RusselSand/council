@@ -58,7 +58,9 @@ from ..repository import (
     Inventory,
     RepositoryError,
     Source,
+    council_folders,
     same_copy,
+    skipping,
     working_copy,
 )
 from ..tasks import (
@@ -100,17 +102,19 @@ def research_of(council: Council) -> Research:
     return council.research or Research()
 
 
-def code_of(research: Research, repositories: Path | None) -> list[Source]:
+def code_of(research: Research, repositories: Path | None,
+            folders: Sequence[tuple[Path, str]] = ()) -> list[Source]:
     """Код для плана: рабочие копии утверждённого скана исследования — заново, какие они сейчас,
-    под теми же папками снимка, что и в карте. Шаг пройден без скана — кода нет. Какую-то не
-    прочитать — 422: план без кода, которого ждали, молча разошёлся бы с картой."""
+    под теми же папками снимка, что и в карте, и тоже без папок совета (folders —
+    council_folders). Шаг пройден без скана — кода нет. Какую-то не прочитать — 422: план без
+    кода, которого ждали, молча разошёлся бы с картой."""
     step, scan = research.repository, research.scan
     if step is None or step.by != "scan" or scan is None or scan.run != step.scan_run:
         return []
     if not scan.repositories or not all(source.root for source in scan.repositories):
         raise HTTPException(422, "Скан сделан, когда совет ещё не запоминал, какую рабочую копию "
                                  "читал, — просканируйте репозиторий заново")
-    return [Source(source.name, source.path, again(source, repositories))
+    return [Source(source.name, source.path, skipping(again(source, repositories), folders))
             for source in scan.repositories]
 
 
@@ -149,7 +153,7 @@ def plannable(council: Council, notes: Path | None) -> None:
                         422: {"description": "Рабочую копию утверждённого скана не прочитать"}})
 def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: ConfigDep,
                agents: AgentsDep, launch: LauncherDep, notes_of: NotesOfDep,
-               repositories: RepositoriesDep) -> Council:
+               issues_of: IssuesOfDep, repositories: RepositoriesDep) -> Council:
     """Совет строит план задач на весь совет по утверждённым и выгруженным итогам всех потоков.
     Если исследование пройдено сканом, модели читают снимок тех же рабочих копий заново — их
     читают сейчас, и если какую-то не прочитать — 422. Нет подключения к моделям — план записан
@@ -170,7 +174,8 @@ def plan_tasks(council_id: str, edit: GroupsEdit, store: StoreDep, config: Confi
     with council_lock:
         council, _ = plan()
     read.append(research_of(council))
-    sources = code_of(read[0], repositories)
+    sources = code_of(read[0], repositories,
+                      council_folders(notes_of(council), issues_of(council)))
 
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         inputs = replace(inputs_of(council), cited=research_snapshot(council, notes_of(council)))
