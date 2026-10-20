@@ -434,6 +434,9 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
 # видимый текст (SEEN) — по нему узнают сочетания (phrases_of, in_prose).
 SPANS = "spans"
 SEEN = "seen"
+# Откуда в содержимом блока отсчитаны места того, что читает разбор: подпись картинки он
+# читает отдельно, с её начала.
+BASES = "bases"
 InlineRule = Callable[[StateInline, bool], bool]
 # Что не трогать: строка кода, тег HTML (с комментариями и <?…?>), адрес в <…>, адрес и метка
 # ссылки и картинки.
@@ -454,26 +457,34 @@ def marking(kind: str, rule: InlineRule) -> InlineRule:
 
     def marked(state: StateInline, silent: bool) -> bool:
         start = state.pos
-        if not rule(state, silent):
-            return False
+        bases = state.env.get(BASES)
+        image = kind == "link" and state.src[start] == "!"
+        if image and bases is not None:
+            # Подпись картинки разбор читает отдельно, с её начала: что найдёт там, — от начала
+            # подписи (после «![») в содержимом блока.
+            bases.append(bases[-1] + start + 2)
+        try:
+            found = rule(state, silent)
+        finally:
+            if image and bases is not None:
+                bases.pop()
         spans, seen = state.env.get(SPANS), state.env.get(SEEN)
-        if silent or spans is None or seen is None:
-            return True
-        end = state.pos
+        if not found or silent or spans is None or seen is None or bases is None:
+            return found
+        end, base = state.pos, bases[-1]
         if kind == "escape":
             # «\*» — видимая «*», «\» в конце строки — перенос.
             sign = state.src[start + 1]
-            seen.append((start, end, False) if sign == "\n"
-                        else (start + (sign in string.punctuation), end, True))
+            seen.append((base + start, base + end, False) if sign == "\n"
+                        else (base + start + (sign in string.punctuation), base + end, True))
         elif kind in VISIBLE or kind in BORDER:
-            seen.append((start, end, kind in VISIBLE))
+            seen.append((base + start, base + end, kind in VISIBLE))
         if kind == "link":
-            image = state.src[start] == "!"
             close = state.md.helpers.parseLinkLabel(state, start + image, not image)
             if close >= 0 and state.src[close + 1:end] not in ("", "[]"):
                 start = close
         if kind in PROTECTED:
-            spans.append((kind, start, end))
+            spans.append((kind, base + start, base + end))
         return True
 
     return marked
@@ -548,7 +559,8 @@ def blocks_of(text: str) -> tuple[set[int], dict[int, int], Marked, Seen]:
         prose.update(dict.fromkeys(range(first, last), block))
         spans: list[tuple[str, int, int]] = []
         shown: list[tuple[int, int, bool]] = []
-        MARKDOWN.inline.parse(token.content, MARKDOWN, {**env, SPANS: spans, SEEN: shown}, [])
+        MARKDOWN.inline.parse(token.content, MARKDOWN,
+                              {**env, SPANS: spans, SEEN: shown, BASES: [0]}, [])
         place = placed(token.content, rows[first:last])
         marked[block] = [(kind, place(start), place(end)) for kind, start, end in spans]
         seen[block] = [pair for start, end, visible in sorted(shown)
@@ -833,8 +845,11 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     def renumber(part: Part, text: str) -> str:
         return renumbered(text, numbered(part), texts, words["quote"], terms, phrases)
 
+    # Выгрузка, после которой совет не помнил номер идеи (I1), — до номеров заметок.
+    legacy = previous is not None and "I1" not in previous.refs
     notes = [planned(numbered_part, ids,
-                     migrated(olds.get(part.key), numbered_part.text, partial(renumber, part)),
+                     migrated(olds.get(part.key), numbered_part.text, partial(renumber, part),
+                              legacy),
                      alias.get(part.key), shelf, reuse)
              for part in parts
              for numbered_part in [replace(part, text=renumber(part, part.text))]]
@@ -847,13 +862,17 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     return notes, vanished, skipped, numbers
 
 
-def migrated(old: ExportedNote | None, text: str,
-             renumber: Callable[[str], str] | None) -> ExportedNote | None:
+def migrated(old: ExportedNote | None, text: str, renumber: Callable[[str], str] | None,
+             legacy: bool = False) -> ExportedNote | None:
     """Прежняя выгрузка — как её сделали бы сейчас, если совет написал бы то же (text): выгрузка
-    до номеров заметок оставила в текстах номера потока (Q1), и правку человека повторная
-    выгрузка терять не должна. Номер потока в правке — тоже номером заметки (renumber)."""
-    if old is None or renumber is None or old.generated == text \
-            or renumber(old.generated) != text:
+    до номеров заметок (legacy) оставила в текстах номера потока (Q1), и правку человека
+    повторная выгрузка терять не должна. Номер потока в правке — тоже номером заметки
+    (renumber), и тогда, когда в тексте совета его не было. В нынешней выгрузке «Q1» в правке —
+    слово человека."""
+    if old is None or renumber is None:
+        return old
+    same = old.generated == text
+    if (same and not legacy) or (not same and renumber(old.generated) != text):
         return old
     return old.model_copy(update={"generated": text, "written": renumber(old.written)})
 

@@ -648,6 +648,23 @@ def test_a_legacy_task_file_keeps_its_human_edits_when_numbers_become_note_numbe
     [again], _, _ = drafted_tasks(plan, {}, shelf, previous, words, "Russian", (),
                                   {"OUT-0001": names})
     assert again.text == fresh.generated + "\nДописал человек про OQ-0001.\n"
+    # Номер потока — только в правке, текст совета тот же: в прежней выгрузке и он — номер
+    # потока, а в нынешней (note_numbers) — слово человека.
+    plain = TasksExport(run="t0", language="Russian", numbers=numbers, notes=[ExportedNote(
+        key=fresh.key, id=fresh.id, type="issue", generated=fresh.generated,
+        written=fresh.generated + "\nСм. Q1.\n", digest="d")])
+    for record, seen in ((plain, "OQ-0001"), (plain.model_copy(update={"note_numbers": True}),
+                                              "Q1")):
+        [again], _, _ = drafted_tasks(plan, {}, shelf, record, words, "Russian", (),
+                                      {"OUT-0001": names})
+        assert again.text == fresh.generated + f"\nСм. {seen}.\n"
+
+
+def test_stream_mappings_survive_another_spelling_of_the_note_number():
+    # Заметку OQ-0001 переименовали в OQ-1 — это та же заметка: номер ведёт на неё, как
+    # её зовут в каталоге.
+    names = Names({"Q1": "OQ-0001", "Q2": "OQ-0002"}, {}).within({"OQ-1"})
+    assert names.numbers == {"Q1": "OQ-1"}
 
 
 def test_a_dependency_list_is_found_after_its_sections_were_edited():

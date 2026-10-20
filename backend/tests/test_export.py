@@ -110,11 +110,12 @@ def refs_of(root, stream=STREAM, previous=None):
 
 
 def export(root, stream=STREAM, previous=None, edits=None, delete=()):
-    notes, vanished, skipped = draft(root, stream, previous)
+    notes, vanished, skipped, refs = drafted(stream, FRAGMENTS, shelf(root), previous, WORDS,
+                                             "Russian")
     graph_problems(Catalog.load(root), notes, vanished, edits or {}, delete)
     done = written(notes, vanished, edits or {}, delete, shelf(root), previous)
     return NotesExport(run="r", outcomes=stream.outcomes.run, language="Russian",
-                       root=str(root), notes=done), notes, vanished, skipped
+                       root=str(root), notes=done, refs=refs), notes, vanished, skipped
 
 
 def by_id(notes):
@@ -368,6 +369,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
         assert renumbered(literal, {"Q1": "OQ-0002"}, {}) == literal.replace("Q1", "OQ-0002")
     crlf = "[x](\r\n/questions/Q1\r\n)"
     assert renumbered(f"{crlf} и Q1", {"Q1": "OQ-0002"}, {}) == f"{crlf} и OQ-0002"
+    # Что разбор нашёл в подписи картинки, — на своём месте: «`Q1`» в ней — код, а Q1 перед
+    # картинкой — номер.
+    assert renumbered("Q1 ![`Q1` и Q1](/x)", {"Q1": "OQ-0002"}, {}) == (
+        "OQ-0002 ![`Q1` и OQ-0002](/x)")
     # <script> — до </script>, и через пустую строку.
     across = "До <script>const q = 'Q1';\n\nuse('Q1');</script>"
     assert renumbered(f"{across} и Q1", {"Q1": "OQ-0002"}, {}) == f"{across} и OQ-0002"
@@ -528,6 +533,18 @@ def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(
     notes, _, _ = draft(root, stream, previous=legacy)
     assert by_id(notes)[adr.id].text == (
         "Ручной откат остаётся по кнопке, потому что откат нужен, пока OQ-0003 открыт")
+
+
+def test_a_legacy_export_migrates_an_edit_where_the_council_text_had_no_numbers(root):
+    # Выгрузка до номеров заметок (в refs нет I1): «Q2» дописал человек, а текст совета номеров
+    # не имел и не изменился, — правка всё равно переходит на номера заметок. В нынешней
+    # выгрузке «Q2» в правке — слово человека, как он написал.
+    first, _, _, _ = export(root, edits={"idea": "Деплой требует меньше ручной работы, см. Q2."})
+    legacy = first.model_copy(update={"refs": {}})
+    assert by_id(draft(root, previous=legacy)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. OQ-0003.")
+    assert by_id(draft(root, previous=first)[0])["IDEA-0002"].text == (
+        "Деплой требует меньше ручной работы, см. Q2.")
 
 
 def test_a_fragment_offered_to_two_questions_is_named_by_each_ones_own_option(root):

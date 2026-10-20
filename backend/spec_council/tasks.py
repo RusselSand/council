@@ -16,7 +16,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
-from .export import in_prose, phrases_of, renumbered, stream_texts, terms_of
+from .export import in_prose, note_key, phrases_of, renumbered, stream_texts, terms_of
 from .models import Council, Issue, LabeledFragment, Outcome, Stream
 from .slicing import BadAnswer
 
@@ -64,9 +64,11 @@ class Names:
     def within(self, notes: Collection[str]) -> Names:
         """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
         могли удалить руками, и ссылка на неё вела бы в никуда — тогда в тексте встанет то,
-        что за номером."""
-        return replace(self, numbers={name: number for name, number in self.numbers.items()
-                                      if number in notes})
+        что за номером. Номер с нулями или без — одна заметка: ссылка — как её зовёт каталог."""
+        spelled = {note_key(note_id): note_id for note_id in notes}
+        return replace(self, numbers={name: spelled[note_key(number)]
+                                      for name, number in self.numbers.items()
+                                      if note_key(number) in spelled})
 
 
 def exported_of(council: Council) -> frozenset[str]:

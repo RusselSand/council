@@ -182,6 +182,7 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     by_issue = {number.issue_id: number for number in numbers}
     filed = {note.id: note for note in previous.notes} if previous else {}
     reuse = previous is not None and previous.language == language
+    legacy = previous is not None and not previous.note_numbers
     # Итог и решения задачи — заметки каталога: какую с тех пор удалили, на ту файл задачи
     # сослался бы впустую.
     gone = sorted({name for issue in plan.issues for name in (issue.outcome_id, *issue.adr_ids)
@@ -236,8 +237,8 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
-                             migrated(old, text, renumber(issue)), old.key if old else None,
-                             shelf, reuse))
+                             migrated(old, text, renumber(issue), legacy),
+                             old.key if old else None, shelf, reuse))
     current = {number.id for number in numbers}
     # Файлы, что останутся в папке как есть: не из плана или правленные руками. Исчезнувшую
     # задачу, на которую они ссылаются, удалить нельзя.

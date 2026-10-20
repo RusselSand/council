@@ -1046,6 +1046,9 @@ class TasksExport(BaseModel):
     root: str = ""
     notes: list[ExportedNote] = []
     numbers: list[IssueNumber] = []
+    # Тексты задач уже называют части потока номерами заметок. Выгрузка до того оставила в них
+    # номера потока (Q1): правку человека в ней повторная выгрузка переводит (migrated).
+    note_numbers: bool = False
 
 
 class Council(BaseModel):
