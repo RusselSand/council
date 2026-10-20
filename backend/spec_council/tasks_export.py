@@ -297,8 +297,8 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
              commit: str | None) -> str:
     """Список задач, после которых делать эту, — с названиями из их файлов (titles; у какой
     названия не узнать — её строка как есть). Это раздел «## …», где, кроме пустых, только
-    строки «- ISS-…: …» задач, которых ждут (waits), — и
-    последняя строка файла о номере для коммита (commit): issue_text ставит её после списка.
+    строки «- ISS-…: …» задач, которых ждут (waits), до строки о номере для коммита (commit):
+    issue_text ставит её после списка, а что дописали после неё — уже не список.
     Таких разделов несколько (человек дописал похожий) — тот, что под тем же номером (section,
     с нуля), что и в тексте совета: разделы переставили или убрали, а список один — он. Не
     узнать — текст как есть."""
@@ -308,11 +308,14 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     heads = [n for n, row in enumerate(lines) if n not in code and SECTION.match(row)]
     if not heads:
         return text
-    filled = [n for n, row in enumerate(lines) if row.strip()]
-    closing = filled[-1] if filled and lines[filled[-1]].strip() == commit else None
+    # Строка о коммите кончает список — и тогда, когда человек дописал что-то после неё.
+    closing = next((n for n in range(len(lines) - 1, -1, -1)
+                    if n not in code and commit and lines[n].strip() == commit), None)
     found: list[tuple[int, list[tuple[int, re.Match[str]]]]] = []
     for place, (start, end) in enumerate(zip(heads, [*heads[1:], len(lines)], strict=True)):
-        rows = [n for n in range(start + 1, end) if lines[n].strip() and n != closing]
+        if closing is not None and start < closing < end:
+            end = closing
+        rows = [n for n in range(start + 1, end) if lines[n].strip()]
         items = [(n, match) for n in rows
                  if n not in code and (match := AFTER.match(lines[n])) is not None]
         # Список — все задачи, которых ждут, по строке на каждую, и только они: пункт об одной

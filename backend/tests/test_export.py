@@ -534,6 +534,11 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
     found = phrases_of(STREAM, {3: wrapped})
     assert {"Cloudflare R4", "Cloudflare R6"} <= found
     assert not any(phrase in found for phrase in ("R5 storage", "R7 x"))
+    # Элемент кода в строке — тоже не видимый текст: «<code>R8 cache</code>» — не сочетание.
+    inline = LabeledFragment(id=4, text="Ключ <code>R8 cache</code> и R9 storage.",
+                             label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {4: inline})
+    assert "R9 storage" in found and "R8 cache" not in found
     # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
     spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
                              reason="", council_label="idea")

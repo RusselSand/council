@@ -610,6 +610,20 @@ def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
                       words_for("Russian"), "Russian", (), {"OUT-0001": names})
 
 
+def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
+    # Человек дописал строку после строки о коммите: список задач, после которых делать эту, —
+    # всё ещё список, и название в нём меняется.
+    first = NotePlan(key="i:1", id="ISS-0001", type="issue", text="# Index v2",
+                     generated="# Индекс", action="create")
+    draft = "# Search\n\n## After the issues\n- ISS-0001: Index v1\n\nCommit ISS-0002."
+    second = NotePlan(key="i:2", id="ISS-0002", type="issue", text=draft,
+                      generated="# Поиск\n\n## После задач\n- ISS-0001: Индекс\n\nКоммит ISS-0002.",
+                      links=["OUT-0001", "ISS-0001"], action="create")
+    edited = draft + "\n\nДописал человек."
+    assert aligned([first, second], {"i:1": first.text, "i:2": edited}) == {
+        "i:2": edited.replace("Index v1", "Index v2")}
+
+
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():
     def file(number, generated, text=None, links=()):
         return NotePlan(key=f"i:{number}", id=number, type="issue", text=text or generated,

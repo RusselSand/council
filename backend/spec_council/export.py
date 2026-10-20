@@ -608,27 +608,57 @@ def blocks_of(text: str) -> Blocks:
     return Blocks(lines, prose, marked, seen, html)
 
 
+def block_starts(text: str, blocks: Blocks) -> dict[int, int]:
+    """Где в тексте начинается каждый блок прозы — от него места в Blocks.marked и seen."""
+    offsets = list(accumulate((len(row) + 1 for row in text.split("\n")), initial=0))
+    starts: dict[int, int] = {}
+    for n, block in sorted(blocks.prose.items()):
+        starts.setdefault(block, offsets[n])
+    return starts
+
+
+def html_runs(text: str, blocks: Blocks) -> list[tuple[int, int]]:
+    """Где в тексте блоки HTML — подряд идущие их строки одним куском."""
+    offsets = list(accumulate((len(row) + 1 for row in text.split("\n")), initial=0))
+    runs = [[n for _, n in run] for _, run in
+            groupby(enumerate(sorted(blocks.html)), key=lambda item: item[1] - item[0])]
+    return [(offsets[run[0]], offsets[run[-1] + 1] - 1) for run in runs]
+
+
+def elements_of(text: str, blocks: Blocks) -> list[tuple[int, int]]:
+    """Элементы кода HTML во всём тексте (raw_elements) — по тегам прозы и блоков HTML: <script>
+    идёт и через пустую строку, а «</script>» в блоке HTML закрывает элемент абзаца выше."""
+    starts = block_starts(text, blocks)
+    tags = [(kind, starts[block] + start, starts[block] + end)
+            for block, found in blocks.marked.items() for kind, start, end in found]
+    tags += [("html", *piece.span()) for start, end in html_runs(text, blocks)
+             for piece in HTML_PIECE.finditer(text, start, end)]
+    return raw_elements(text, tags)
+
+
 def visible_of(text: str) -> str:
-    """Видимый текст прозы (blocks_of): без кода, адресов, тегов и разметки ссылок и выделения;
-    блоки и строки кода — через перенос строки. И текст блоков HTML — без тегов и элементов кода
-    (<pre>, <script>…). В нём сочетание исходного текста — его слово: `Q1` в коде — не его
-    слово, а «Cloudflare [R2](…)» и «<div>Cloudflare R2</div>» — «Cloudflare R2»."""
+    """Видимый текст прозы (blocks_of): без кода (и элементов кода HTML: <code>, <pre>…),
+    адресов, тегов и разметки ссылок и выделения; блоки и строки кода — через перенос строки. И
+    текст блоков HTML — так же. В нём сочетание исходного текста — его слово: `Q1` в коде — не
+    его слово, а «Cloudflare [R2](…)» и «<div>Cloudflare R2</div>» — «Cloudflare R2»."""
     blocks = blocks_of(text)
-    rows = text.split("\n")
-    markup = "\n".join(rows[n] for n in sorted(blocks.html))
-    tags = [("html", *piece.span()) for piece in HTML_PIECE.finditer(markup)]
-    # Элемент кода — граница, тег и комментарий — прозрачны.
-    drops = sorted([(start, end, "\n") for start, end in raw_elements(markup, tags)]
-                   + [(start, end, "") for _, start, end in tags])
-    shown: list[str] = []
-    last = 0
-    for start, end, border in drops:
-        if start >= last:
-            shown += [markup[last:start], border]
-        last = max(last, end)
-    words = re.sub(r"[^\S\n]", " ", unescape("".join([*shown, markup[last:]])))
-    return "\n".join(["".join(sign for _, sign in signs) for signs in blocks.seen.values()]
-                     + ([words] if markup else []))
+    elements = elements_of(text, blocks)
+    starts = block_starts(text, blocks)
+    shown = ["".join("\n" if inside(starts[block] + at, elements) else sign
+                     for at, sign in signs) for block, signs in blocks.seen.items()]
+    for start, end in html_runs(text, blocks):
+        # Элемент кода — граница, тег и комментарий — прозрачны.
+        drops = sorted([(max(begin, start), min(close, end), "\n") for begin, close in elements
+                        if begin < end and close > start]
+                       + [(*piece.span(), "") for piece in HTML_PIECE.finditer(text, start, end)])
+        words: list[str] = []
+        last = start
+        for begin, close, border in drops:
+            if begin >= last:
+                words += [text[last:begin], border]
+            last = max(last, close)
+        shown.append(re.sub(r"[^\S\n]", " ", unescape("".join([*words, text[last:end]]))))
+    return "\n".join(shown)
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
@@ -693,7 +723,8 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     ссылок-сносок (их строки — по разбору Markdown); в строках прозы — что нашёл их разбор
     (marking: строки кода, теги, адреса и метки ссылок), почта (UNTOUCHED) и адреса сами по
     себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть."""
-    code, prose, marked, seen, html = blocks_of(text)
+    blocks = blocks_of(text)
+    code, prose, marked, seen, html = blocks
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
     # Сочетание — его слова через пробелы в видимом тексте прозы: разметка ссылок и выделения
@@ -722,15 +753,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     groups = [(key, "".join(row for _, row in rows))
               for key, rows in groupby(enumerate(lines), key=block)]
     starts = list(accumulate((len(part) for _, part in groups), initial=0))
-    # Элемент кода HTML идёт и через пустую строку — <script> до </script>: его ищут по тегам
-    # всего текста, и в блоках HTML тоже: «</script>» там закрывает элемент абзаца выше.
-    tags = [(kind, start + begin, start + end)
-            for (key, _), start in zip(groups, starts, strict=False) if key not in (None, HTML)
-            for kind, begin, end in marked.get(key, [])]
-    tags += [("html", start + piece.start(), start + piece.end())
-             for (key, part), start in zip(groups, starts, strict=False) if key == HTML
-             for piece in HTML_PIECE.finditer(part)]
-    elements = raw_elements(text, tags)
+    elements = elements_of(text, blocks)
 
     def inline(part: str, key: int, at: int) -> str:
         # Что не трогают — может пересекаться.
