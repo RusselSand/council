@@ -451,12 +451,12 @@ InlineRule = Callable[[StateInline, bool], bool]
 # Что не трогать: строка кода, тег HTML (с комментариями и <?…?>), адрес в <…>, адрес и метка
 # ссылки и картинки.
 PROTECTED = frozenset(("code", "html", "autolink", "link"))
-# Видимый текст — слова и знаки (text, literal), экранированный знак (escape) и то, что значит
-# мнемоника (entity: «&nbsp;» — пробел, «&amp;» — «&»). Граница — строка кода, адрес в <…> и
-# перенос строки: соседние с ними слова — не сочетание. Прочее — теги, разметка ссылок и
-# выделения — прозрачно: «Cloudflare [**R2**](…)» — это «Cloudflare R2».
+# Видимый текст — слова и знаки (text, literal), экранированный знак (escape), то, что значит
+# мнемоника (entity: «&nbsp;» — пробел, «&amp;» — «&»), мягкий перенос строки — пробел. Граница —
+# строка кода, адрес в <…> и жёсткий перенос: соседние с ними слова — не сочетание. Прочее —
+# теги, разметка ссылок и выделения — прозрачно: «Cloudflare [**R2**](…)» — это «Cloudflare R2».
 VISIBLE = frozenset(("text", "literal"))
-BORDER = frozenset(("code", "autolink", "newline"))
+BORDER = frozenset(("code", "autolink"))
 
 
 def marking(kind: str, rule: InlineRule) -> InlineRule:
@@ -491,6 +491,10 @@ def marking(kind: str, rule: InlineRule) -> InlineRule:
         elif kind == "entity":
             shown = unescape(state.src[start:end])
             seen.append((base + start, base + end, " " if shown.isspace() else shown))
+        elif kind == "newline":
+            # Мягкий перенос строки — пробел; жёсткий (два пробела перед ним) — граница.
+            hard = state.src[:start].endswith("  ")
+            seen.append((base + start, base + end, "\n" if hard else " "))
         elif kind in VISIBLE or kind in BORDER:
             seen.append((base + start, base + end, None if kind in VISIBLE else "\n"))
         if kind == "link":
@@ -606,9 +610,25 @@ def blocks_of(text: str) -> Blocks:
 
 def visible_of(text: str) -> str:
     """Видимый текст прозы (blocks_of): без кода, адресов, тегов и разметки ссылок и выделения;
-    блоки и строки кода — через перенос строки. В нём сочетание исходного текста — его слово:
-    `Q1` в коде — не его слово, а «Cloudflare [R2](…)» — «Cloudflare R2»."""
-    return "\n".join("".join(sign for _, sign in signs) for signs in blocks_of(text).seen.values())
+    блоки и строки кода — через перенос строки. И текст блоков HTML — без тегов и элементов кода
+    (<pre>, <script>…). В нём сочетание исходного текста — его слово: `Q1` в коде — не его
+    слово, а «Cloudflare [R2](…)» и «<div>Cloudflare R2</div>» — «Cloudflare R2»."""
+    blocks = blocks_of(text)
+    rows = text.split("\n")
+    markup = "\n".join(rows[n] for n in sorted(blocks.html))
+    tags = [("html", *piece.span()) for piece in HTML_PIECE.finditer(markup)]
+    # Элемент кода — граница, тег и комментарий — прозрачны.
+    drops = sorted([(start, end, "\n") for start, end in raw_elements(markup, tags)]
+                   + [(start, end, "") for _, start, end in tags])
+    shown: list[str] = []
+    last = 0
+    for start, end, border in drops:
+        if start >= last:
+            shown += [markup[last:start], border]
+        last = max(last, end)
+    words = re.sub(r"[^\S\n]", " ", unescape("".join([*shown, markup[last:]])))
+    return "\n".join(["".join(sign for _, sign in signs) for signs in blocks.seen.values()]
+                     + ([words] if markup else []))
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:

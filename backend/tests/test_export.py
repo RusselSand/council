@@ -526,6 +526,14 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
     phrases = phrases_of(STREAM, {1: fragment})
     assert {"Cloudflare R2", "R2 storage"} <= phrases
     assert not any(phrase.startswith("code") for phrase in phrases)
+    # Мягкий перенос строки — пробел, а жёсткий («  » в конце строки) — граница; текст блока
+    # HTML — тоже видимый текст, а код в нём (<pre>) — нет.
+    wrapped = LabeledFragment(id=3, text="Храним в Cloudflare\nR4, а R5  \nstorage.\n\n"
+                                         "<div>Храним в Cloudflare R6</div>\n\n<pre>R7 x</pre>",
+                              label="idea", reason="", council_label="idea")
+    found = phrases_of(STREAM, {3: wrapped})
+    assert {"Cloudflare R4", "Cloudflare R6"} <= found
+    assert not any(phrase in found for phrase in ("R5 storage", "R7 x"))
     # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
     spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
                              reason="", council_label="idea")
