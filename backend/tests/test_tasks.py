@@ -597,6 +597,20 @@ def test_a_catalog_note_a_written_note_named_stays_a_reference():
     assert not any("ADR-0042" in phrase for phrase in phrases)
 
 
+def test_a_note_number_in_a_copied_constraint_is_checked_too(tmp_path):
+    # Ограничение из текста группы ложится в файл задачи как есть: ADR-0042 в нём удалён — файл
+    # сослался бы впустую.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    limit = Fragment(id=4, text="Следовать ADR-0042.", label="constraint", reason="",
+                     council_label="constraint")
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", constraint_ids=[4])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    with pytest.raises(NotesError, match="ADR-0042"):
+        drafted_tasks(plan, {4: limit}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian", (), {"OUT-0001": Names({}, {})})
+
+
 def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
     # Заметку вопроса Q1 удалили — встанет его текст «См. ADR-0042», а ADR-0042 тоже удалён:
     # такой файл задачи сослался бы впустую.
@@ -622,10 +636,12 @@ def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
     edited = draft + "\n\nДописал человек."
     assert aligned([first, second], {"i:1": first.text, "i:2": edited}) == {
         "i:2": edited.replace("Index v1", "Index v2")}
-    # Пункт списка с «*» вместо «-» — тот же пункт.
+    # Пункт списка с «*» вместо «-» — тот же пункт; «-ISS-0001» без пробела — не пункт.
     starred = draft.replace("- ISS-0001", "* ISS-0001")
     assert aligned([first, second], {"i:1": first.text, "i:2": starred}) == {
         "i:2": starred.replace("Index v1", "Index v2")}
+    glued = draft.replace("- ISS-0001", "-ISS-0001")
+    assert aligned([first, second], {"i:1": first.text, "i:2": glued}) == {}
 
 
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():

@@ -49,8 +49,9 @@ from .tasks import Names, line, relabeled
 TITLE = re.compile(r"[ ]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t\r]*(?=\n|\Z)")
 # Заголовок раздела файла задачи «## …» — и с отступом до трёх пробелов, и с табуляцией.
 SECTION = re.compile(r"[ ]{0,3}##(?:[ \t\r]|$)")
-# Пункт списка задач, после которых делать эту: «- ISS-0012: название» (и с «*» или «+»).
-AFTER = re.compile(r"^([ \t]*[-*+][ \t]*(ISS-\d+)[ \t]*:[ \t]*).*$")
+# Пункт списка задач, после которых делать эту: «- ISS-0012: название» (и с «*» или «+»; после
+# маркера — пробел, иначе это не пункт списка).
+AFTER = re.compile(r"^([ \t]*[-*+][ \t]+(ISS-\d+)[ \t]*:[ \t]*).*$")
 
 
 def numbered(issues: Sequence[Issue], catalog: Catalog, previous: TasksExport | None,
@@ -195,9 +196,15 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         change = renumber(issue)
         return change(text) if change else text
 
+    def checked(issue: Issue) -> list[str]:
+        """Что ляжет в файл задачи из плана — и ограничения и риски, что лягут как есть."""
+        limits = [fragments[i].text for i in (*issue.constraint_ids, *issue.risk_ids)
+                  if i in fragments]
+        return [*(final(issue, text) for text in written_by_plan(issue)), *limits]
+
     # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
-    dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
-                   for found in numbers_in_prose(final(issue, text), kept(issue))
+    dead = sorted({found for issue in plan.issues for text in checked(issue)
+                   for found in numbers_in_prose(text, kept(issue))
                    if not found.startswith("ISS-") and note_key(found) not in known})
     if dead:
         raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
