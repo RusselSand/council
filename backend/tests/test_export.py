@@ -498,14 +498,18 @@ def test_a_source_phrase_stays_but_the_same_number_elsewhere_is_a_reference(root
         "P1 incidents — первыми")
 
 
-def test_a_source_phrase_is_found_and_kept_through_emphasis():
-    # «Cloudflare **R2** storage»: сочетание — без разметки, и узнаётся в тексте и с ней, и без.
-    fragment = LabeledFragment(id=1, text="Храним в Cloudflare **R2** storage.", label="idea",
+def test_a_source_phrase_is_found_and_kept_through_markup():
+    # «Cloudflare [**R2**](…) storage»: сочетание — по видимому тексту, без разметки ссылки и
+    # выделения, и узнаётся в тексте и с ней, и без. В строке кода слово — не сосед.
+    fragment = LabeledFragment(id=1, text="Храним в Cloudflare [**R2**](https://r2.example) "
+                                          "storage, а `code` R3 — нет.", label="idea",
                                reason="", council_label="idea")
     phrases = phrases_of(STREAM, {1: fragment})
     assert {"Cloudflare R2", "R2 storage"} <= phrases
-    assert renumbered("Cloudflare **R2**, *R2* storage и R2", {"R2": "OQ-0009"}, {},
-                      phrases=phrases) == "Cloudflare **R2**, *R2* storage и OQ-0009"
+    assert not any(phrase.startswith("code") for phrase in phrases)
+    text = "Cloudflare [R2](https://x), *R2* storage, <b>R2</b> storage и R2"
+    assert renumbered(text, {"R2": "OQ-0009"}, {}, phrases=phrases) == (
+        text[:-2] + "OQ-0009")
 
 
 def test_a_legacy_export_keeps_its_human_edits_when_numbers_become_note_numbers(root):

@@ -27,6 +27,7 @@ from .export import (
     in_prose,
     keyed,
     matched,
+    migrated,
     note_key,
     numbering_problem,
     planned,
@@ -235,7 +236,8 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
         links = tuple(dict.fromkeys(name for name, _ in (outcome, *adrs, *after)))
         old = filed.get(number.id)
         notes.append(planned(Part(number.key, "issue", text, links), {number.key: number.id},
-                             old, old.key if old else None, shelf, reuse))
+                             migrated(old, text, renumber(issue)), old.key if old else None,
+                             shelf, reuse))
     current = {number.id for number in numbers}
     # Файлы, что останутся в папке как есть: не из плана или правленные руками. Исчезнувшую
     # задачу, на которую они ссылаются, удалить нельзя.
@@ -307,7 +309,7 @@ def retitled(text: str, titles: Mapping[str, str], waits: Collection[str], secti
     узнать — текст как есть."""
     lines = text.split("\n")
     # Пример кода в задаче — не её разделы: «##» в нём не заголовок, а строка — не пункт.
-    code, _, _ = blocks_of(text)
+    code, *_ = blocks_of(text)
     heads = [n for n, row in enumerate(lines) if n not in code and SECTION.match(row)]
     if not heads:
         return text

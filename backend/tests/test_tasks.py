@@ -33,6 +33,7 @@ from spec_council.models import (
     Structure,
     StructureProposal,
     TaskPlan,
+    TasksExport,
 )
 from spec_council.models import LabeledFragment as Fragment
 from spec_council.notes import Catalog, Note, NotesError, path_of, rendered
@@ -625,6 +626,28 @@ def test_task_files_keep_stream_terms_and_skip_deleted_notes(tmp_path):
     assert file.text.startswith("# Прогреть I1 cache\n")
     assert "- Ответить на «Где хранить кэш?»." in file.text
     assert "- Сверить с ISS-0001." in file.text
+
+
+def test_a_legacy_task_file_keeps_its_human_edits_when_numbers_become_note_numbers(tmp_path):
+    # Выгрузка задач до номеров заметок оставила в тексте «Q1»; правку человека повторная
+    # выгрузка не теряет — номер потока в ней тоже становится номером заметки.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов"),
+                       "OQ-0001": Note("OQ-0001", "open_question", "Где хранить кэш?")})
+    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001"}, {})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Ответить на Q1."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    shelf = Shelf(catalog, tmp_path, tmp_path / "issues")
+    words = words_for("Russian")
+    [fresh], _, numbers = drafted_tasks(plan, {}, shelf, None, words, "Russian", (),
+                                        {"OUT-0001": names})
+    old = fresh.generated.replace("OQ-0001", "Q1")
+    previous = TasksExport(run="t0", language="Russian", numbers=numbers, notes=[ExportedNote(
+        key=fresh.key, id=fresh.id, type="issue", generated=old,
+        written=old + "\nДописал человек про Q1.\n", digest="d")])
+    [again], _, _ = drafted_tasks(plan, {}, shelf, previous, words, "Russian", (),
+                                  {"OUT-0001": names})
+    assert again.text == fresh.generated + "\nДописал человек про OQ-0001.\n"
 
 
 def test_a_dependency_list_is_found_after_its_sections_were_edited():

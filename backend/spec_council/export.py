@@ -22,10 +22,13 @@
 
 import hashlib
 import re
+import string
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from functools import partial
 from itertools import accumulate, groupby
 from pathlib import Path
 
@@ -365,7 +368,8 @@ def terms_of(stream: Stream) -> frozenset[str]:
     называет проза отобранных, — без нулей в номере (ADR-0001 — «ADR-1»). Каталог зовёт решение
     и так, и «ADR-1» в тексте — не обязательно первое решение потока."""
     named = [decision.adr_id for decision in stream.project_decisions or []]
-    named += [found for text in decision_texts(stream) for found in NUMBER.findall(prose_of(text))]
+    named += [found for text in decision_texts(stream)
+              for found in NUMBER.findall(visible_of(text))]
     return frozenset(f"ADR-{int(found.group(1))}" for name in named
                      if (found := PAST_ADR.fullmatch(name)) is not None)
 
@@ -374,19 +378,6 @@ def note_key(note_id: str) -> tuple[str, int] | str:
     """Номер заметки без нулей: ADR-7 и ADR-0007 — одна заметка."""
     found = re.fullmatch(r"([A-Za-z]+)-0*(\d+)", note_id)
     return (found.group(1).upper(), int(found.group(2))) if found else note_id
-
-
-def prose_of(text: str) -> str:
-    """Только проза текста — без кода, адресов и меток ссылок (in_prose): сочетание исходного
-    текста — его слово, только если оно в прозе; `Q1` в коде — не его слово."""
-    parts: list[str] = []
-
-    def keep(part: str) -> str:
-        parts.append(part)
-        return part
-
-    in_prose(text, keep)
-    return "\n".join(parts)
 
 
 def sources_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
@@ -426,81 +417,120 @@ def phrases_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     sources += [(text, known_note) for text in notes]
     sources += [(text, any_note) for text in decision_texts(stream)]
     for source, linked in sources:
-        text = prose_of(source)
+        # Соседнее слово — в видимом тексте: «Cloudflare [**R2**](…) storage» — «Cloudflare R2».
+        text = visible_of(source)
         for match in WORDLIKE.finditer(text):
             word = match.group(0)
             if linked is not None and linked(word):
                 continue
-            # Разметка выделения прозрачна: «Cloudflare **R2** storage» — «Cloudflare R2».
-            after = re.match(r"[*_]*[ \t]+[*_]*(\w+)", text[match.end():])
-            if after is not None and (neighbor := after.group(1).strip("_")):
-                found.add(f"{word} {neighbor}")
-            before = re.search(r"(\w+)[*_]*[ \t]+[*_]*$", text[:match.start()])
-            if before is not None and (neighbor := before.group(1).strip("_")):
-                found.add(f"{neighbor} {word}")
+            if (after := re.match(r"[ \t]+(\w+)", text[match.end():])) is not None:
+                found.add(f"{word} {after.group(1)}")
+            if (before := re.search(r"(\w+)[ \t]+$", text[:match.start()])) is not None:
+                found.add(f"{before.group(1)} {word}")
     return frozenset(found)
 
 
-# Где в env разбора строк прозы копится то, что он нашёл (marking).
+# Где в env разбора строк прозы копится то, что он нашёл (marking): что не трогать (SPANS) и
+# видимый текст (SEEN) — по нему узнают сочетания (phrases_of, in_prose).
 SPANS = "spans"
+SEEN = "seen"
 InlineRule = Callable[[StateInline, bool], bool]
+# Что не трогать: строка кода, тег HTML (с комментариями и <?…?>), адрес в <…>, адрес и метка
+# ссылки и картинки.
+PROTECTED = frozenset(("code", "html", "autolink", "link"))
+# Видимый текст — слова и знаки (text, literal) и экранированный знак (escape). Граница —
+# строка кода, адрес в <…>, перенос строки и мнемоника (&amp;): соседние с ними слова — не
+# сочетание. Прочее — теги, разметка ссылок и выделения — прозрачно: «Cloudflare [**R2**](…)» —
+# это «Cloudflare R2».
+VISIBLE = frozenset(("text", "literal"))
+BORDER = frozenset(("code", "autolink", "newline", "entity"))
 
 
 def marking(kind: str, rule: InlineRule) -> InlineRule:
-    """Правило разбора строк прозы, что отмечает найденное (SPANS в env): kind и где оно в
-    содержимом блока. У ссылки и картинки — только адрес «](…)» или метка «][…]»: текст ссылки —
-    проза; а если метка — сам текст ([Q1], [Q1][]), то весь «[Q1]»."""
+    """Правило разбора строк прозы, что отмечает найденное: что не трогать (SPANS в env) и
+    видимый текст (SEEN) — где это в содержимом блока. У ссылки и картинки не трогают только
+    адрес «](…)» или метку «][…]»: текст ссылки — проза; а если метка — сам текст ([Q1], [Q1][]),
+    то весь «[Q1]»."""
 
     def marked(state: StateInline, silent: bool) -> bool:
         start = state.pos
         if not rule(state, silent):
             return False
-        spans = state.env.get(SPANS)
-        if silent or spans is None:
+        spans, seen = state.env.get(SPANS), state.env.get(SEEN)
+        if silent or spans is None or seen is None:
             return True
+        end = state.pos
+        if kind == "escape":
+            # «\*» — видимая «*», «\» в конце строки — перенос.
+            sign = state.src[start + 1]
+            seen.append((start, end, False) if sign == "\n"
+                        else (start + (sign in string.punctuation), end, True))
+        elif kind in VISIBLE or kind in BORDER:
+            seen.append((start, end, kind in VISIBLE))
         if kind == "link":
             image = state.src[start] == "!"
             close = state.md.helpers.parseLinkLabel(state, start + image, not image)
-            if close >= 0 and state.src[close + 1:state.pos] not in ("", "[]"):
+            if close >= 0 and state.src[close + 1:end] not in ("", "[]"):
                 start = close
-        spans.append((kind, start, state.pos))
+        if kind in PROTECTED:
+            spans.append((kind, start, end))
         return True
 
     return marked
 
 
-# Строки кода, теги HTML (с комментариями и <?…?>), адреса в <…>, ссылки и картинки.
-for name, kind, rule in (("backticks", "code", rules_inline.backtick),
-                         ("html_inline", "html", rules_inline.html_inline),
-                         ("autolink", "autolink", rules_inline.autolink),
+def literal(state: StateInline, silent: bool) -> bool:
+    """Знак, что не взяло ни одно правило, — текстом, как это делает и сам разбор."""
+    if not silent:
+        state.pending += state.src[state.pos]
+    state.pos += 1
+    return True
+
+
+for name, kind, rule in (("text", "text", rules_inline.text),
+                         ("newline", "newline", rules_inline.newline),
+                         ("escape", "escape", rules_inline.escape),
+                         ("backticks", "code", rules_inline.backtick),
                          ("link", "link", rules_inline.link),
-                         ("image", "link", rules_inline.image)):
+                         ("image", "link", rules_inline.image),
+                         ("autolink", "autolink", rules_inline.autolink),
+                         ("html_inline", "html", rules_inline.html_inline),
+                         ("entity", "entity", rules_inline.entity)):
     MARKDOWN.inline.ruler.at(name, marking(kind, rule))
+MARKDOWN.inline.ruler.push("literal", marking("literal", literal))
 
 
 def placed(content: str, rows: Sequence[str]) -> Callable[[int], int]:
     """Место в тексте блока (rows — его строки, от начала первой) по месту в содержимом, что
     видит разбор строк прозы (content): там строки блока без отступа и знаков контейнеров
     («>», «-»), а пробелы табуляции, что разбор дописал от себя, — в начале своей строки."""
-    marks: list[tuple[int, int, int]] = []
+    inners: list[int] = []
+    marks: list[tuple[int, int]] = []
     inner = outer = 0
     for row, piece in zip(rows, content.split("\n"), strict=False):
         bare = piece if piece in row else piece.lstrip(" ")
-        marks.append((inner, outer + max(row.rfind(bare), 0), len(piece) - len(bare)))
+        inners.append(inner)
+        marks.append((outer + max(row.rfind(bare), 0), len(piece) - len(bare)))
         inner += len(piece) + 1
         outer += len(row) + 1
 
     def place(at: int) -> int:
-        start, mark, extra = next(mark for mark in reversed(marks) if mark[0] <= at)
-        return mark + max(at - start - extra, 0)
+        n = max(bisect_right(inners, at) - 1, 0)
+        mark, extra = marks[n]
+        return mark + max(at - inners[n] - extra, 0)
 
     return place
 
 
-def blocks_of(text: str) -> tuple[set[int], dict[int, int], dict[int, list[tuple[str, int, int]]]]:
+Marked = dict[int, list[tuple[str, int, int]]]
+Seen = dict[int, list[tuple[int, str]]]
+
+
+def blocks_of(text: str) -> tuple[set[int], dict[int, int], Marked, Seen]:
     """По разбору Markdown: строки текста (с нуля), что занимают блоки кода и HTML на любой
     глубине и определения ссылок-сносок; строки прозы (абзаца, заголовка) с номером их блока; и
-    что разбор строк нашёл в каждом блоке прозы (marking) — с местом от начала первой его строки."""
+    что разбор строк нашёл в каждом блоке прозы (marking): что не трогать и видимый текст — по
+    знаку с его местом («\n» — граница). Место — от начала первой строки блока."""
     env: dict = {}
     tokens = MARKDOWN.parse(text, env)
     lines = {n for token in tokens if token.type in BLOCKS and token.map
@@ -509,17 +539,29 @@ def blocks_of(text: str) -> tuple[set[int], dict[int, int], dict[int, list[tuple
               if found.get("map") for n in range(*found["map"])}
     rows = text.split("\n")
     prose: dict[int, int] = {}
-    marked: dict[int, list[tuple[str, int, int]]] = {}
+    marked: Marked = {}
+    seen: Seen = {}
     for block, token in enumerate(tokens):
         if token.type != "inline" or not token.map:
             continue
         first, last = token.map
         prose.update(dict.fromkeys(range(first, last), block))
         spans: list[tuple[str, int, int]] = []
-        MARKDOWN.inline.parse(token.content, MARKDOWN, {**env, SPANS: spans}, [])
+        shown: list[tuple[int, int, bool]] = []
+        MARKDOWN.inline.parse(token.content, MARKDOWN, {**env, SPANS: spans, SEEN: shown}, [])
         place = placed(token.content, rows[first:last])
         marked[block] = [(kind, place(start), place(end)) for kind, start, end in spans]
-    return lines, prose, marked
+        seen[block] = [pair for start, end, visible in sorted(shown)
+                       for pair in ([(place(at), token.content[at]) for at in range(start, end)]
+                                    if visible else [(place(start), "\n")])]
+    return lines, prose, marked, seen
+
+
+def visible_of(text: str) -> str:
+    """Видимый текст прозы (blocks_of): без кода, адресов, тегов и разметки ссылок и выделения;
+    блоки и строки кода — через перенос строки. В нём сочетание исходного текста — его слово:
+    `Q1` в коде — не его слово, а «Cloudflare [R2](…)» — «Cloudflare R2»."""
+    return "\n".join("".join(sign for _, sign in signs) for signs in blocks_of(text)[3].values())
 
 
 def inside(at: int, spans: Iterable[tuple[int, int]]) -> bool:
@@ -584,14 +626,22 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     ссылок-сносок (их строки — по разбору Markdown); в строках прозы — что нашёл их разбор
     (marking: строки кода, теги, адреса и метки ссылок), почта (UNTOUCHED) и адреса сами по
     себе, элементы кода (raw_elements) и сочетания keep («F1 score») — как есть."""
-    code, prose, marked = blocks_of(text)
+    code, prose, marked, seen = blocks_of(text)
     lines = [f"{row}\n" for row in text.split("\n")]
     lines[-1] = lines[-1][:-1]
-    # Сочетание — его слова через пробелы, и разметка выделения вокруг них прозрачна:
-    # «Cloudflare R2» — и в «Cloudflare **R2**».
-    extra = [r"[*_]*[ \t]+[*_]*".join(map(re.escape, phrase.split()))
+    # Сочетание — его слова через пробелы в видимом тексте прозы: разметка ссылок и выделения
+    # и теги между ними прозрачны — «Cloudflare R2» и в «Cloudflare [**R2**](…)».
+    words = [r"[ \t]+".join(map(re.escape, phrase.split()))
              for phrase in sorted(keep, key=len, reverse=True) if phrase.split()]
-    untouched = re.compile("|".join([UNTOUCHED.pattern, *extra])) if extra else UNTOUCHED
+    phrases = re.compile("|".join(words)) if words else None
+
+    def kept(signs: list[tuple[int, str]]) -> list[tuple[int, int]]:
+        """Где в тексте блока сочетания keep: от места первого знака до места последнего."""
+        if phrases is None:
+            return []
+        shown = "".join(sign for _, sign in signs)
+        return [(signs[found.start()][0], signs[found.end() - 1][0] + 1)
+                for found in phrases.finditer(shown) if found.end() > found.start()]
 
     def block(item: tuple[int, str]) -> int | None:
         """Строка кода — None, прозы — номер её блока (абзаца, заголовка), прочие — -1: ссылка
@@ -609,10 +659,11 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
                                    if key is not None
                                    for kind, begin, end in marked.get(key, [])])
 
-    def inline(part: str, found: list[tuple[str, int, int]], at: int) -> str:
+    def inline(part: str, key: int, at: int) -> str:
         # Что не трогают — может пересекаться.
-        parsed = [(start, end) for _, start, end in found]
-        opaque = parsed + [kept.span() for kept in untouched.finditer(part)]
+        parsed = [(start, end) for _, start, end in marked.get(key, [])]
+        opaque = parsed + [found.span() for found in UNTOUCHED.finditer(part)]
+        opaque += kept(seen.get(key, []))
         raw = [(max(start, at) - at, min(end, at + len(part)) - at)
                for start, end in elements if start < at + len(part) and end > at]
         spans = sorted(opaque + addresses(part, opaque, parsed) + raw)
@@ -627,7 +678,7 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         out.append(change(part[last:]))
         return "".join(out)
 
-    return "".join(part if key is None else inline(part, marked.get(key, []), start)
+    return "".join(part if key is None else inline(part, key, start)
                    for (key, part), start in zip(groups, starts, strict=False))
 
 
@@ -782,17 +833,8 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
     def renumber(part: Part, text: str) -> str:
         return renumbered(text, numbered(part), texts, words["quote"], terms, phrases)
 
-    def migrated(part: Part, old: ExportedNote | None) -> ExportedNote | None:
-        """Прежняя заметка — как её выгрузили бы сейчас, если написал бы совет то же: выгрузка
-        до номеров заметок оставила в текстах номера потока (Q1), и правку человека повторная
-        выгрузка терять не должна. Номер потока в правке — тоже номером заметки."""
-        if old is None or old.generated == part.text \
-                or renumber(part, old.generated) != part.text:
-            return old
-        return old.model_copy(update={"generated": part.text,
-                                      "written": renumber(part, old.written)})
-
-    notes = [planned(numbered_part, ids, migrated(numbered_part, olds.get(part.key)),
+    notes = [planned(numbered_part, ids,
+                     migrated(olds.get(part.key), numbered_part.text, partial(renumber, part)),
                      alias.get(part.key), shelf, reuse)
              for part in parts
              for numbered_part in [replace(part, text=renumber(part, part.text))]]
@@ -803,6 +845,17 @@ def drafted(stream: Stream, fragments: Mapping[int, LabeledFragment], shelf: She
                 for key, old in before.items()
                 if key not in claimed and old.id in catalog.notes and old.id not in reserved]
     return notes, vanished, skipped, numbers
+
+
+def migrated(old: ExportedNote | None, text: str,
+             renumber: Callable[[str], str] | None) -> ExportedNote | None:
+    """Прежняя выгрузка — как её сделали бы сейчас, если совет написал бы то же (text): выгрузка
+    до номеров заметок оставила в текстах номера потока (Q1), и правку человека повторная
+    выгрузка терять не должна. Номер потока в правке — тоже номером заметки (renumber)."""
+    if old is None or renumber is None or old.generated == text \
+            or renumber(old.generated) != text:
+        return old
+    return old.model_copy(update={"generated": text, "written": renumber(old.written)})
 
 
 def planned(part: Part, ids: Mapping[str, str], old: ExportedNote | None, was: str | None,
