@@ -195,18 +195,6 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     # Модели плана видели номера заметок и писали их в текст задач: какую с тех пор удалили, на
     # ту задача сослалась бы впустую. Номер с нулями или без — одна заметка.
     known = {note_key(note_id) for note_id in catalog.notes}
-    def own_names(issue: Issue) -> Names:
-        return (streams or {}).get(issue.outcome_id) or Names({}, {})
-
-    # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
-    dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
-                   for found in numbers_in_prose(text, own_names(issue).phrases)
-                   if not found.startswith("ISS-") and note_key(found) not in known})
-    if dead:
-        raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
-                         "называют: верните заметки или выгрузите потоки заново и спланируйте "
-                         "снова")
-    labels = {name: number.id for name, number in by_issue.items()}
 
     def names_of(issue: Issue) -> Names | None:
         names = (streams or {}).get(issue.outcome_id)
@@ -219,6 +207,22 @@ def drafted_tasks(plan: TaskPlan, fragments: Mapping[int, LabeledFragment], shel
     def kept(issue: Issue) -> frozenset[str]:
         names = names_of(issue)
         return names.phrases if names is not None else frozenset()
+
+    def final(issue: Issue, text: str) -> str:
+        """Текст, как он ляжет: на месте номера без заметки — его текст, а в нём могут быть свои
+        номера заметок."""
+        change = renumber(issue)
+        return change(text) if change else text
+
+    # Номер в сочетании из исходных текстов потока («ADR-9999 fixture») — их слово, не ссылка.
+    dead = sorted({found for issue in plan.issues for text in written_by_plan(issue)
+                   for found in numbers_in_prose(final(issue, text), kept(issue))
+                   if not found.startswith("ISS-") and note_key(found) not in known})
+    if dead:
+        raise NotesError(f"В каталоге заметок больше нет {', '.join(dead)}, а задачи плана их "
+                         "называют: верните заметки или выгрузите потоки заново и спланируйте "
+                         "снова")
+    labels = {name: number.id for name, number in by_issue.items()}
 
     titles = {issue.id: issue_title(issue, labels, renumber(issue), kept(issue))
               for issue in plan.issues}

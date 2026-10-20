@@ -582,6 +582,33 @@ def test_a_note_number_another_stream_exported_stays_a_reference(agents, folders
     assert not any("ADR-0042" in phrase for phrase in names.phrases)
 
 
+def test_a_catalog_note_a_written_note_named_stays_a_reference():
+    # Когда заметку записывали, ADR-0042 был в каталоге: «ADR-0042 validation» — ссылка, хоть
+    # его не выгружал ни один поток и его не отбирали; ADR-9999 не было — «ADR-9999 fixture» —
+    # слово.
+    note = ExportedNote(key="a:1", id="ADR-0001", type="adr", generated="Решение",
+                        written="Сверить по ADR-0042 validation и ADR-9999 fixture", digest="d",
+                        references=["ADR-0042"])
+    stream = Stream(group="C", notes=NotesExport(run="n1", language="Russian", notes=[note],
+                                                 refs={"I1": "IDEA-0001"}))
+    phrases = names_of(stream, {}).phrases
+    assert "ADR-9999 fixture" in phrases
+    assert not any("ADR-0042" in phrase for phrase in phrases)
+
+
+def test_a_note_number_a_fallback_text_brings_is_checked_too(tmp_path):
+    # Заметку вопроса Q1 удалили — встанет его текст «См. ADR-0042», а ADR-0042 тоже удалён:
+    # такой файл задачи сослался бы впустую.
+    catalog = Catalog({"OUT-0001": Note("OUT-0001", "outcome", "Кэш ответов")})
+    names = Names({"Q1": "OQ-0001", "O1": "OUT-0001"}, {"Q1": "См. ADR-0042"})
+    issue = Issue(id="I1", title="Кэш", user_story="As a team, I want answers.",
+                  outcome_id="OUT-0001", scope=["Решить Q1."])
+    plan = TaskPlan(state="done", run="t1", steps=[], issues=[issue])
+    with pytest.raises(NotesError, match="ADR-0042"):
+        drafted_tasks(plan, {}, Shelf(catalog, tmp_path, tmp_path / "issues"), None,
+                      words_for("Russian"), "Russian", (), {"OUT-0001": names})
+
+
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():
     def file(number, generated, text=None, links=()):
         return NotePlan(key=f"i:{number}", id=number, type="issue", text=text or generated,

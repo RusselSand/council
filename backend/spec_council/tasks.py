@@ -87,10 +87,12 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
     (exported_of)."""
     found = dict(research or {})
     written = [note.written for note in stream.notes.notes] if stream.notes else []
-    # Номер заметки любого потока совета или отобранного решения проекта в выгруженном тексте
-    # — ссылка.
+    # Номер заметки любого потока совета, отобранного решения проекта или заметки каталога, что
+    # была там, когда текст записывали (references), в выгруженном тексте — ссылка.
     known = {*(stream.notes.refs.values() if stream.notes else ()), *exported,
-             *(decision.adr_id for decision in stream.project_decisions or [])}
+             *(decision.adr_id for decision in stream.project_decisions or []),
+             *(found for note in (stream.notes.notes if stream.notes else [])
+               for found in note.references)}
     return Names(stream.notes.refs if stream.notes else {},
                  stream_texts(stream, fragments) | found, terms_of(stream),
                  phrases_of(stream, fragments, found.values(), written, known))

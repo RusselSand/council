@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from markdown_it import MarkdownIt, rules_inline
+from markdown_it.common import html_re
 from markdown_it.rules_inline import StateInline
 
 from . import issue_files
@@ -538,6 +539,10 @@ Marked = dict[int, list[tuple[str, int, int]]]
 Seen = dict[int, list[tuple[int, str]]]
 # Строки блока HTML в in_prose — как есть, а их теги ищет raw_elements.
 HTML = -2
+# Что в блоке HTML целое, по правилам CommonMark: комментарий, инструкция, CDATA, объявление,
+# тег с атрибутами. «<code>» в комментарии или в значении атрибута — не тег.
+HTML_PIECE = re.compile("|".join((html_re.comment, html_re.processing, html_re.cdata,
+                                  html_re.declaration, html_re.open_tag, html_re.close_tag)))
 
 
 class Blocks(NamedTuple):
@@ -689,9 +694,9 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
     tags = [(kind, start + begin, start + end)
             for (key, _), start in zip(groups, starts, strict=False) if key not in (None, HTML)
             for kind, begin, end in marked.get(key, [])]
-    tags += [("html", start + tag.start(), start + tag.end())
+    tags += [("html", start + piece.start(), start + piece.end())
              for (key, part), start in zip(groups, starts, strict=False) if key == HTML
-             for tag in RAW_TAG.finditer(part)]
+             for piece in HTML_PIECE.finditer(part)]
     elements = raw_elements(text, tags)
 
     def inline(part: str, key: int, at: int) -> str:
@@ -956,6 +961,8 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
     where = shelf.path
     gone = deletable(vanished, delete)
     before = {note.key: note for note in previous.notes} if previous else {}
+    # Какие номера — заметки: каталога и те, что ложатся сейчас.
+    catalog = {note_key(note_id) for note_id in [*shelf.catalog.notes, *(p.id for p in notes)]}
     texts = {plan.key: edits.get(plan.key, plan.text).strip() for plan in notes
              if plan.action != "edited"}
     empty = [plan.id for plan in notes if texts.get(plan.key) == ""]
@@ -987,7 +994,10 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
                                          generated=plan.generated, written=texts[plan.key],
                                          links=plan.links,
                                          digest=digest_of(where(plan.id, plan.type)),
-                                         note_numbers=True))
+                                         note_numbers=True,
+                                         references=sorted({
+                                             found for found in NUMBER.findall(texts[plan.key])
+                                             if note_key(found) in catalog})))
         exported += [old.model_copy(update={"kept": True}) for old in before.values()
                      if old.id in gone and old.id not in delete]
         if keep is not None:

@@ -376,9 +376,12 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # <script> — до </script>, и через пустую строку.
     across = "До <script>const q = 'Q1';\n\nuse('Q1');</script>"
     assert renumbered(f"{across} и Q1", {"Q1": "OQ-0002"}, {}) == f"{across} и OQ-0002"
-    # «</script>» после пустой строки — блок HTML, и он закрывает элемент абзаца выше.
+    # «</script>» после пустой строки — блок HTML, и он закрывает элемент абзаца выше; «<code>» в
+    # комментарии блока HTML — не тег.
     closed = "До <script>const q = 'Q1';\n\n</script>"
     assert renumbered(f"{closed}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{closed}\n\nи OQ-0002"
+    assert renumbered("<!-- <code> -->\n\nВидно Q1 </code>", {"Q1": "OQ-0002"}, {}) == (
+        "<!-- <code> -->\n\nВидно OQ-0002 </code>")
     # Текст за номером без заметки — и в нём номера потока становятся номерами заметок; номер,
     # что ссылается сам на себя, — как есть.
     assert renumbered("Сделать F4", {"Q1": "OQ-0001"}, {"F4": "Ответить на Q1 и F4."}) == (
@@ -554,6 +557,15 @@ def test_a_legacy_export_migrates_an_edit_where_the_council_text_had_no_numbers(
         "Деплой требует меньше ручной работы, см. OQ-0003.")
     assert by_id(draft(root, previous=first)[0])["IDEA-0002"].text == (
         "Деплой требует меньше ручной работы, см. Q2.")
+
+
+def test_a_record_keeps_which_of_its_numbers_were_catalog_notes(root):
+    # ADR-0001 в каталоге есть — ссылка; ADR-9999 нет — слово («ADR-9999 fixture»).
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "так велит ADR-0001, проверено на ADR-9999 fixture"})]})
+    record, _, _, _ = export(root, stream)
+    adr = next(note for note in record.notes if "ADR-9999" in note.written)
+    assert adr.references == ["ADR-0001"]
 
 
 def test_a_legacy_record_kept_for_a_hand_edited_file_stays_legacy(root):
