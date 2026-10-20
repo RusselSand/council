@@ -382,6 +382,10 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     assert renumbered(f"{closed}\n\nи Q1", {"Q1": "OQ-0002"}, {}) == f"{closed}\n\nи OQ-0002"
     assert renumbered("<!-- <code> -->\n\nВидно Q1 </code>", {"Q1": "OQ-0002"}, {}) == (
         "<!-- <code> -->\n\nВидно OQ-0002 </code>")
+    # Скобки с одними номерами — и с разметкой вокруг номера, и ссылкой: без заметки выпадают
+    # целиком, с заметкой — номер заметки на месте.
+    assert renumbered("В CI (**F4**). Так ([F4](/details)), и (*Q1*)", {"Q1": "OQ-0002"},
+                      {"F4": LIMIT.text}) == "В CI. Так, и (*OQ-0002*)"
     # Текст за номером без заметки — и в нём номера потока становятся номерами заметок; номер,
     # что ссылается сам на себя, — как есть.
     assert renumbered("Сделать F4", {"Q1": "OQ-0001"}, {"F4": "Ответить на Q1 и F4."}) == (
@@ -522,6 +526,12 @@ def test_a_source_phrase_is_found_and_kept_through_markup():
     phrases = phrases_of(STREAM, {1: fragment})
     assert {"Cloudflare R2", "R2 storage"} <= phrases
     assert not any(phrase.startswith("code") for phrase in phrases)
+    # Мнемоника пробела — пробел: «Cloudflare&nbsp;R2» — тоже «Cloudflare R2».
+    spaced = LabeledFragment(id=2, text="Храним в Cloudflare&nbsp;R3 storage.", label="idea",
+                             reason="", council_label="idea")
+    assert "Cloudflare R3" in phrases_of(STREAM, {2: spaced})
+    assert renumbered("Cloudflare&nbsp;R3 и R3", {"R3": "OQ-0009"}, {},
+                      phrases={"Cloudflare R3"}) == "Cloudflare&nbsp;R3 и OQ-0009"
     text = "Cloudflare [R2](https://x), *R2* storage, <b>R2</b> storage и R2"
     assert renumbered(text, {"R2": "OQ-0009"}, {}, phrases=phrases) == (
         text[:-2] + "OQ-0009")
@@ -621,6 +631,8 @@ def test_a_refined_option_is_named_by_its_refinement(root):
     texts = stream_texts(stream, FRAGMENTS)
     assert texts["P1"] == own
     assert texts["Q1"] == texts["F5"] == SCOPE[0].note
+    # Заметки идеи нет — за I1 её утверждённый текст.
+    assert texts["I1"] == STREAM.idea.text
 
 
 REFINED = "Ручной откат остаётся, но только по кнопке."

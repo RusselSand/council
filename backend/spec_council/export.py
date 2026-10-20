@@ -29,6 +29,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
+from html import unescape
 from itertools import accumulate, groupby
 from pathlib import Path
 from typing import NamedTuple
@@ -107,9 +108,15 @@ UNTOUCHED = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*>?")
 # Начало адреса самого по себе: «https://».
 SCHEME = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
-# Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)».
+# Что in_prose прячет от change (код, адрес ссылки, тег), — знаком из этих: change видит текст
+# блока целиком, а спрятанное не тронет.
+MASK = 0xF0000
+MASKED = re.compile("[\U000F0000-\U000FFFFD]")
+# Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)», — и с
+# разметкой вокруг номера: «(**F3**)», «([F3](…))» (адрес ссылки спрятан, MASKED).
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)(?![\w-])"
-CITED = re.compile(rf"\(\s*{CITED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{CITED_NUMBER})*\s*\)")
+MARKED_NUMBER = rf"[*_\[]*{CITED_NUMBER}(?:[*_\]]|{MASKED.pattern})*"
+CITED = re.compile(rf"\(\s*{MARKED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{MARKED_NUMBER})*\s*\)")
 # Критерий, что начинается как строка задачи: «ISS-0042: …».
 ISSUE_START = re.compile(r"\s*(ISS-\d+)\s*:")
 
@@ -333,9 +340,10 @@ def parts_of(stream: Stream, fragments: Mapping[int, LabeledFragment], catalog: 
 
 
 def stream_texts(stream: Stream, fragments: Mapping[int, LabeledFragment]) -> dict[str, str]:
-    """Что значит номер потока, если заметки у него нет: фрагмент текста группы, находка скана
-    репозитория или макета, вопрос, вариант, итог."""
-    texts = {f"F{i}": fragment.text for i, fragment in fragments.items()}
+    """Что значит номер потока, если заметки у него нет: идея, фрагмент текста группы, находка
+    скана репозитория или макета, вопрос, вариант, итог."""
+    texts = {"I1": stream.idea.text} if stream.idea is not None else {}
+    texts |= {f"F{i}": fragment.text for i, fragment in fragments.items()}
     for scan in (stream.scan, stream.design_scan):
         if scan is not None and scan.result is not None:
             texts |= {finding.id: finding.statement for finding in scan.result.findings}
@@ -443,12 +451,12 @@ InlineRule = Callable[[StateInline, bool], bool]
 # Что не трогать: строка кода, тег HTML (с комментариями и <?…?>), адрес в <…>, адрес и метка
 # ссылки и картинки.
 PROTECTED = frozenset(("code", "html", "autolink", "link"))
-# Видимый текст — слова и знаки (text, literal) и экранированный знак (escape). Граница —
-# строка кода, адрес в <…>, перенос строки и мнемоника (&amp;): соседние с ними слова — не
-# сочетание. Прочее — теги, разметка ссылок и выделения — прозрачно: «Cloudflare [**R2**](…)» —
-# это «Cloudflare R2».
+# Видимый текст — слова и знаки (text, literal), экранированный знак (escape) и то, что значит
+# мнемоника (entity: «&nbsp;» — пробел, «&amp;» — «&»). Граница — строка кода, адрес в <…> и
+# перенос строки: соседние с ними слова — не сочетание. Прочее — теги, разметка ссылок и
+# выделения — прозрачно: «Cloudflare [**R2**](…)» — это «Cloudflare R2».
 VISIBLE = frozenset(("text", "literal"))
-BORDER = frozenset(("code", "autolink", "newline", "entity"))
+BORDER = frozenset(("code", "autolink", "newline"))
 
 
 def marking(kind: str, rule: InlineRule) -> InlineRule:
@@ -474,13 +482,17 @@ def marking(kind: str, rule: InlineRule) -> InlineRule:
         if not found or silent or spans is None or seen is None or bases is None:
             return found
         end, base = state.pos, bases[-1]
+        # Видимое — как есть в тексте (None) или своим текстом: граница — «\n».
         if kind == "escape":
             # «\*» — видимая «*», «\» в конце строки — перенос.
             sign = state.src[start + 1]
-            seen.append((base + start, base + end, False) if sign == "\n"
-                        else (base + start + (sign in string.punctuation), base + end, True))
+            seen.append((base + start, base + end, "\n") if sign == "\n"
+                        else (base + start + (sign in string.punctuation), base + end, None))
+        elif kind == "entity":
+            shown = unescape(state.src[start:end])
+            seen.append((base + start, base + end, " " if shown.isspace() else shown))
         elif kind in VISIBLE or kind in BORDER:
-            seen.append((base + start, base + end, kind in VISIBLE))
+            seen.append((base + start, base + end, None if kind in VISIBLE else "\n"))
         if kind == "link":
             close = state.md.helpers.parseLinkLabel(state, start + image, not image)
             if close >= 0 and state.src[close + 1:end] not in ("", "[]"):
@@ -581,14 +593,14 @@ def blocks_of(text: str) -> Blocks:
         first, last = token.map
         prose.update(dict.fromkeys(range(first, last), block))
         spans: list[tuple[str, int, int]] = []
-        shown: list[tuple[int, int, bool]] = []
+        shown: list[tuple[int, int, str | None]] = []
         MARKDOWN.inline.parse(token.content, MARKDOWN,
                               {**env, SPANS: spans, SEEN: shown, BASES: [0]}, [])
         place = placed(token.content, rows[first:last])
         marked[block] = [(kind, place(start), place(end)) for kind, start, end in spans]
-        seen[block] = [pair for start, end, visible in sorted(shown)
+        seen[block] = [pair for start, end, text in sorted(shown, key=lambda found: found[0])
                        for pair in ([(place(at), token.content[at]) for at in range(start, end)]
-                                    if visible else [(place(start), "\n")])]
+                                    if text is None else [(place(start), sign) for sign in text])]
     return Blocks(lines, prose, marked, seen, html)
 
 
@@ -707,17 +719,27 @@ def in_prose(text: str, change: Callable[[str], str], keep: Collection[str] = ()
         opaque += kept(seen.get(key, []))
         raw = [(max(start, at) - at, min(end, at + len(part)) - at)
                for start, end in elements if start < at + len(part) and end > at]
-        spans = sorted(opaque + addresses(part, opaque, parsed) + raw)
-        out: list[str] = []
-        last = 0
-        for start, end in spans:
-            if start >= last:
+        merged: list[list[int]] = []
+        for start, end in sorted(opaque + addresses(part, opaque, parsed) + raw):
+            if merged and start < merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        if MASKED.search(part) or len(merged) > 0xFFFD:
+            # Знаки MASKED уже есть в тексте — change получает прозу по кускам.
+            out: list[str] = []
+            last = 0
+            for start, end in merged:
                 out += [change(part[last:start]), part[start:end]]
-            elif end > last:
-                out.append(part[last:end])
-            last = max(last, end)
-        out.append(change(part[last:]))
-        return "".join(out)
+                last = end
+            return "".join([*out, change(part[last:])])
+        # change видит блок целиком — «([F3](…))» для него скобки с одним номером, — а то, что
+        # не трогают, спрятано за знаками MASKED и встаёт на место после.
+        hidden = [part[start:end] for start, end in merged]
+        bounds = [0, *(edge for span in merged for edge in span), len(part)]
+        masked = "".join(part[bounds[2 * n]:bounds[2 * n + 1]] + chr(MASK + n)
+                         for n in range(len(merged))) + part[bounds[-2]:]
+        return MASKED.sub(lambda found: hidden[ord(found.group(0)) - MASK], change(masked))
 
     return "".join(part if key in (None, HTML) else inline(part, key, start)
                    for (key, part), start in zip(groups, starts, strict=False))
