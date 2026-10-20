@@ -103,9 +103,12 @@ class Inventory:
     # находят и узнают, как бы ни был виден каталог (working_copy).
     checkout: str = ""
     within: str = ""
-    # Папки, что в снимок не берут (skipping: заметки и задачи совета), — от корня, с «/» на
+    # Папки, что в снимок не берут (skipped_of: заметки и задачи совета), — от корня, с «/» на
     # конце. Их файлы, и появившиеся после inventory, — не правка рабочей копии под снимком.
     skipped: tuple[str, ...] = ()
+    # Коммит каждой копии при inventory, по её пути от корня: сменился только в пропущенных
+    # папках — снимок тот же (settled).
+    heads: Mapping[str, str] = field(default_factory=dict)
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -209,6 +212,8 @@ class Copy(NamedTuple):
     outside: int = 0
     # Её подмодули, что не скачаны (или подменены ссылкой): их кода в снимке нет.
     absent: tuple[str, ...] = ()
+    # Пропущенные папки в ней — исключающими pathspec для git (excluded_in).
+    excluded: tuple[str, ...] = ()
 
 
 def listed(copies: list[Copy]) -> list[str]:
@@ -238,11 +243,11 @@ def copies_of(root: Path, skipped: tuple[str, ...] = ()) -> list[Copy]:
     queue = [(root, "", False)]
     while queue:
         folder, prefix, embedded = queue.pop(0)
-        index = [entry for entry in index_of(folder) if not in_skipped(prefix + entry[3], skipped)]
+        excluded = excluded_in(prefix, skipped)
+        index = index_of(folder, excluded)
         cached = [name for *_, name in index]
-        others = [name for name in
-                  names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard"))
-                  if not in_skipped(prefix + name, skipped)]
+        others = names(git_bytes(folder, "ls-files", "-z", "--others", "--exclude-standard",
+                                 *limited(excluded)))
         counted += len(cached) + len(others)
         # Пути — как их потом соберёт listed(): с путём копии от корня у каждого.
         chars += (len(cached) + len(others)) * len(prefix)
@@ -268,14 +273,22 @@ def copies_of(root: Path, skipped: tuple[str, ...] = ()) -> list[Copy]:
                 within(counted, chars, len(seen))
                 queue.append((path, f"{prefix}{link}/", inside))
         found.append(Copy(folder, prefix, cached, others, embedded, outside_of(folder, index),
-                          tuple(absent)))
+                          tuple(absent), excluded))
     return found
 
 
-def in_skipped(name: str, skipped: tuple[str, ...]) -> bool:
-    """Путь от корня — в пропущенной папке (skipped — с «/» на конце) или сама она: подмодуль
-    или репозиторий на её месте git зовёт без «/» или с ним."""
-    return bool(skipped) and (name.rstrip("/") + "/").startswith(skipped)
+def excluded_in(prefix: str, skipped: tuple[str, ...]) -> tuple[str, ...]:
+    """Пропущенные папки (skipped — от корня, с «/» на конце) в копии с путём prefix — как
+    исключающие pathspec git от её корня: их не выводит сам git, и большая папка заметок не
+    упрётся в предел его вывода (OUTPUT_MAX) и не попадёт в hash-object. Папка исключена и сама:
+    подмодуль на её месте git зовёт без «/». literal — имя как есть, не шаблон."""
+    return tuple(":(exclude,literal)" + folder[len(prefix):].rstrip("/")
+                 for folder in skipped if folder.startswith(prefix) and folder != prefix)
+
+
+def limited(excluded: tuple[str, ...]) -> tuple[str, ...]:
+    """Хвост команды git для копии без пропущенных папок (excluded_in): без них — ничего."""
+    return ("--", ".", *excluded) if excluded else ()
 
 
 def within(files: int, chars: int, copies: int) -> None:
@@ -542,37 +555,34 @@ def levels(copies: list[Copy]) -> list[tuple[str, str, bytes]]:
     файлом). Во вложенные git status сам не заходит: обходим их мы, без ссылок и кругов, — и у
     каждой свой статус: у грязного подмодуля общая пометка в родителе не меняется, что бы в
     нём ни правили."""
-    return [(copy.prefix, head(copy.folder), changes_of(copy.folder)) for copy in copies]
+    return [(copy.prefix, head(copy.folder), changes_of(copy.folder, copy.excluded))
+            for copy in copies]
 
 
-def unskipped(found: list[tuple[str, str, bytes]],
-              skipped: tuple[str, ...]) -> list[tuple[str, str, bytes]]:
-    """git status каждой копии (levels) без записей о файлах пропущенных папок (skipped — от
-    корня): их в снимке нет, и их правка — не правка того, что читают модели. Переименование,
-    задевшее и обычную папку, остаётся."""
-    if not skipped:
-        return found
-    kept_levels: list[tuple[str, str, bytes]] = []
-    for prefix, sha, status in found:
-        listed_part, _, hidden = status.partition(HIDDEN_MARK)
-        parts = listed_part.split(b"\0")
-        kept: list[bytes] = []
-        at = 0
-        while at < len(parts):
-            record = parts[at]
-            # Переименование и копия — «XY путь» и следом исходный путь.
-            extra = 1 if record[:1] in (b"R", b"C") and at + 1 < len(parts) else 0
-            if record:
-                paths = [record[3:], *parts[at + 1:at + 1 + extra]]
-                if not all(in_skipped(prefix + os.fsdecode(path), skipped) for path in paths):
-                    kept += parts[at:at + 1 + extra]
-            at += 1 + extra
-        # Правки в файлах с assume-unchanged и skip-worktree (hidden_of) — тоже без них.
-        flagged = [name for name in hidden.split(b"\0")
-                   if name and not in_skipped(prefix + os.fsdecode(name), skipped)]
-        kept_levels.append((prefix, sha, b"".join(part + b"\0" for part in kept)
-                            + (HIDDEN_MARK + b"\0".join(flagged) if flagged else b"")))
-    return kept_levels
+def settled(now: list[tuple[str, str, bytes]], found: Inventory,
+            copies: list[Copy]) -> list[tuple[str, str, bytes]]:
+    """Состояние копий (levels) для сверки с found.state: коммит копии сменился только в
+    пропущенных папках (выгрузили заметки и закоммитили) — для снимка он тот же: файлы, что
+    читают модели, в нём те же."""
+    kept: list[tuple[str, str, bytes]] = []
+    for (prefix, sha, status), copy in zip(now, copies, strict=True):
+        was = found.heads.get(prefix, sha)
+        if was != sha and copy.excluded and moved_within(copy.folder, was, sha, copy.excluded):
+            sha = was
+        kept.append((prefix, sha, status))
+    return kept
+
+
+def moved_within(root: Path, before: str, after: str, excluded: tuple[str, ...]) -> bool:
+    """Коммиты before и after копии с корнем root различаются только в пропущенных папках."""
+    if not before or not after:
+        return False
+    try:
+        git_bytes(root, "diff", "--quiet", "--no-ext-diff", "--no-textconv", before, after,
+                  *limited(excluded))
+    except RepositoryError:     # различаются (код 1) или не сравнить
+        return False
+    return True
 
 
 def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
@@ -586,13 +596,14 @@ def state_of(found: list[tuple[str, str, bytes]]) -> bytes:
 HIDDEN_MARK = b"\0\0hidden\0"
 
 
-def changes_of(root: Path) -> bytes:
-    """git status с каждым новым файлом — и правки, которых он не покажет."""
-    hidden = hidden_of(root)
-    return status_of(root) + (HIDDEN_MARK + hidden if hidden else b"")
+def changes_of(root: Path, excluded: tuple[str, ...] = ()) -> bytes:
+    """git status с каждым новым файлом — и правки, которых он не покажет. Без пропущенных папок
+    (excluded — excluded_in): их в снимке нет, и их правка — не правка того, что читают модели."""
+    hidden = hidden_of(root, excluded)
+    return status_of(root, excluded) + (HIDDEN_MARK + hidden if hidden else b"")
 
 
-def hidden_of(root: Path) -> bytes:
+def hidden_of(root: Path, excluded: tuple[str, ...] = ()) -> bytes:
     """Правки в файлах с assume-unchanged или skip-worktree: их содержимое git status не
     сверяет, а модели читают уже не коммит. Такие файлы на диске сверяем сами — с индексом
     (hash-object — с теми же фильтрами, что и git add), и бит исполняемости тоже, если git ему
@@ -601,7 +612,7 @@ def hidden_of(root: Path) -> bytes:
     changed: list[str] = []
     modes = file_mode(root) and os.name != "nt"
     symlinks = config_bool(root, "core.symlinks")
-    for tag, mode, sha, name in index_of(root):
+    for tag, mode, sha, name in index_of(root, excluded):
         if not (tag.islower() or tag == b"S"):
             continue
         if mode == b"120000":
@@ -668,10 +679,12 @@ def executable_on_disk(path: Path) -> bool:
         return False
 
 
-def index_of(root: Path) -> list[tuple[bytes, bytes, str, str]]:
-    """Записи индекса: (тег ls-files -v, режим, sha, имя) — из «h 100644 <sha> 0<TAB><имя>»."""
+def index_of(root: Path, excluded: tuple[str, ...] = ()) -> list[tuple[bytes, bytes, str, str]]:
+    """Записи индекса: (тег ls-files -v, режим, sha, имя) — из «h 100644 <sha> 0<TAB><имя>».
+    Без пропущенных папок (excluded — excluded_in)."""
     found = []
-    for entry in git_bytes(root, "ls-files", "-z", "-v", "--stage").split(b"\0"):
+    for entry in git_bytes(root, "ls-files", "-z", "-v", "--stage",
+                           *limited(excluded)).split(b"\0"):
         if entry:
             tag, _, rest = entry.partition(b" ")
             meta, _, raw = rest.partition(b"\t")
@@ -689,7 +702,7 @@ def modes_of(copies: list[Copy]) -> dict[str, bool]:
     for copy in copies:
         if not file_mode(copy.folder):
             modes.update({copy.prefix + name: mode == b"100755"
-                          for _, mode, _, name in index_of(copy.folder)
+                          for _, mode, _, name in index_of(copy.folder, copy.excluded)
                           if mode in (b"100644", b"100755")})
     return modes
 
@@ -707,11 +720,12 @@ def config_bool(root: Path, key: str) -> bool:
         return True
 
 
-def status_of(root: Path) -> bytes:
+def status_of(root: Path, excluded: tuple[str, ...] = ()) -> bytes:
     """--ignore-submodules=dirty: подмодуль не на записанном в родителе коммите — это правка
-    (снимок уже не показанный коммит), а что внутри него, git сам не смотрит: это его статус."""
+    (снимок уже не показанный коммит), а что внутри него, git сам не смотрит: это его статус.
+    Без пропущенных папок (excluded — excluded_in)."""
     return git_bytes(root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-                     "--ignore-submodules=dirty")
+                     "--ignore-submodules=dirty", *limited(excluded))
 
 
 def inventory(path: Path, skip: Iterable[tuple[Path, str]] = ()) -> Inventory:
@@ -727,14 +741,14 @@ def inventory(path: Path, skip: Iterable[tuple[Path, str]] = ()) -> Inventory:
     size = sum(stamp[0] for stamp in (stamp_of(root / name) for name in files) if stamp)
     if size > SNAPSHOT_MAX:
         raise too_big()        # до git status и hash-object: они читают файлы с флагами целиком
-    found = unskipped(levels(copies), skipped)
+    found = levels(copies)
     # Правки — и вложенный репозиторий, не подмодуль: его кода в коммите корня нет.
     dirty = any(status for _, _, status in found) or any(copy.embedded for copy in copies)
     kept = set(files)
     modes = {name: mode for name, mode in modes_of(copies).items() if name in kept}
     return Inventory(root, found[0][1], dirty, files, state_of(found), modes, size,
                      sum(copy.outside for copy in copies), (*omitted_of(root, copies), *told),
-                     skipped=skipped)
+                     skipped=skipped, heads={prefix: sha for prefix, sha, _ in found})
 
 
 def skipped_of(root: Path, folders: Iterable[tuple[Path, str]]
@@ -863,7 +877,7 @@ def snapshot(found: Inventory, into: Path, *,
     copies = copies_of(found.root, found.skipped)
     # Состояние читается после списка файлов: появился файл между ними — его в снимке нет.
     appeared = set(present(found.root, copies)) - set(found.files)
-    if state_of(unskipped(levels(copies), found.skipped)) != found.state or appeared or any(
+    if state_of(settled(levels(copies), found, copies)) != found.state or appeared or any(
             stamp_of(found.root / name) != stamp for name, stamp in taken.items()):
         raise RepositoryError("Рабочая копия менялась, пока делался её снимок, — запустите скан "
                               "снова, когда правки закончатся")

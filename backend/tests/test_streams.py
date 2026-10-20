@@ -1627,6 +1627,28 @@ def test_a_map_of_a_working_copy_moved_away_starts_no_stream_under_council_folde
     assert "question_discovery" not in agents.prompts
 
 
+def test_starting_a_started_stream_again_does_not_check_its_map_again(agents, repos):
+    """Поток уже начат с этой картой: повтор того же начала ничего не берёт и не запускает —
+    карту не сверяют, даже если копию с тех пор унесли."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos.parent / "notes"
+    try:
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert passes(council_id, "C").status_code == 200
+        before = streams_of(council_id)["C"]
+        moved = repos.rename(repos.parent / "moved")
+        try:
+            assert starts(council_id, "C").status_code == 200
+        finally:
+            moved.rename(repos)
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert streams_of(council_id)["C"] == before
+
+
 def test_a_map_made_while_the_scan_read_the_council_folders_starts_no_stream(agents, repos):
     """Папку документации проекта задали в репозитории после скана: карта читала заметки,
     которых модели теперь не читают, — поток с ней не начать. Скан заново — и можно."""

@@ -314,7 +314,8 @@ def test_a_snapshot_holds_only_the_inventory_files(repo, tmp_path):
 def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path, monkeypatch):
     """Заметки и задачи совета в репозитории проекта модели в коде не читают: прошлые решения
     приходят в совет отбором. И их правка во время скана — не правка того, что модели читают."""
-    for name in ("docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
+    notes = [f"docs/council/adrs/ADR-{number:04d}.md" for number in range(1, 30)]
+    for name in (*notes, "docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / name).write_text("Пока не делаем.\n", encoding="utf-8")
     git(repo, "add", ".")
@@ -335,23 +336,45 @@ def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path
     git(inner, "init", "-q")
     (inner / "x.md").write_text("Вложенный.\n", encoding="utf-8")
     folders = council_folders(repo / "docs" / "council", repo / "docs" / "issues")
+    # Файлы пропущенных папок git и не сверяет (hash-object): их в снимке нет.
+    calls: list[tuple[str, ...]] = []
+    real = repository.git_bytes
+    monkeypatch.setattr(repository, "git_bytes",
+                        lambda root, *args, **kw: calls.append(args) or real(root, *args, **kw))
     found = inventory(repo, folders)
+    monkeypatch.setattr(repository, "git_bytes", real)
+    assert not any("docs/council/adrs/ADR-0047.md" in args for args in calls)
     assert found.files == (".gitignore", "api/deps.py")
     assert not found.dirty
     assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/council/", "docs/issues/"]
     assert found.skipped == ("docs/council/", "docs/issues/")
-    # Пока делается снимок, в пропущенные папки пишут — снимок тот же и годится.
+    # Пока делается снимок, в пропущенные папки пишут и даже коммитят — снимок тот же и годится.
     (repo / "docs" / "council" / "adrs" / "ADR-0049.md").write_text("Новое.\n", encoding="utf-8")
     (repo / "docs" / "issues" / "ISS-0001.md").write_text("Правка.\n", encoding="utf-8")
+    git(repo, "add", "docs/council/adrs", "docs/issues")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "выгрузка")
     _, _, copied = copy(found, tmp_path)
     assert copied == frozenset({".gitignore", "api/deps.py"})
-    # А правка кода — по-прежнему правка.
+    # А правка кода — по-прежнему правка, и коммит с ней — другой коммит.
     (repo / "api" / "deps.py").write_text("def get_context(): return 3\n", encoding="utf-8")
     with pytest.raises(RepositoryError, match="менялась"):
         copy(found, tmp_path, "again")
-    # Пределы — без пропущенных папок: большая папка заметок скан не роняет.
+    excluded = repository.excluded_in("", found.skipped)
+    notes_only = repository.head(repo)
+    assert repository.moved_within(repo, found.heads[""], notes_only, excluded)
+    git(repo, "add", "api")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "код")
+    assert not repository.moved_within(repo, notes_only, repository.head(repo), excluded)
+    # Пределы — без пропущенных папок: большая папка заметок скан не роняет — ни числом
+    # файлов, ни длиной вывода git.
     monkeypatch.setattr(repository, "FILES_MAX", 3)
     assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
+    monkeypatch.setattr(repository, "FILES_MAX", 100)
+    monkeypatch.setattr(repository, "OUTPUT_MAX", 1000)
+    assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
+    with pytest.raises(RepositoryError, match="больше"):
+        inventory(repo)
+    monkeypatch.undo()
     # Папка вне рабочей копии — не пропускается.
     monkeypatch.setattr(repository, "FILES_MAX", 100)
     whole = inventory(repo, [(tmp_path / "elsewhere", "нет")])

@@ -291,12 +291,19 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     def folders(council: Council) -> list[tuple[Path, str]]:
         return council_folders(notes_of(council), issues_of(council))
 
+    def anew_in(council: Council) -> bool:
+        """Поток берёт исследование заново: тогда — и его карту кода."""
+        stream = taken(council, stream_in(council, group), edit)
+        return asks_anew(stream, stream.repository, stream.design)
+
     # Сверка карты с папками совета зовёт git в каждой рабочей копии — не под замком советов:
-    # до него, а под замком — что сверяли тот же скан и те же папки.
+    # до него, а под замком — что сверяли тот же скан и те же папки. Повтор начала, которое уже
+    # прошло, карту не берёт — и не сверяет.
     with council_lock:
         council = current(council_id, store, edit)
-        seen = (map_scan(council), folders(council))
-    stale = seen[0] is not None and unskipped_since(seen[0], repositories, seen[1])
+        seen = (map_scan(council), folders(council)) if anew_in(council) else None
+    stale = (seen is not None and seen[0] is not None
+             and unskipped_since(seen[0], repositories, seen[1]))
 
     def checked(council: Council) -> None:
         if (map_scan(council), folders(council)) != seen:
@@ -308,8 +315,9 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = taken(council, stream_in(council, group), edit)
-        checked(council)
         anew = asks_anew(stream, stream.repository, stream.design)
+        if anew:
+            checked(council)
         if anew and below_running(stream_in(council, group), "decisions_search"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
         return council, anew
@@ -317,7 +325,6 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
     def apply(council: Council, missing: list[str]) -> tuple[Council, list[CouncilRun]]:
         before = stream_in(council, group)
         ready = taken(council, before, edit)
-        checked(council)
         changes: dict = {field: getattr(ready, field)
                          for field in ("scan", "repository", "design_scan", "design")}
         runs: list[CouncilRun] = []
@@ -325,6 +332,7 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
         if not asks_anew(ready, ready.repository, ready.design):
             return store.update_council(council_id, {
                 "streams": replaced(council, before.model_copy(update=changes))}), runs
+        checked(council)
         notes = notes_of(council)       # под замком: проект и его папку меняют под ним же
         catalog = project_catalog(notes, ready)
         if catalog is not None and searches_anew(ready):
