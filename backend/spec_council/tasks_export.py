@@ -265,16 +265,26 @@ def aligned(notes: Sequence[NotePlan], texts: Mapping[str, str] | None = None,
     titles = {note.id: found.group(1) for note in notes
               if (found := TITLE.match(current(note))) is not None}
     def closing(note: NotePlan) -> str | None:
-        """Строка о номере для коммита этого файла: последняя строка (вне кода и не пункт
-        списка задач) с его номером — у только что переведённого в его тексте (перевод хранит
-        строение текста, а слова у каждого файла свои), иначе — в тексте черновика: правку
-        человека не угадывать. Человек мог дописать что-то после неё."""
-        text = current(note) if note.key in fresh else note.text
-        code = blocks_of(text).code
+        """Строка о номере для коммита этого файла (вне кода и не пункт списка задач, с его
+        номером) — у только что переведённого в его тексте (перевод хранит строение текста, а
+        слова у каждого файла свои), иначе — в тексте черновика: правку человека не угадывать.
+        Это строка, что написал совет (generated), — человек мог дописать что-то после неё."""
         # Номер — целиком: ISS-00020 — другой номер, не ISS-0002.
         own = re.compile(rf"(?<![\w-]){re.escape(note.id)}(?![\w-])")
-        rows = [row.strip() for n, row in enumerate(text.split("\n"))
-                if n not in code and own.search(row) and not AFTER.match(row)]
+
+        def rows_of(text: str) -> list[str]:
+            code = blocks_of(text).code
+            return [row.strip() for n, row in enumerate(text.split("\n"))
+                    if n not in code and own.search(row) and not AFTER.match(row)]
+
+        rows = rows_of(current(note) if note.key in fresh else note.text)
+        generated = rows_of(note.generated)
+        # Строка, что написал совет, — она, хоть ниже человек и назвал номер задачи снова. Текст
+        # переведён — строение то же: строка о коммите на том же месте среди строк с номером.
+        if generated and generated[-1] in rows:
+            return generated[-1]
+        if generated and len(rows) >= len(generated):
+            return rows[len(generated) - 1]
         return rows[-1] if rows else None
 
     changed: dict[str, str] = {}

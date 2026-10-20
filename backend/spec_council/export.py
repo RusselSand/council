@@ -1154,14 +1154,17 @@ def written(notes: Sequence[NotePlan], vanished: Sequence[VanishedNote],
                 # новый текст совета предложится снова.
                 exported.append(before[plan.was or plan.key].model_copy(update={"key": plan.key}))
                 continue
+            # Ссылка — номер, что сейчас в каталоге, или тот, что запомнила прошлая запись этой
+            # заметки (заметку с тех пор могли удалить), — пока текст его называет.
+            old = before.get(plan.was or plan.key)
+            remembered = {note_key(found) for found in old.references} if old else set()
+            references = sorted({found for found in numbers_in_prose(texts[plan.key])
+                                 if note_key(found) in catalog | remembered})
             exported.append(ExportedNote(key=plan.key, id=plan.id, type=plan.type,
                                          generated=plan.generated, written=texts[plan.key],
                                          links=plan.links,
                                          digest=digest_of(where(plan.id, plan.type)),
-                                         note_numbers=True,
-                                         references=sorted({
-                                             found for found in numbers_in_prose(texts[plan.key])
-                                             if note_key(found) in catalog})))
+                                         note_numbers=True, references=references))
         exported += [old.model_copy(update={"kept": True}) for old in before.values()
                      if old.id in gone and old.id not in delete]
         if keep is not None:

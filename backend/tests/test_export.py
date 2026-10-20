@@ -637,6 +637,19 @@ def test_a_record_keeps_which_of_its_numbers_were_catalog_notes(root):
     assert adr.references == ["ADR-0001"]
 
 
+def test_a_record_keeps_its_references_after_the_note_is_deleted(root):
+    # OUT-0001 был в каталоге, когда решение записали: ссылка. Заметку удалили — при повторной
+    # выгрузке номер всё ещё ссылка, пока текст его называет.
+    stream = STREAM.model_copy(update={"decisions": [*DECIDED[:2], DECIDED[2].model_copy(
+        update={"rationale": "так велит OUT-0001 validation"})]})
+    first, _, _, _ = export(root, stream)
+    adr = next(note for note in first.notes if "OUT-0001" in note.written)
+    assert adr.references == ["OUT-0001"]
+    (root / "outcomes" / "OUT-0001.md").unlink()
+    second, _, _, _ = export(root, stream, previous=first)
+    assert by_id(second.notes)[adr.id].references == ["OUT-0001"]
+
+
 def test_a_legacy_record_kept_for_a_hand_edited_file_stays_legacy(root):
     # Файл правили руками после выгрузки до номеров заметок: его запись остаётся прежней — и
     # прежней по номерам, — пока правку не вернут и её не переведут.

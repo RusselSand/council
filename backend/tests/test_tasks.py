@@ -717,10 +717,12 @@ def test_a_dependency_list_is_found_when_text_follows_the_commit_line():
     # черновика): строку о коммите всё равно узнают.
     reused = second.model_copy(update={"text": edited})
     assert aligned([first, reused]) == {"i:2": edited.replace("Index v1", "Index v2")}
-    # Дописанное называет ISS-00020 — это другой номер, а не номер задачи.
-    longer = second.model_copy(update={"text": draft + "\n\nСм. ISS-00020."})
-    assert aligned([first, longer]) == {
-        "i:2": longer.text.replace("Index v1", "Index v2")}
+    # Дописанное называет ISS-00020 — это другой номер, а не номер задачи; и даже сам номер
+    # задачи — строка о коммите та, что написал совет.
+    for tail in ("См. ISS-00020.", "See ISS-0002 for rollout."):
+        longer = second.model_copy(update={"text": f"{draft}\n\n{tail}"})
+        assert aligned([first, longer]) == {
+            "i:2": longer.text.replace("Index v1", "Index v2")}
 
 
 def test_a_dependency_is_retitled_in_its_list_not_in_another_bullet():
