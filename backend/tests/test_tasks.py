@@ -799,6 +799,17 @@ def test_the_planner_sees_decisions_and_questions_as_they_were_written():
         "Считать по OQ-0001")
 
 
+def test_stream_findings_and_research_findings_keep_their_own_texts():
+    # R1 скана потока и R1 исследования совета — разные находки: текст задачи, что написал план
+    # по исследованию, называет его R1, а заметки потока — свою.
+    scan = RepositoryScan(state="done", run="s1", steps=[], result=RepositoryMap(findings=[
+        RepositoryFinding(id="R1", statement="Поток: ответы в кэше.", status="verified")]))
+    names = names_of(Stream(group="C", scan=scan), {}, {"R1": "Совет: ответы в индексе."})
+    assert names("по R1") == "по «Совет: ответы в индексе»"
+    legacy = replace(names, legacy=frozenset({"OUT-0001"}))
+    assert legacy.settled("OUT-0001", "по R1") == "по «Поток: ответы в кэше»"
+
+
 def test_a_legacy_note_body_is_renumbered_in_the_task_file(tmp_path):
     # Итог и решение потока, чьи файлы правили руками до номеров заметок, в каталоге с «Q1»:
     # в файл задачи они ложатся с номерами заметок.

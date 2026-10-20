@@ -387,6 +387,8 @@ def test_stream_numbers_in_texts_become_note_numbers_or_go(root):
     # целиком, с заметкой — номер заметки на месте.
     assert renumbered("В CI (**F4**). Так ([F4](/details)), и (*Q1*)", {"Q1": "OQ-0002"},
                       {"F4": LIMIT.text}) == "В CI. Так, и (*OQ-0002*)"
+    assert renumbered("В CI (<strong>F4</strong>). И (<b>Q1</b>)", {"Q1": "OQ-0002"},
+                      {"F4": LIMIT.text}) == "В CI. И (<b>OQ-0002</b>)"
     # Текст за номером без заметки — и в нём номера потока становятся номерами заметок; номер,
     # что ссылается сам на себя, — как есть.
     assert renumbered("Сделать F4", {"Q1": "OQ-0001"}, {"F4": "Ответить на Q1 и F4."}) == (

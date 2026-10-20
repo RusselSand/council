@@ -60,13 +60,20 @@ class Names:
     # Заметки потока, чья запись — до номеров заметок (их файлы правили руками, и выгрузка их
     # оставила): в их тексте номера потока (Q1).
     legacy: frozenset[str] = frozenset()
+    # Что за номерами в текстах самого потока: находки — его скана, а не исследования совета
+    # (texts — для текстов плана, что читал исследование). Пусто — те же texts.
+    owned: Mapping[str, str] = field(default_factory=dict)
 
     def __call__(self, text: str, quote: str = "«{}»") -> str:
         return renumbered(text, self.numbers, self.texts, quote, self.terms, self.phrases)
 
     def settled(self, note_id: str, text: str, quote: str = "«{}»") -> str:
-        """Текст заметки потока с номерами заметок: в записи до них (legacy) — номера потока."""
-        return self(text, quote) if note_id in self.legacy else text
+        """Текст заметки потока с номерами заметок: в записи до них (legacy) — номера потока, и
+        R1 в нём — находка скана потока (owned)."""
+        if note_id not in self.legacy:
+            return text
+        return renumbered(text, self.numbers, self.owned or self.texts, quote, self.terms,
+                          self.phrases)
 
     def within(self, notes: Collection[str]) -> Names:
         """Только номера заметок, что есть в каталоге (notes): заметку вопроса или варианта
@@ -101,10 +108,11 @@ def names_of(stream: Stream, fragments: Mapping[int, LabeledFragment],
              *(decision.adr_id for decision in stream.project_decisions or []),
              *(reference for note in notes for reference in note.references)}
     cited = stream.notes.cited if stream.notes else []
-    return Names(stream.notes.refs if stream.notes else {},
-                 stream_texts(stream, fragments) | found, terms_of(stream, cited),
+    owned = stream_texts(stream, fragments)
+    return Names(stream.notes.refs if stream.notes else {}, owned | found,
+                 terms_of(stream, cited),
                  phrases_of(stream, fragments, found.values(), written, known, cited),
-                 frozenset(note.id for note in notes if not note.note_numbers))
+                 frozenset(note.id for note in notes if not note.note_numbers), owned)
 
 
 def research_texts(council: Council) -> dict[str, str]:

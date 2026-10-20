@@ -113,9 +113,11 @@ SCHEME = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
 MASK = 0xF0000
 MASKED = re.compile("[\U000F0000-\U000FFFFD]")
 # Скобки, где одни номера — потока или заметок: «(F3)», «(Q1, F3)», «(R8 и R12)», — и с
-# разметкой вокруг номера: «(**F3**)», «([F3](…))» (адрес ссылки спрятан, MASKED).
+# разметкой вокруг номера: «(**F3**)», «([F3](…))», «(<b>F3</b>)» (адрес ссылки и теги спрятаны,
+# MASKED).
 CITED_NUMBER = r"(?:(?:IDEA|OQ|PRO|ADR|OUT|ISS)-\d+|[IQPFORD][1-9]\d*)(?![\w-])"
-MARKED_NUMBER = rf"[*_\[]*{CITED_NUMBER}(?:[*_\]]|{MASKED.pattern})*"
+MARKED_NUMBER = (rf"(?:[*_\[]|{MASKED.pattern})*{CITED_NUMBER}"
+                 rf"(?:[*_\]]|{MASKED.pattern})*")
 CITED = re.compile(rf"\(\s*{MARKED_NUMBER}(?:(?:\s*[,;/]|\s+(?:and|и))\s*{MARKED_NUMBER})*\s*\)")
 # Критерий, что начинается как строка задачи: «ISS-0042: …».
 ISSUE_START = re.compile(r"\s*(ISS-\d+)\s*:")
