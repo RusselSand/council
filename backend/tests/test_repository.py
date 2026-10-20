@@ -20,6 +20,7 @@ from spec_council.repository import (
     Source,
     checkout_of,
     context_prompt,
+    council_folders,
     inventory,
     inventory_prompt,
     judged_map,
@@ -310,6 +311,94 @@ def test_a_snapshot_holds_only_the_inventory_files(repo, tmp_path):
     assert (into / "api" / "deps.py").read_text(encoding="utf-8") == "def get_context(): ...\n"
 
 
+def test_council_folders_are_not_in_the_inventory_or_the_snapshot(repo, tmp_path, monkeypatch):
+    """Заметки и задачи совета в репозитории проекта модели в коде не читают: прошлые решения
+    приходят в совет отбором. И их правка во время скана — не правка того, что модели читают."""
+    notes = [f"docs/council/adrs/ADR-{number:04d}.md" for number in range(1, 30)]
+    for name in (*notes, "docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text("Пока не делаем.\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "заметки")
+    # Выгрузка ещё одной заметки не делает рабочую копию «с правками», и правка заметки с
+    # assume-unchanged — тоже.
+    (repo / "docs" / "council" / "adrs" / "ADR-0048.md").write_text("Ещё.\n", encoding="utf-8")
+    git(repo, "update-index", "--assume-unchanged", "docs/council/adrs/ADR-0047.md")
+    (repo / "docs" / "council" / "adrs" / "ADR-0047.md").write_text("Уже.\n", encoding="utf-8")
+    # Ссылка в пропущенной папке: о ней моделям не говорят — её папки для них нет.
+    try:
+        (repo / "docs" / "council" / "link").symlink_to(tmp_path)
+    except OSError:
+        pass
+    # И репозиторий внутри неё — тоже: ни его файлов, ни строки о нём.
+    inner = repo / "docs" / "council" / "inner"
+    inner.mkdir()
+    git(inner, "init", "-q")
+    (inner / "x.md").write_text("Вложенный.\n", encoding="utf-8")
+    folders = council_folders(repo / "docs" / "council", repo / "docs" / "issues")
+    # Файлы пропущенных папок git и не сверяет (hash-object): их в снимке нет.
+    calls: list[tuple[str, ...]] = []
+    real = repository.git_bytes
+    monkeypatch.setattr(repository, "git_bytes",
+                        lambda root, *args, **kw: calls.append(args) or real(root, *args, **kw))
+    found = inventory(repo, folders)
+    monkeypatch.setattr(repository, "git_bytes", real)
+    assert not any("docs/council/adrs/ADR-0047.md" in args for args in calls)
+    assert found.files == (".gitignore", "api/deps.py")
+    assert not found.dirty
+    assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/council/", "docs/issues/"]
+    assert found.skipped == ("docs/council/", "docs/issues/")
+    # Пока делается снимок, в пропущенные папки пишут и даже коммитят — снимок тот же и годится.
+    (repo / "docs" / "council" / "adrs" / "ADR-0049.md").write_text("Новое.\n", encoding="utf-8")
+    (repo / "docs" / "issues" / "ISS-0001.md").write_text("Правка.\n", encoding="utf-8")
+    git(repo, "add", "docs/council/adrs", "docs/issues")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "выгрузка")
+    _, _, copied = copy(found, tmp_path)
+    assert copied == frozenset({".gitignore", "api/deps.py"})
+    # А правка кода — по-прежнему правка, и коммит с ней — другой коммит.
+    (repo / "api" / "deps.py").write_text("def get_context(): return 3\n", encoding="utf-8")
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path, "again")
+    copies = {each.prefix: each for each in repository.copies_of(repo, found.skipped)}
+    notes_only = repository.head(repo)
+    assert repository.moved_within(copies[""], found.heads[""], notes_only, copies)
+    git(repo, "add", "api")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "код")
+    assert not repository.moved_within(copies[""], notes_only, repository.head(repo), copies)
+    # Пределы — без пропущенных папок: большая папка заметок скан не роняет — ни числом
+    # файлов, ни длиной вывода git.
+    monkeypatch.setattr(repository, "FILES_MAX", 3)
+    assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
+    monkeypatch.setattr(repository, "FILES_MAX", 100)
+    monkeypatch.setattr(repository, "OUTPUT_MAX", 1000)
+    assert inventory(repo, folders).files == (".gitignore", "api/deps.py")
+    with pytest.raises(RepositoryError, match="больше"):
+        inventory(repo)
+    monkeypatch.undo()
+    # Папка вне рабочей копии — не пропускается.
+    monkeypatch.setattr(repository, "FILES_MAX", 100)
+    whole = inventory(repo, [(tmp_path / "elsewhere", "нет")])
+    assert whole.skipped == () and "docs/council/adrs/ADR-0049.md" in whole.files
+    assert "docs/council/inner/x.md" in whole.files
+    # А копия, что сама папка совета или лежит в ней, — не скан: читать в ней моделям нечего.
+    for folder in (repo, tmp_path):
+        with pytest.raises(RepositoryError, match="папка документации или задач совета"):
+            inventory(repo, [(folder, "вся")])
+
+
+def test_a_submodule_in_place_of_a_council_folder_is_skipped_too(repo):
+    """Папка задач совета — подмодуль, которого нет на диске: git зовёт его без «/», а пропущен
+    он весь — ни строки о нескачанном подмодуле, ни правки оттого, что его нет."""
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},docs/issues")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "подмодуль")
+    assert any("docs/issues/" in entry for entry in inventory(repo).omitted)
+    found = inventory(repo, council_folders(None, repo / "docs" / "issues"))
+    assert found.skipped == ("docs/issues/",) and not found.dirty
+    assert [entry.split(" — ")[0] for entry in found.omitted] == ["docs/issues/"]
+
+
 def test_the_snapshot_fingerprint_is_its_content(repo, tmp_path):
     """Один и тот же код — один отпечаток, в какой бы копии он ни лежал; другой код — другой."""
     found = inventory(repo)
@@ -356,6 +445,38 @@ def with_submodule(repo, tmp_path):
     git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "vendor/lib")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "подмодуль")
     return repo
+
+
+def test_a_council_folder_inside_a_submodule_moves_it_without_a_change(with_submodule,
+                                                                       tmp_path):
+    """Папка заметок — в подмодуле: коммит заметок сдвигает подмодуль, и родитель видит его
+    сдвинутым. Но файлы, что читают модели, те же — и копия без правок, и снимок годится, даже
+    если сдвиг записали и в коммит родителя."""
+    lib = with_submodule / "vendor" / "lib"
+    folders = council_folders(lib / "docs" / "council", None)
+
+    def committed(root, message, *paths):
+        git(root, "add", *paths)
+        git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+
+    (lib / "docs" / "council").mkdir(parents=True)
+    (lib / "docs" / "council" / "ADR-0001.md").write_text("Решение.\n", encoding="utf-8")
+    committed(lib, "заметка", "docs")
+    found = inventory(with_submodule, folders)
+    assert found.skipped == ("vendor/lib/docs/council/",) and not found.dirty
+    assert "vendor/lib/lib.py" in found.files
+    # Ещё заметка — коммитом в подмодуле, а сдвиг подмодуля — коммитом родителя.
+    (lib / "docs" / "council" / "ADR-0002.md").write_text("Ещё.\n", encoding="utf-8")
+    committed(lib, "ещё заметка", "docs")
+    committed(with_submodule, "сдвиг", "vendor/lib")
+    _, _, copied = copy(found, tmp_path)
+    assert "vendor/lib/lib.py" in copied
+    # А сдвиг с правкой кода — правка.
+    (lib / "lib.py").write_text("def api(): return 2\n", encoding="utf-8")
+    committed(lib, "код", "lib.py")
+    assert inventory(with_submodule, folders).dirty
+    with pytest.raises(RepositoryError, match="менялась"):
+        copy(found, tmp_path, "again")
 
 
 def test_files_of_a_checked_out_submodule_are_in_the_inventory(with_submodule):

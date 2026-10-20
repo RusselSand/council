@@ -12,7 +12,15 @@ from spec_council.api import streams as streams_api
 from spec_council.api.councils import reporter
 from spec_council.api.streams import decided, discovery
 from spec_council.app import app
-from spec_council.deps import get_agents, get_figma, get_launcher, get_repositories, get_store
+from spec_council.deps import (
+    get_agents,
+    get_figma,
+    get_issues_of,
+    get_launcher,
+    get_notes_of,
+    get_repositories,
+    get_store,
+)
 from spec_council.figma import FigmaError
 from spec_council.groups import arranged
 from spec_council.models import (
@@ -37,7 +45,7 @@ from spec_council.pipeline import (
     start_questions,
     start_scan,
 )
-from spec_council.repository import Source, inventory, working_copy
+from spec_council.repository import COUNCIL_COPY, STALE_MAP, Source, inventory, working_copy
 from spec_council.store import migrated
 from tests.figma_fake import LINK, FakeFigma
 
@@ -1536,6 +1544,131 @@ def test_the_council_scans_the_working_copy_reading_it_only(agents, repos):
     assert not snapshot.exists()
     assert "app.py" in agents.prompts["repository_discovery"]         # inventory в промпте
     assert streams_of(council_id)["C"].questions is None              # карту ещё не утвердили
+
+
+def test_the_scan_does_not_read_the_council_notes_and_issues_folders(agents, repos):
+    """Папки документации и задач проекта лежат в репозитории, но модели их в коде не читают:
+    прошлые решения приходят в совет только отбором — невыбранное не действует оттого, что его
+    файл в репозитории."""
+    for name in ("docs/council/adrs/ADR-0047.md", "docs/issues/ISS-0001.md"):
+        (repos / name).parent.mkdir(parents=True, exist_ok=True)
+        (repos / name).write_text("Пока не делаем.\n", encoding="utf-8")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos / "docs" / "council"
+    app.dependency_overrides[get_issues_of] = lambda: lambda council: repos / "docs" / "issues"
+    try:
+        council_id = grouped()
+        confirm(council_id)
+        approve(council_id, "C", IDEA_C)
+        assert scans(council_id, "C").status_code == 202
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+        app.dependency_overrides.pop(get_issues_of)
+    assert agents.seen == ["app.py"]
+    assert research_of(council_id).scan.repositories[0].files == 1
+    assert "docs/council/ — папка документации совета" in agents.prompts["repository_discovery"]
+
+
+def test_council_folders_changed_while_the_copies_are_read_start_no_scan(agents, repos):
+    """Папку документации проекта сменили, пока совет читал рабочие копии: прочитанное пропускало
+    прежнюю папку, а не нынешнюю, — скан не начинают."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    first = iter([repos / "docs" / "old"])
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: next(
+        first, repos / "docs" / "council")
+    try:
+        res = scans(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert res.status_code == 409 and "поменялись" in res.json()["detail"]
+    assert "repository_discovery" not in agents.prompts
+
+
+def test_a_working_copy_that_is_the_council_notes_folder_is_not_scanned(agents, repos):
+    """Папка документации проекта — сама рабочая копия: читать в ней моделям нечего, кроме
+    прошлых решений, а они приходят в совет только отбором, — скан не начинают."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos
+    try:
+        res = scans(council_id, "C")
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert res.status_code == 422 and res.json()["detail"] == COUNCIL_COPY
+    assert "repository_discovery" not in agents.prompts
+
+
+def test_a_map_of_a_working_copy_moved_away_starts_no_stream_under_council_folders(agents,
+                                                                                    repos):
+    """Рабочую копию после скана унесли: какие папки совета в ней пропустил бы скан сейчас, не
+    сверить, — пока у проекта есть папки совета, поток с этой картой не начать. Сверка — та же
+    при начале потока, что и под замком: папки сменили, пока сверяли, — тоже 409."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos.parent / "notes"
+    try:
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert research_of(council_id).scan.repositories[0].skipped == []
+        moved = repos.rename(repos.parent / "moved")
+        res = passes(council_id, "C")
+        assert res.status_code == 409 and res.json()["detail"] == STALE_MAP
+        moved.rename(repos)
+        first = iter([repos.parent / "notes"])
+        app.dependency_overrides[get_notes_of] = lambda: lambda council: next(
+            first, repos / "docs" / "council")
+        res = starts(council_id, "C")
+        assert res.status_code == 409 and "поменялись" in res.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert "question_discovery" not in agents.prompts
+
+
+def test_starting_a_started_stream_again_does_not_check_its_map_again(agents, repos):
+    """Поток уже начат с этой картой: повтор того же начала ничего не берёт и не запускает —
+    карту не сверяют, даже если копию с тех пор унесли."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos.parent / "notes"
+    try:
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert passes(council_id, "C").status_code == 200
+        before = streams_of(council_id)["C"]
+        moved = repos.rename(repos.parent / "moved")
+        try:
+            assert starts(council_id, "C").status_code == 200
+        finally:
+            moved.rename(repos)
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert streams_of(council_id)["C"] == before
+
+
+def test_a_map_made_while_the_scan_read_the_council_folders_starts_no_stream(agents, repos):
+    """Папку документации проекта задали в репозитории после скана: карта читала заметки,
+    которых модели теперь не читают, — поток с ней не начать. Скан заново — и можно."""
+    council_id = grouped()
+    confirm(council_id)
+    approve(council_id, "C", IDEA_C)
+    scans(council_id, "C")
+    takes(council_id, "C")
+    app.dependency_overrides[get_notes_of] = lambda: lambda council: repos / "docs" / "council"
+    try:
+        res = passes(council_id, "C")
+        assert res.status_code == 409 and res.json()["detail"] == STALE_MAP
+        assert "question_discovery" not in agents.prompts
+        scans(council_id, "C")
+        takes(council_id, "C")
+        assert research_of(council_id).scan.repositories[0].skipped == ["docs/council/"]
+        assert passes(council_id, "C").status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_notes_of)
+    assert "question_discovery" in agents.prompts
 
 
 def test_an_approved_map_goes_into_the_questions_and_every_step_below(agents, repos):

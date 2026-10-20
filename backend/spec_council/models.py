@@ -315,6 +315,10 @@ class ScannedRepository(BaseModel):
     # omitted_count — сколько всего.
     omitted: list[str] = []
     omitted_count: int = 0
+    # Какие папки скан пропустил — папки документации и задач совета (repository.skipped_of), от
+    # корня копии. Сейчас они другие (скан до пропуска, папки проекта сменили) — карта читала не
+    # то, что прочтёт план и потоки: её делают заново.
+    skipped: list[str] = []
 
 
 class RepositoryScan(BaseModel):

@@ -23,6 +23,7 @@ from ..decisions import RATIONALE_MAX
 from ..deps import (
     AgentsDep,
     ConfigDep,
+    IssuesOfDep,
     Launcher,
     LauncherDep,
     NotesOf,
@@ -96,6 +97,7 @@ from ..pipeline import (
 from ..project import catalog_print, fingerprint, records
 from ..proposals import PROPOSAL_MAX, found_by_question, last_number
 from ..questions import QUESTION_MAX, same_question
+from ..repository import STALE_MAP, council_folders, unskipped_since
 from ..work import (
     carried_analyses,
     carried_options,
@@ -277,17 +279,45 @@ def asks_anew(stream: Stream, repository: RepositoryStep, design: DesignStep,
                         423: {"description": "Совет ещё работает с этим потоком"}})
 def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep,
                  config: ConfigDep, agents: AgentsDep, launch: LauncherDep,
-                 notes_of: NotesOfDep, repositories: RepositoriesDep) -> Council:
+                 notes_of: NotesOfDep, issues_of: IssuesOfDep,
+                 repositories: RepositoriesDep) -> Council:
     """Человек начинает поток: поток берёт себе копию исследования совета — карту кода и
     описание макета, — и совет сразу ищет открытые вопросы, а карта и описание идут во все
     следующие шаги. Если в каталоге заметок есть прошлые решения проекта, сначала совет отбирает
     относящиеся к идее, а вопросы — когда человек отметит нужные. Начать заново, когда
     исследование с тех пор прошли иначе, — всё ниже заново, с новым исследованием; с тем же —
-    ничего не меняется. Идея — та, что человек видел."""
+    ничего не меняется. Идея — та, что человек видел. Карта кода, сделанная, когда скан ещё
+    читал папки совета, — 409: её делают заново."""
+    def folders(council: Council) -> list[tuple[Path, str]]:
+        return council_folders(notes_of(council), issues_of(council))
+
+    def anew_in(council: Council) -> bool:
+        """Поток берёт исследование заново: тогда — и его карту кода."""
+        stream = taken(council, stream_in(council, group), edit)
+        return asks_anew(stream, stream.repository, stream.design)
+
+    # Сверка карты с папками совета зовёт git в каждой рабочей копии — не под замком советов:
+    # до него, а под замком — что сверяли тот же скан и те же папки. Повтор начала, которое уже
+    # прошло, карту не берёт — и не сверяет.
+    with council_lock:
+        council = current(council_id, store, edit)
+        seen = (map_scan(council), folders(council)) if anew_in(council) else None
+    stale = (seen is not None and seen[0] is not None
+             and unskipped_since(seen[0], repositories, seen[1]))
+
+    def checked(council: Council) -> None:
+        if (map_scan(council), folders(council)) != seen:
+            raise HTTPException(409, "Исследование или папки проекта поменялись, пока совет сверял "
+                                     "карту кода, — начните поток снова")
+        if stale:
+            raise HTTPException(409, STALE_MAP)
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         stream = taken(council, stream_in(council, group), edit)
         anew = asks_anew(stream, stream.repository, stream.design)
+        if anew:
+            checked(council)
         if anew and below_running(stream_in(council, group), "decisions_search"):
             raise HTTPException(423, "Совет ещё работает с этим потоком — дождитесь его")
         return council, anew
@@ -302,6 +332,7 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
         if not asks_anew(ready, ready.repository, ready.design):
             return store.update_council(council_id, {
                 "streams": replaced(council, before.model_copy(update=changes))}), runs
+        checked(council)
         notes = notes_of(council)       # под замком: проект и его папку меняют под ним же
         catalog = project_catalog(notes, ready)
         if catalog is not None and searches_anew(ready):
@@ -329,6 +360,15 @@ def start_stream(council_id: str, group: str, edit: StartStream, store: StoreDep
             "streams": replaced(council, before.model_copy(update=changes))}), runs
 
     return launched_all(store, council_id, launch, *probed(config, agents, plan, apply))
+
+
+def map_scan(council: Council) -> RepositoryScan | None:
+    """Скан, чью карту кода поток возьмёт из исследования, — если шаг «Репозиторий» пройден
+    сканом."""
+    research = council.research
+    if research is None or research.repository is None or research.repository.by != "scan":
+        return None
+    return research.scan
 
 
 def taken(council: Council, stream: Stream, edit: StartStream) -> Stream:

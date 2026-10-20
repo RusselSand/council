@@ -8,9 +8,20 @@
 видно, что исследование было к прежним идеям (scan.idea), и его можно сбросить кнопкой; прошли
 исследование заново — начатый поток видит, что взял прежнее, и его можно начать заново."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
-from ..deps import AgentsDep, ConfigDep, FigmaDep, LauncherDep, RepositoriesDep, StoreDep
+from ..deps import (
+    AgentsDep,
+    ConfigDep,
+    FigmaDep,
+    IssuesOfDep,
+    LauncherDep,
+    NotesOfDep,
+    RepositoriesDep,
+    StoreDep,
+)
 from ..figma import FigmaError, links_of
 from ..models import (
     ApproveDesign,
@@ -25,7 +36,14 @@ from ..models import (
     ScanRepository,
 )
 from ..pipeline import CouncilRun, DesignRun, RepositoryRun, start_design, start_scan
-from ..repository import RepositoryError, fits, merged, sources_of, working_copy
+from ..repository import (
+    RepositoryError,
+    council_folders,
+    fits,
+    merged,
+    sources_of,
+    working_copy,
+)
 from .councils import MISSING, NOT_FOUND, RunState, Slot, council_lock, reporter, running
 from .groups import NOT_THESE_GROUPS, current, outdated
 from .streams import CHANGING, RESLICED, launched_all, probed, unconnected
@@ -95,26 +113,35 @@ def ready_for(council: Council) -> str:
                                              "другие"},
                         422: {"description": "Путь не к рабочей копии git"}})
 def scan_repository(council_id: str, edit: ScanRepository, store: StoreDep, config: ConfigDep,
-                    agents: AgentsDep, launch: LauncherDep,
-                    repositories: RepositoriesDep) -> Council:
+                    agents: AgentsDep, launch: LauncherDep, repositories: RepositoriesDep,
+                    notes_of: NotesOfDep, issues_of: IssuesOfDep) -> Council:
     """Совет сканирует репозиторий под идеи всех групп: inventory рабочих копий — сейчас, потом
     участники и судья исследуют код, только читая его. Скан заново — шаг «Репозиторий» заново:
     утверждённая карта и пройденный шаг «Дизайн» снимаются (скан макета остаётся); потоки, уже
     начатые, работают со своей копией. Повтор после сбоя берёт уже оплаченные ответы даром.
-    Нет подключения к моделям — скан записан упавшим с причиной."""
+    Папки документации и задач проекта совета в снимок не входят: прошлые решения приходят в
+    совет только отбором. Нет подключения к моделям — скан записан упавшим с причиной."""
+    # Папки документации и задач совета в репозитории проекта модели не читают (council_folders):
+    # с какими прочли рабочие копии, — пока их читали, проект могли поменять.
+    taken: list[list[tuple[Path, str]]] = []
+
     def plan() -> tuple[Council, bool]:
         council = current(council_id, store, edit)
         ready_for(council)
         if running(research_of(council).scan):
             raise HTTPException(409, "Скан уже идёт")
+        if taken and council_folders(notes_of(council), issues_of(council)) != taken[0]:
+            raise HTTPException(409, "Папки документации или задач проекта поменялись, пока совет "
+                                     "читал рабочие копии, — запустите скан снова")
         return council, True
 
     # Сначала дешёвое: устаревший или лишний запрос не должен ждать git на большой рабочей
     # копии ради 404 и 409. Под замком всё проверится ещё раз.
     with council_lock:
-        plan()
+        council, _ = plan()
+        taken.append(council_folders(notes_of(council), issues_of(council)))
     try:
-        sources = sources_of([(path, working_copy(path, repositories, mark=True))
+        sources = sources_of([(path, working_copy(path, repositories, mark=True, skip=taken[0]))
                               for path in edit.paths])
         fits(merged(sources))
     except RepositoryError as exc:
